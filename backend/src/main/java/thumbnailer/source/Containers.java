@@ -1,0 +1,34 @@
+package thumbnailer.source;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
+import org.springframework.stereotype.Component;
+
+/** Registry of {@link ContainerFactory} beans. */
+@Component
+public class Containers {
+
+    private final List<ContainerFactory> factories;
+
+    public Containers(List<ContainerFactory> factories) { this.factories = List.copyOf(factories); }
+
+    /** The archive kind of a regular file, if any factory claims it. */
+    public Optional<Kind> archive(Path file) {
+        return factories.stream().filter(f -> f.accepts(file)).map(ContainerFactory::kind).findFirst();
+    }
+
+    public AlbumContainer open(Kind kind, Path path, Exclusions exclusions) throws IOException {
+        return factories.stream().filter(f -> f.kind() == kind).findFirst()
+                .orElseThrow(() -> new IllegalStateException("No container factory for " + kind)).open(path, exclusions);
+    }
+
+    /** The canonical form of every path the application stores or sends: absolute, normalized, '/' separators. */
+    public static String normalize(Path path) {
+        return path.toAbsolutePath().normalize().toString().replace('\\', '/');
+    }
+
+    /** What every path below a normalized directory starts with; a drive root such as {@code C:/} already ends in '/'. */
+    public static String prefix(String dir) { return dir.endsWith("/") ? dir : dir + "/"; }
+}

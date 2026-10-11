@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "start"],
+      "port": 4200
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set JAVA_HOME=C:\\work\\thumbnailer\\devtools\\jdk-26.0.2.1+1&& gradlew.bat -PskipFrontend :backend:bootRun"],
+      "port": 8080
+    }
+  ]
+}

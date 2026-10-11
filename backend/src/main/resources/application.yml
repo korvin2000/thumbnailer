@@ -1,0 +1,24 @@
+thumbnailer:
+  data-dir: ${user.home}/.thumbnailer   # settings.json, albums.mv.db (H2), thumbs.mv (MVStore)
+  thumb-width: 640                      # longer side of a thumbnail
+  min-images: 2                         # a directory needs this many images to count as an album
+  index-threads: 0                      # 0 = available processors
+  demo: false
+  store:
+    albums: jdbc                        # AlbumRepository adapter
+    blobs: mvstore                      # BlobStore adapter
+
+server:
+  address: 127.0.0.1
+  port: 8080
+
+spring:
+  datasource:
+    url: jdbc:h2:file:${thumbnailer.data-dir}/albums;DB_CLOSE_ON_EXIT=FALSE   # closed by the pool, after scans stop
+    username: sa
+    password:
+  sql:
+    init:
+      mode: always                      # schema.sql is idempotent (CREATE ... IF NOT EXISTS)
+  main:
+    banner-mode: off

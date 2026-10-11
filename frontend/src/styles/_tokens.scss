@@ -1,0 +1,58 @@
+// Design tokens. Dark is the base (photo work favours it); light overrides the same variables.
+@mixin light {
+  color-scheme: light;
+  --bg: oklch(96.5% 0.005 260);
+  --bg-elev: oklch(99% 0.003 260);
+  --surface: oklch(100% 0 0);
+  --surface-2: oklch(94.5% 0.006 260);
+  --border: oklch(88% 0.008 260);
+  --border-strong: oklch(76% 0.01 260);
+  --text: oklch(21% 0.02 260);
+  --text-2: oklch(46% 0.015 260);
+  --text-3: oklch(62% 0.012 260);
+  --accent: oklch(64% 0.16 62);
+  --accent-strong: oklch(56% 0.17 58);
+  --on-accent: oklch(99% 0 0);
+  --accent-soft: oklch(64% 0.16 62 / 0.14);
+  --glass: oklch(99% 0.003 260 / 0.92);
+  --shadow-1: 0 1px 2px oklch(0% 0 0 / 0.08), 0 8px 24px -8px oklch(0% 0 0 / 0.18);
+  --shadow-2: 0 2px 6px oklch(0% 0 0 / 0.1), 0 24px 48px -12px oklch(0% 0 0 / 0.28);
+}
+
+:root {
+  color-scheme: dark;
+  --bg: oklch(14% 0.012 260);
+  --bg-elev: oklch(18% 0.012 260);
+  --surface: oklch(22% 0.012 260);
+  --surface-2: oklch(27% 0.012 260);
+  --border: oklch(31% 0.012 260);
+  --border-strong: oklch(42% 0.012 260);
+  --text: oklch(93% 0.01 260);
+  --text-2: oklch(72% 0.012 260);
+  --text-3: oklch(55% 0.012 260);
+  --accent: oklch(81% 0.14 75);
+  --accent-strong: oklch(87% 0.16 80);
+  --on-accent: oklch(22% 0.04 75);
+  --accent-soft: oklch(81% 0.14 75 / 0.16);
+  --danger: oklch(68% 0.19 25);
+  --success: oklch(76% 0.15 150);
+  --glass: oklch(17% 0.012 260 / 0.9);
+  --scrim: linear-gradient(to top, oklch(8% 0.01 260 / 0.94) 0%, oklch(8% 0.01 260 / 0.6) 40%, oklch(8% 0.01 260 / 0) 100%);
+  --shadow-1: 0 1px 2px oklch(0% 0 0 / 0.35), 0 8px 24px -8px oklch(0% 0 0 / 0.5);
+  --shadow-2: 0 2px 6px oklch(0% 0 0 / 0.4), 0 24px 48px -12px oklch(0% 0 0 / 0.65);
+  --radius: 10px;
+  --radius-s: 6px;
+  --radius-l: 14px;
+  --font: Inter, 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+  --mono: 'Cascadia Code', Consolas, ui-monospace, monospace;
+  --topbar-h: 56px;
+  --statusbar-h: 28px;
+  --filters-w: 292px;
+  --details-w: 372px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+:root[data-theme='light'] { @include light; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) { @include light; }
+}
