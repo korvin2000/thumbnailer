@@ -15,6 +15,7 @@ import thumbnailer.album.AlbumRepository.Stamp;
 import thumbnailer.album.AlbumService;
 import thumbnailer.settings.Settings;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Disks;
 import thumbnailer.source.Exclusions;
 
 /**
@@ -61,19 +62,21 @@ class Reconciler {
 
         /**
          * Returns whether the store changed; {@code path} is the canonical (stored) path of {@code found}, which is where
-         * it is on disk. Thread-safe: called from the indexing pool.
+         * it is on disk. The album's reads happen in one turn on its disk ({@code lane}), from the listing to the first
+         * cover read; the decode and the commit come after it. Thread-safe: called from the indexing pool.
          */
-        boolean reconcile(String root, String path, Exclusions exclusions, AlbumDiscovery.Found found,
+        boolean reconcile(String root, String path, Exclusions exclusions, AlbumDiscovery.Found found, Disks.Lane lane,
                           BooleanSupplier cancelled) throws IOException {
             var stamp = known.get(path);
             if (stamp != null) seen.add(stamp.id()); // even if indexing fails below: unreadable is not deleted
-            try (var container = containers.open(found.kind(), found.path(), exclusions)) {
-                if (stamp != null && stamp.signature().equals(container.signature()) || cancelled.getAsBoolean()) return false;
+            if (cancelled.getAsBoolean()) return false; // a cancelled scan's queue on the disk drains without reading
+            try (var turn = lane.enter(); var container = containers.open(found.kind(), found.path(), exclusions)) {
+                if (cancelled.getAsBoolean() || stamp != null && stamp.signature().equals(container.signature())) return false;
                 if (container.images().isEmpty()) return false;
                 // Only changed albums load in full; a moved one is relocated by the commit below only.
                 var base = (stamp != null ? repo.find(stamp.id()) : moved(container.contentId(), path)).orElse(null);
                 if (base != null) seen.add(base.id());
-                var indexed = indexer.index(container, root, path, found.kind(), base);
+                var indexed = indexer.index(container, root, path, found.kind(), base, turn, lane);
                 if (indexed.isEmpty() || cancelled.getAsBoolean()) return false; // cancelled workers publish nothing
                 var x = indexed.get();
                 seen.add(albums.commit(base, x.album(), x.entries(), x.cover()).id());

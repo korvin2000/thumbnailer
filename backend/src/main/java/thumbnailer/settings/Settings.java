@@ -7,9 +7,11 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Function;
 import thumbnailer.image.Render;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Disks.Storage;
 
 /**
  * User settings: scan roots with their own exclusions, global exclusions, scan on start, where moved folders are found
@@ -20,12 +22,16 @@ public record Settings(List<Root> roots, List<String> exclusions, boolean scanOn
 
     public static final Settings DEFAULT = new Settings(null, null, true, null, null, null);
 
-    public record Root(String path, List<String> exclusions) {
+    /** {@code storage}: how the root's disk is read, detected ({@code AUTO}, also when absent) or forced. */
+    public record Root(String path, List<String> exclusions, Storage storage) {
         public Root {
             if (path == null || path.isBlank()) throw new IllegalArgumentException("Root path is empty");
             path = Containers.normalize(Path.of(path));
             exclusions = clean(exclusions);
+            storage = Objects.requireNonNullElse(storage, Storage.AUTO);
         }
+
+        public Root(String path, List<String> exclusions) { this(path, exclusions, null); }
     }
 
     /** Stored paths below directory {@code from} are on disk below {@code to}; both normalized and ending in '/'. */
@@ -58,6 +64,11 @@ public record Settings(List<Root> roots, List<String> exclusions, boolean scanOn
         return Path.of(pathMap.stream().filter(m -> Containers.within(canonical, m.from()))
                 .max(Comparator.comparingInt(m -> m.from().length()))
                 .map(m -> Containers.rebase(canonical, m.from(), m.to())).orElse(canonical));
+    }
+
+    /** The root a canonical path lies in, if any (roots are disjoint). */
+    public Optional<Root> root(String canonical) {
+        return roots.stream().filter(r -> Containers.within(canonical, r.path())).findFirst();
     }
 
     /**

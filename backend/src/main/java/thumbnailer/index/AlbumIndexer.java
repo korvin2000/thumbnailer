@@ -2,6 +2,7 @@ package thumbnailer.index;
 
 import static java.util.stream.Collectors.toMap;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.time.Instant;
@@ -29,6 +30,7 @@ import thumbnailer.image.ImageProbe;
 import thumbnailer.image.Thumbnailer.Thumb;
 import thumbnailer.metadata.Metadata;
 import thumbnailer.source.AlbumContainer;
+import thumbnailer.source.Disks;
 import thumbnailer.source.Kind;
 
 /**
@@ -56,11 +58,20 @@ class AlbumIndexer {
     /** An indexed album without id, revision or user state; {@link AlbumService#commit} adds them. */
     record Indexed(Album album, List<Entry> entries, Thumb cover) {}
 
-    /** Entries whose name, size and mtime are unchanged since {@code base} reuse the stored probe. */
-    Optional<Indexed> index(AlbumContainer container, String root, String path, Kind kind, Album base) {
+    /**
+     * Entries whose name, size and mtime are unchanged since {@code base} reuse the stored probe. Reads during
+     * {@code turn}, the album's turn on its disk, which the first cover read ends (or the end of the reads when the
+     * stored cover still holds); a further candidate waits for a new turn on {@code lane}. A {@link
+     * AlbumContainer#cpuBound} archive gives the turn back after its listing. Between head reads the scan gives way
+     * to the UI reading the same disk.
+     */
+    Optional<Indexed> index(AlbumContainer container, String root, String path, Kind kind, Album base, Disks.Hold turn,
+                            Disks.Lane lane) {
         Map<String, Entry> known = base == null ? Map.of()
                 : repo.entries(base.id()).stream().collect(toMap(Entry::name, Function.identity()));
         var images = container.images();
+        boolean cpuBound = container.cpuBound();
+        if (cpuBound) turn.close(); // decompression, not the disk, limits it: let other albums read meanwhile
         var probes = new HashMap<String, Object>(); // name -> Probe, or the reason it is unreadable
         var todo = new ArrayList<String>();
         for (var item : images) {
@@ -73,6 +84,7 @@ class AlbumIndexer {
         try { // the container picks the read order: one decompression pass for a solid archive, maybe on its threads
             container.heads(todo, ImageProbe.HEAD, (name, head) -> {
                 if (indexer.isInterrupted()) throw new InterruptedIOException(); // shutting down
+                lane.giveWay();
                 try {
                     var probe = ImageProbe.probe(head); // pure: a sink must not read the container
                     synchronized (probes) {
@@ -84,12 +96,27 @@ class AlbumIndexer {
                 }
             });
             synchronized (probes) {} // what the sink wrote on 7-Zip's threads is visible from here on
-            for (var name : later) {
-                if (indexer.isInterrupted()) return Optional.empty();
-                try {
-                    probes.put(name, ImageProbe.probe(container, name));
-                } catch (IOException | RuntimeException e) {
-                    probes.put(name, e.toString());
+            if (container.sequential()) { // each file costs a pass over the ones packed before it: all in one pass
+                container.heads(later, Integer.MAX_VALUE, (name, whole) -> {
+                    if (indexer.isInterrupted()) throw new InterruptedIOException();
+                    Object probe;
+                    try {
+                        probe = ImageProbe.probe(whole, name, () -> new ByteArrayInputStream(whole));
+                    } catch (IOException | RuntimeException e) {
+                        probe = e.toString();
+                    }
+                    synchronized (probes) { probes.put(name, probe); }
+                });
+                synchronized (probes) {}
+            } else {
+                for (var name : later) {
+                    if (indexer.isInterrupted()) return Optional.empty();
+                    try {
+                        lane.giveWay();
+                        probes.put(name, ImageProbe.probe(container, name));
+                    } catch (IOException | RuntimeException e) {
+                        probes.put(name, e.toString());
+                    }
                 }
             }
         } catch (InterruptedIOException e) {
@@ -120,7 +147,9 @@ class AlbumIndexer {
                 break;
             }
             try {
-                thumb = albums.renderCover(container, candidate.name());
+                var read = turn;
+                turn = null; // spent: a further candidate waits for a new turn
+                thumb = albums.renderCover(container, candidate.name(), read != null ? read : cpuBound ? Disks.Hold.NONE : lane.enter());
                 cover = candidate;
             } catch (IOException | RuntimeException e) {
                 if (Thread.currentThread().isInterrupted()) return Optional.empty();
@@ -128,6 +157,7 @@ class AlbumIndexer {
             }
         }
 
+        if (turn != null) turn.close(); // the stored cover needed no read
         var mtime = entries.stream().mapToLong(Entry::mtime).summaryStatistics();
         var pixels = entries.stream().mapToLong(e -> (long) e.width() * e.height()).summaryStatistics();
         var shotDate = entries.stream().map(Entry::shotAt).filter(Objects::nonNull).min(Comparator.naturalOrder())

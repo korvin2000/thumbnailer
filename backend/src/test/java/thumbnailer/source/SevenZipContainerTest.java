@@ -55,6 +55,10 @@ class SevenZipContainerTest {
                 var heads = new LinkedHashMap<String, byte[]>();
                 c.heads(List.of("a.jpg", "b.jpg", "raw/c.jpg", "album.txt"), 4096, heads::put);
                 assertThat(heads).as(name).hasSize(4);
+                if (name.startsWith("t.")) assertThat(heads.keySet()).as(name + ": packing order (tar as written), not name order")
+                        .containsExactly("b.jpg", "a.jpg", "raw/c.jpg", "album.txt");
+                assertThat(c.sequential()).as(name).isEqualTo(!name.equals("t.tar") && !name.equals("plain.7z"));
+                assertThat(c.cpuBound()).as(name + ": one compressed pass").isEqualTo(c.sequential());
                 heads.forEach((n, h) -> assertThat(h).as(name + " " + n).isEqualTo(slice(files.get(n), 4096)));
                 assertThatThrownBy(() -> c.head("missing.jpg", 10)).isInstanceOf(FileNotFoundException.class);
             }

@@ -205,7 +205,7 @@ export class MockGateway extends Gateway {
     return {
       settings: this.settings,
       dataDir: this.libraryDir,
-      roots: this.settings.roots.map(r => { const location = this.locate(r.path); return { path: r.path, location, exists: !location.startsWith('E:'), albumCount: [...this.albums.values()].filter(a => a.root === r.path).length, lastScanAt: new Date(Date.now() - 3_600_000).toISOString() }; }),
+      roots: this.settings.roots.map(r => { const location = this.locate(r.path); return { path: r.path, location, exists: !location.startsWith('E:'), albumCount: [...this.albums.values()].filter(a => a.root === r.path).length, lastScanAt: new Date(Date.now() - 3_600_000).toISOString(), storage: r.storage === 'SSD' || r.storage !== 'HDD' && location.startsWith('C:') ? 'SSD' : 'HDD' }; }),
       renderEpoch: hash(JSON.stringify([this.settings.covers, this.settings.thumbs])).toString(16),
     };
   }

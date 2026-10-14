@@ -5,7 +5,9 @@ thumbnailer:
                                         # line, environment) pins it. Never set here: the locator would see it as pinned.
                                         # cover/thumbnail rendering and the path map live in settings.json (Settings UI)
   min-images: 2                         # a directory needs this many images to count as an album
-  index-threads: 0                      # albums indexed at once (virtual threads); 0 = available processors
+  index-threads: 0                      # albums indexed at once per disk (virtual threads); 0 = available processors
+  hdd-readers: 1                        # reads at once on a disk that pays for seeks (HDD, network, unknown: source/Disks);
+                                        # an SSD is not gated; a root's "storage" (auto|ssd|hdd, Settings UI) overrides detection
   demo: false
   store:
     albums: jdbc                        # AlbumRepository adapter

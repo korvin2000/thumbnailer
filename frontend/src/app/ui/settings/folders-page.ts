@@ -29,6 +29,11 @@ const under = (path: string, root: string) => path.toLowerCase().startsWith(root
               <span class="status" [class.missing]="!st.exists" [title]="st.lastScanAt ? 'Last scan ' + (st.lastScanAt | date: 'medium') : 'Never scanned'">{{ st.exists ? st.albumCount + ' albums' : 'not reachable' }}</span>
               @if (!st.exists) { <button class="btn sm" (click)="locate(st)" title="Point to where this folder is on this machine"><app-icon name="folderOpen" [size]="13" /> Locate…</button> }
             } @else { <span class="status new">new</span> }
+            <select class="input sm storage" [value]="r.storage ?? 'AUTO'" (change)="setRoot(r.path, { storage: $any($event.target).value })" title="How this folder's disk is read: an HDD (also network or unknown drives) one file at a time, an SSD many at once">
+              <option value="AUTO">Auto{{ st ? ' (' + st.storage + ')' : '' }}</option>
+              <option value="SSD">SSD</option>
+              <option value="HDD">HDD</option>
+            </select>
             <button class="btn icon-btn sm ghost" (click)="removeRoot(r.path)" title="Remove folder"><app-icon name="trash" [size]="14" /></button>
           </div>
           @if (st && st.location !== st.path) { <span class="hint muted found">found at <code>{{ st.location }}</code></span> }
@@ -101,6 +106,7 @@ const under = (path: string, root: string) => path.toLowerCase().startsWith(root
     .status { font-size: 11px; color: var(--success); white-space: nowrap; }
     .status.missing { color: var(--danger); }
     .status.new { color: var(--text-3); }
+    .storage { width: 104px; flex: none; }
     .found { margin: -2px 0 0 23px; }
     .notice { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin: 6px 0; border-radius: var(--radius-s); border: 1px solid color-mix(in oklch, var(--accent) 50%, transparent); background: var(--accent-soft); font-size: 12px; }
     .notice app-icon { color: var(--accent); flex: none; }

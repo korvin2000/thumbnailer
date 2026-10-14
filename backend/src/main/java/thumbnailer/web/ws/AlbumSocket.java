@@ -36,6 +36,7 @@ import thumbnailer.index.ScanService;
 import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Disks;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -59,13 +60,14 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     private final ScanService scans;
     private final SettingsStore settings;
     private final Library library;
+    private final Disks disks;
 
     /** Server-side fields stay off the wire. */
     @JsonIgnoreProperties({"internal", "mtime"})
     private interface ServerOnly {}
 
     AlbumSocket(JsonMapper json, AlbumRepository repo, AlbumService albums, ScanService scans, SettingsStore settings,
-                Library library) {
+                Library library, Disks disks) {
         this.json = json.rebuild().addMixIn(Album.class, ServerOnly.class).addMixIn(Entry.class, ServerOnly.class)
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
         this.repo = repo;
@@ -73,6 +75,7 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
         this.scans = scans;
         this.settings = settings;
         this.library = library;
+        this.disks = disks;
     }
 
     @Override
@@ -202,7 +205,8 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
             var stat = stats.get(r.path());
             var location = current.locate(r.path());
             return new Event.RootStatus(r.path(), Containers.normalize(location), Files.isDirectory(location),
-                    stat == null ? 0 : stat.albums(), scans.lastScan(r.path()).orElse(stat == null ? null : stat.lastIndexed()));
+                    stat == null ? 0 : stat.albums(), scans.lastScan(r.path()).orElse(stat == null ? null : stat.lastIndexed()),
+                    disks.disk(location, r.storage()).ssd() ? Disks.Storage.SSD : Disks.Storage.HDD);
         }).toList(), Long.toHexString(Hashing.wyhashFinal4().hashLongLongToLong(current.covers().epoch(), current.thumbs().epoch())));
     }
 

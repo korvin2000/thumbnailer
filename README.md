@@ -30,7 +30,8 @@ Useful switches (`application.yml` keys, overridable as `--key=value` or environ
 |---|---|---|
 | `thumbnailer.data-dir` | `~/.thumbnailer` | home: `libraries.json` (known libraries, the active one) and the default library |
 | `thumbnailer.library-dir` | active library of `libraries.json`, else the data dir | the library in use: settings.json, H2 database, cover store (`covers/`); giving it pins that library |
-| `thumbnailer.index-threads` | `0` (= CPU count) | albums indexed at once |
+| `thumbnailer.index-threads` | `0` (= CPU count) | albums indexed at once per disk (roots on different disks are scanned at once) |
+| `thumbnailer.hdd-readers` | `1` | reads at once on a disk that pays for seeks (HDD, network or unknown drive; detected per folder, overridable in Settings → Folders); an SSD is read without limit; on a hard disk a scan pauses while the UI reads it |
 | `thumbnailer.store.blobs` | `tupl` | cover store: `tupl` or `mvstore` |
 | `thumbnailer.store.tupl.cache-mb` | `128` | TuplDB page cache (off-heap, allocated at start) |
 | `thumbnailer.min-images` | `2` | images a folder needs to count as an album |

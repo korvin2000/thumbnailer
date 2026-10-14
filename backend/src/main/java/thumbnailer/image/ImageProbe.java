@@ -21,9 +21,10 @@ import javax.imageio.stream.ImageInputStream;
 import thumbnailer.source.AlbumContainer;
 
 /**
- * Image facts without a decode, from the first {@link #HEAD} bytes of a file: JPEG by walking its markers
- * ({@link JpegHeader}), WebP by its bitstream header. Other formats, and a JPEG whose frame header lies past the head,
- * go through metadata-extractor and an ImageIO header read ({@link #read}).
+ * Image facts without a decode, from the first {@link #HEAD} bytes of a file: JPEG, TIFF, PNG, GIF and BMP by their
+ * headers ({@link Header}), WebP by its bitstream header. Anything else, and a file whose facts lie past the head (a
+ * JPEG frame header behind a huge XMP, a TIFF with IFD0 at the end), goes through metadata-extractor and an ImageIO
+ * header read ({@link #read}).
  */
 public final class ImageProbe {
 
@@ -47,28 +48,31 @@ public final class ImageProbe {
         boolean swapsAxes() { return orientation >= 5 && orientation <= 8; }
     }
 
+    /** Opens a file from its start. */
+    public interface Source { InputStream open() throws IOException; }
+
     public static Probe probe(AlbumContainer container, String name) throws IOException {
-        return probe(container, name, container.head(name, HEAD));
+        return probe(container.head(name, HEAD), name, () -> container.open(name));
     }
 
-    /** Probes from an already read {@code head} of the file; only the fallback opens it again. */
-    public static Probe probe(AlbumContainer container, String name, byte[] head) throws IOException {
+    /** Probes from an already read {@code head} of the file; only the fallback opens it, through {@code file}. */
+    public static Probe probe(byte[] head, String name, Source file) throws IOException {
         var p = probe(head);
-        return p != null ? p : read(container, name, (reader, exif) -> Probe.of(reader.getWidth(0), reader.getHeight(0), exif));
+        return p != null ? p : read(file, name, (reader, exif) -> Probe.of(reader.getWidth(0), reader.getHeight(0), exif));
     }
 
-    /** JPEG and WebP from their head alone, touching nothing else; null when the file needs {@link #probe(AlbumContainer, String)}. */
+    /** From the head alone, touching nothing else; null when the file needs {@link #probe(AlbumContainer, String)}. */
     public static Probe probe(byte[] head) {
-        var jpeg = JpegHeader.parse(MemorySegment.ofArray(head));
-        if (jpeg != null) return Probe.of(jpeg.width(), jpeg.height(), jpeg.exif());
+        var h = Header.parse(MemorySegment.ofArray(head));
+        if (h != null) return Probe.of(h.width(), h.height(), h.exif());
         var f = WebP.isWebP(head) ? WebP.features(head) : null;
         return f == null ? null : new Probe(f.width, f.height, null);
     }
 
-    /** EXIF of a file from its head: the marker walk for JPEG, metadata-extractor for anything else. */
+    /** EXIF of a file from its head: {@link Header} where it knows the format, metadata-extractor for anything else. */
     public static Exif exif(byte[] head) {
-        var jpeg = JpegHeader.parse(MemorySegment.ofArray(head));
-        return jpeg != null ? jpeg.exif() : exif(new ByteArrayInputStream(head));
+        var h = Header.parse(MemorySegment.ofArray(head));
+        return h != null ? h.exif() : exif(new ByteArrayInputStream(head));
     }
 
     interface Body<T> { T apply(ImageReader reader, Exif exif) throws IOException; }
@@ -78,14 +82,14 @@ public final class ImageProbe {
      * gets them followed by the rest of the stream. Only a parse that went past {@link #HEAD} (a PNG reads every chunk,
      * a JPEG with a huge XMP segment) costs a second open, so memory never holds more than the head.
      */
-    static <T> T read(AlbumContainer container, String name, Body<T> body) throws IOException {
+    static <T> T read(Source file, String name, Body<T> body) throws IOException {
         Exif exif;
-        try (var raw = container.open(name)) {
+        try (var raw = file.open()) {
             var head = new Head(raw);
             exif = exif(head);
             if (head.whole) return decode(new SequenceInputStream(new ByteArrayInputStream(head.kept.toByteArray()), raw), name, exif, body);
         }
-        try (var raw = container.open(name)) {
+        try (var raw = file.open()) {
             return decode(raw, name, exif, body);
         }
     }

@@ -7,11 +7,15 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.FileVisitOption;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
 import org.springframework.stereotype.Component;
 
@@ -33,12 +37,16 @@ final class DirectoryContainer implements AlbumContainer {
     public List<Item> items() {
         if (items == null) {
             var list = new ArrayList<Item>();
-            try (var files = Files.newDirectoryStream(dir)) {
-                for (var file : files) {
-                    var a = Files.readAttributes(file, BasicFileAttributes.class);
-                    if (a.isRegularFile() && !exclusions.excludes(Containers.normalize(file)))
-                        list.add(new Item(file.getFileName().toString(), a.size(), a.lastModifiedTime().toMillis()));
-                }
+            try { // a one-level walk takes the attributes from the listing (on Windows), not one query per file
+                Files.walkFileTree(dir, EnumSet.of(FileVisitOption.FOLLOW_LINKS), 1, new SimpleFileVisitor<>() {
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes a) throws IOException {
+                        if (a.isSymbolicLink()) a = Files.readAttributes(file, BasicFileAttributes.class); // a gone target fails the listing, as before
+                        if (a.isRegularFile() && !exclusions.excludes(Containers.normalize(file)))
+                            list.add(new Item(file.getFileName().toString(), a.size(), a.lastModifiedTime().toMillis()));
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }

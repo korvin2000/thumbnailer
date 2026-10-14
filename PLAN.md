@@ -7,6 +7,12 @@ undo. Reference SPEC IDs.
 
 ## State (2026-10-14, v0.1.0, single initial commit + uncommitted tree)
 
+- 2026-10-14 storage-aware reads (Next 7, steps 1–3): per-disk FIFO lanes with SSD/HDD detection (C: NVMe → SSD,
+  V: network → HDD verified; D: untouched, reserved for the cold final test), read → queue → parallel decode
+  pipeline, head probes for TIFF/PNG/GIF/BMP, on-disk/packing order for heads, one gallery pass per viewed solid
+  archive, roots on different disks scanned at once. Checks: `:backend:test` 63 (+1 env-gated bench) green,
+  frontend `ng test` 15/15 and `ng build`.
+
 - 2026-10-14 native pipeline: archives RAR/7z/tar/ISO/tar.gz·bz2·xz·Z through 7-Zip-JBinding 26.03 (`Kind.ARCHIVE`,
   `SevenZipContainer`), JPEG through libjpeg-turbo 3.2.1 over FFM (DCT-scaled decode), WebP through webp4j's JNI library
   on libwebp 1.6.0 (AVX2 builds of the owner's forks, [docs/natives.md](docs/natives.md)), loaded by
@@ -44,6 +50,27 @@ undo. Reference SPEC IDs.
 6. ~~More containers~~ — done 2026-10-14 through 7-Zip-JBinding (`SevenZipContainer`); open: multi-volume archives
    (`.part1.rar`, `.7z.001`), encrypted ones, keeping an opened archive across image requests (each `/img` request
    opens it again: cheap for zip/7z headers, a pass for a wrapped tar).
+7. **HDD-aware scan and viewer** — indexing reads up to `index-threads` albums at once, which thrashes a spinning
+   disk; solid 7z / wrapped-tar galleries cost Θ(N²) decompression. Plan (reviewed 2026-10-14): a FIFO lane per disk
+   (scan + view; serial on HDD/remote/unknown, free on SSD; lock order lane → Limiter), storage autodetected per root
+   with an override, a paced one-pass gallery for sequential archives. Details and test rigs:
+   [hdd_ssd_fix_goals.md](hdd_ssd_fix_goals.md). Done 2026-10-14 (plan steps 1–3): `source/Disks` (detection + lanes,
+   `hdd-readers`), `storage` per root (wire + Folders page), read → queue → parallel decode pipeline, album turn in
+   the scan, probes from the head for TIFF/PNG/GIF/BMP, heads in on-disk/packing order, one-level directory listing.
+   Codex review (gpt-6.1-sol xhigh) found 4 defects, all fixed (cancel before the disk turn, gone link targets fail
+   the listing, truncated PNG/TIFF facts fall back to a full read, GIF size = first frame). Steps 4–5 done the same
+   day: `album/Gallery` (one paced pass per viewed sequential archive), scopes on different disks walked at once;
+   Codex review of them: gallery memory bounded to the lookahead, archive probing outside the gallery lock, no
+   gallery after shutdown, threads in the gallery key; `index-threads` is per disk by decision. `TuplBlobStoreTest
+   .concurrentWritersAndReadersSeeWholeValues` failed once (LockInterruptedException), 3/3 green on rerun: flaky,
+   store code untouched.
+   Final test on the cold USB HDD done (results in the plan). Cold comparison with the old code (`a6713b0`, second
+   cache drop): old scan 12.5 s vs 21.8 s of the first new run (spin-up after dismount, the turn held during a solid
+   7z's CPU-bound decompression); an O_DIRECT read benchmark confirms one album at a time on the HDD (53.8 vs
+   20.1 MB/s); the folder gallery is 1.5x faster (p95 377 → 63 ms), the solid 7z gallery 2.9 s vs minutes. Fixed:
+   `cpuBound()` archives give the disk turn back after their listing. Done: the scan pauses while the UI reads the
+   same HDD (`Lane.giveWay`, `QUIET` 300 ms; verified live). Open: a cold rerun of the new code needs another cache
+   drop.
 
 ## Tech debt / hygiene
 
@@ -69,6 +96,7 @@ undo. Reference SPEC IDs.
 
 | decision | reason |
 |---|---|
+| Disk reads gated by a FIFO lane per physical disk (HDD/network/unknown: `hdd-readers` = 1 at once; SSD: no gate), not a dedicated reader thread + byte-bounded queue + worker pool | same disk schedule (one stream, arrival ≈ walk order) with the existing thread-per-album model; decode stays parallel because the turn ends with the read and a bounded queue (2 × threads) decouples reading from decoding; one lock order (turn → queue → slot) keeps it deadlock-free; reviewed by Codex and Fable 2026-10-14 ([plan](hdd_ssd_fix_goals.md)) |
 | Hot path native: libjpeg-turbo over FFM, libwebp via webp4j JNI (its DLL exports only `Java_*`), 7-Zip-JBinding JNI; zip stays on the JDK | FFM where the library has a C API, JNI where it does not; the JDK's zip is as fast for stored JPEGs and keeps its tested path |
 | Natives packed in the jar per platform, copied once into `~/.thumbnailer/natives/<platform>/<bundle>` (`LibraryLoader`) | no temp file per start (webp4j's extraction left undeletable DLLs on Windows), versions coexist, one `stat` per start |
 | Archive signature = archive size + mtime + exclusion globs | a rescan of 100 k unchanged archives opens none; the first scan after the upgrade re-lists zip albums once (probes and covers are reused) |

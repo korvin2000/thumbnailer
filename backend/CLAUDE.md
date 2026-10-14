@@ -15,10 +15,17 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Nullness by convention (null = not set / no filter / unchanged); `Optional` for lookups. No custom exceptions:
   `IllegalArgumentException` / `NoSuchElementException` / `IllegalStateException`; WS turns any exception into
   `Event.Error`. Per-item I/O failures: `catch (IOException | RuntimeException e)` → `log.warn` → skip.
-- Threads: platform daemon threads `scan`, `ws-broadcast`, `covers-compact`, `resampler-warmup` (once at start); the non-daemon `restart` thread; indexing runs one virtual thread per
-  album (`index-N`), bounded by a semaphore (`index-threads` albums); renders are bounded by the two `Limiter`s in
-  `AlbumService` (covers: indexing + cover misses; entry thumbnails), resized from `Settings.covers/thumbs` before
-  each acquire; no `@Async`. HTTP requests and WS messages run on Undertow's `XNIO-n task-m` workers (never its I/O
+- Threads: platform daemon threads `scan`, `ws-broadcast`, `covers-compact`, `resampler-warmup` (once at start); the non-daemon `restart` thread; virtual `walk-N` (one walker per disk in a scan) and `gallery` (one pass per viewed sequential archive); indexing runs one virtual thread per
+  album (`index-N`), bounded by a semaphore (`index-threads` albums per disk walker); renders are a pipeline in `AlbumService`
+  (covers: indexing + cover misses; entry thumbnails): read in a disk turn (`source/Disks` lane: FIFO, `hdd-readers`
+  at once on an HDD/network/unknown disk, ungated on an SSD; separate `SCAN` and `VIEW` lanes), a place in the queue
+  `Limiter` (2 × threads), the turn ends with the read, then decode under the slots `Limiter` (threads), all resized
+  from `Settings.covers/thumbs` before each acquire. **Order: turn → queue → slot, never back**; a lane is not
+  reentrant (hand a `Hold` on instead of entering twice); a scan's album turn spans its reads up to the first cover
+  read, except a `cpuBound()` archive, which gives it back after the listing; on an HDD a scan's lane gives way to
+  the UI's (`enter`, `giveWay` between head reads: never call it while holding a queue place or a slot). A `sequential()` archive (solid, wrapped tar): several files only through `heads` (one pass, packing order),
+  never a per-file loop; entry thumbnails through its `Gallery` pass; a single entry (cover, sidecar, a thumbnail
+  taken before) is a partial pass from the block start. No `@Async`. HTTP requests and WS messages run on Undertow's `XNIO-n task-m` workers (never its I/O
   threads: handlers block).
 - Web server: Undertow through `web/UndertowServer` (Boot 4 ships none); `spring-boot-starter-tomcat` is excluded for
   every configuration, so a new Boot starter cannot bring Tomcat back. Undertow keeps no list of the sockets Spring

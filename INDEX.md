@@ -14,6 +14,7 @@ symbols, so open code only after the map points to it.
 | [CLAUDE.md](CLAUDE.md) | agent rules: commands, invariants, conventions | workflow changes |
 | [README.md](README.md) | user-facing build/run/config/keyboard | user-visible changes |
 | [goal.md](goal.md) | original brief (RU/EN), source of INTENT | never |
+| [hdd_ssd_fix_goals.md](hdd_ssd_fix_goals.md) | HDD vs SSD scan and viewer strategy: problem, design (lanes, detection, gallery pass), plan, test rigs (RU) | the plan is refined or lands |
 
 ## L1 — source maps
 
@@ -41,7 +42,7 @@ symbols, so open code only after the map points to it.
 | album field | B `album/Album` (+`AlbumMeta`/`AlbumPatch` if editable) · `schema.sql` · B `JdbcAlbumRepository` · F `core/model.ts` · F `ui/details-panel.ts` · F mock · ARCH §1 |
 | user edit behaviour | B `album/AlbumService.patch` · B `album/AlbumMeta.over` · F `core/store.ts` `patch` · F `ui/details-panel.ts` |
 | archive / container kind | a format 7-Zip reads: B `source/SevenZipContainer.EXTENSIONS`; else B `source/` new `ContainerFactory` `@Component` (see `ZipContainer.Factory`) · B `source/Kind` · F `Kind` in `core/model.ts` |
-| image codec / render pipeline | B `image/Thumbnailer` (chain, `GAP`) · B `image/TurboJpeg` · B `image/WebP` · B `image/Resampler` (measure with [scalebench](scalebench/README.md)) · B `image/JpegHeader` + `ImageProbe` (probes) · natives: [docs/natives.md](docs/natives.md) |
+| image codec / render pipeline | B `image/Thumbnailer` (chain, `GAP`) · B `image/TurboJpeg` · B `image/WebP` · B `image/Resampler` (measure with [scalebench](scalebench/README.md)) · B `image/Header` + `ImageProbe` (probes) · natives: [docs/natives.md](docs/natives.md) |
 | metadata source | B `metadata/` new `MetadataExtractor` `@Component @Order(n)` |
 | cover rule | B `cover/CoverStrategy` constant + `CoverSelector` chain |
 | what counts as album / identity / removal | B `index/AlbumDiscovery` · B `index/Reconciler` · B `index/ScanService` (scopes) · B `album/AlbumService.commit`/`retainRoots` (tombstones, re-rooting) · test `index/ScanTest` |
@@ -55,3 +56,4 @@ symbols, so open code only after the map points to it.
 | user preference | F `core/prefs.ts` (localStorage `thumbnailer.*`) · F `ui/settings/appearance-page.ts` |
 | server-side setting (settings.json) | F `core/model.ts` `Settings` · F `ui/settings/folders-page.ts` / `thumbnails-page.ts` (draft in `settings-dialog.ts`) · F `core/mock-gateway.ts` defaults · B `settings/` |
 | config key | `application.yml` · `@Value` site · README table · ARCH §2 |
+| disk read strategy (SSD/HDD) | B `source/Disks` (detection, lanes) · B `album/AlbumService.render` (turn → queue → decode slots) · B `index/Reconciler` + `AlbumIndexer` (album turn) · B `settings/Settings.Root.storage` · F `ui/settings/folders-page.ts` · [hdd_ssd_fix_goals.md](hdd_ssd_fix_goals.md) |

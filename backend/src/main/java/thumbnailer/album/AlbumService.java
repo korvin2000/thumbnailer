@@ -2,12 +2,15 @@ package thumbnailer.album;
 
 import com.dynatrace.hash4j.hashing.Hashing;
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
@@ -15,6 +18,8 @@ import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import thumbnailer.album.AlbumRepository.Tombstone;
 import thumbnailer.cover.CoverSelector;
@@ -26,7 +31,9 @@ import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Disks;
 import thumbnailer.source.Exclusions;
+import thumbnailer.source.Kind;
 
 /**
  * The single owner of album mutation. Mutations of one album are serialized (striped locks) and re-read the stored
@@ -34,7 +41,11 @@ import thumbnailer.source.Exclusions;
  * regenerable cache under the album id, each value tagged with the album state it shows (cover entry, files,
  * rendering): a value of any other state is a miss, so a lost write, a crash, a late render or a rolled-back save can
  * never serve a stale cover. Entry thumbnails are never stored. Renders are CPU-bound, so covers (indexing and cover
- * misses alike) and entry thumbnails each pass a {@link Limiter} sized by the settings.
+ * misses alike) and entry thumbnails each pass a {@link Limiter} sized by the settings. Reading and decoding are a
+ * producer-consumer pipeline: files are read one by one in turns on their disk ({@link Disks.Lane}, FIFO; at once on
+ * an SSD) into a queue of {@code 2 × threads} read files, from which up to {@code threads} decode, resize and encode in
+ * parallel while the disk reads the next ones. An archive that reads only front to back serves its entry thumbnails
+ * from one {@link Gallery} pass.
  */
 @Service
 public class AlbumService {
@@ -48,11 +59,28 @@ public class AlbumService {
     private final CoverSelector covers;
     private final SettingsStore settings;
     private final ApplicationEventPublisher events;
-    private final Limiter coverSlots = new Limiter(), thumbSlots = new Limiter();
+    private final Disks disks;
+    private final Limiter coverSlots = new Limiter(), thumbSlots = new Limiter(), coverQueue = new Limiter(), thumbQueue = new Limiter();
     private final Object[] locks = new Object[64];
+    /** The last albums whose entry thumbnails were asked for; gallery null = entries read one by one. */
+    private boolean closing; // no gallery starts once the context closes (guarded by galleries)
+    private final Map<String, Pass> galleries = new LinkedHashMap<>(8, .75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Pass> eldest) {
+            if (size() <= 4) return false;
+            eldest.getValue().close();
+            return true;
+        }
+    };
+
+    private record Pass(String key, Gallery gallery) {
+        boolean live(String k) { return key.equals(k) && (gallery == null || !gallery.closed()); }
+
+        void close() { if (gallery != null) gallery.close(); }
+    }
 
     public AlbumService(AlbumRepository repo, BlobStore blobs, Containers containers, Thumbnailer thumbnailer,
-                        CoverSelector covers, SettingsStore settings, ApplicationEventPublisher events) {
+                        CoverSelector covers, SettingsStore settings, ApplicationEventPublisher events, Disks disks) {
         this.repo = repo;
         this.blobs = blobs;
         this.containers = containers;
@@ -60,6 +88,7 @@ public class AlbumService {
         this.covers = covers;
         this.settings = settings;
         this.events = events;
+        this.disks = disks;
         Arrays.setAll(locks, i -> new Object());
     }
 
@@ -140,7 +169,7 @@ public class AlbumService {
     public Optional<Thumb> cover(Album album) {
         var hit = storedCover(album);
         if (hit.isPresent() || album.cover() == null) return hit;
-        var fresh = render(album, album.cover(), coverSlots, Settings::covers);
+        var fresh = render(album, album.cover(), coverQueue, coverSlots, Settings::covers);
         fresh.ifPresent(t -> blobs.put(album.id(), value(album, t)));
         return fresh;
     }
@@ -161,35 +190,111 @@ public class AlbumService {
                         album.coverPortrait()));
     }
 
-    /** A cover candidate rendered under the covers spec and limit, which indexing and cover misses share. */
-    public Thumb renderCover(AlbumContainer container, String name) throws IOException {
-        return render(container, name, coverSlots, settings.get().covers());
+    /**
+     * A cover candidate rendered under the covers spec and limit, which indexing and cover misses share; reads during
+     * {@code turn}, the caller's turn on the disk, and ends it.
+     */
+    public Thumb renderCover(AlbumContainer container, String name, Disks.Hold turn) throws IOException {
+        return render(container, name, coverQueue, coverSlots, settings.get().covers(), turn);
     }
 
-    /** Rendered per request from the album itself; browsers cache it by revision and render epoch. */
-    public Optional<Thumb> thumb(Album album, Entry entry) { return render(album, entry.name(), thumbSlots, Settings::thumbs); }
+    /**
+     * Rendered per request from the album itself, or by the album's {@link Gallery} pass; browsers cache it by
+     * revision and render epoch.
+     */
+    public Optional<Thumb> thumb(Album album, Entry entry) {
+        try {
+            var gallery = gallery(album);
+            var thumb = gallery == null ? null : gallery.take(entry.name());
+            if (thumb != null) return Optional.of(thumb);
+        } catch (IOException | RuntimeException e) {
+            log.warn("Cannot render {} of {}: {}", entry.name(), album.path(), e.toString());
+            return Optional.empty();
+        }
+        return render(album, entry.name(), thumbQueue, thumbSlots, Settings::thumbs); // taken before, or random access
+    }
+
+    /**
+     * The one-pass gallery of an archive that reads only front to back, started by its first thumbnail; else null.
+     * The archive is looked at outside the lock; the first of racing requests publishes its gallery.
+     */
+    private Gallery gallery(Album album) throws IOException {
+        if (album.kind() != Kind.ARCHIVE) return null;
+        var s = settings.get();
+        var key = album.revision() + "/" + s.thumbs().epoch() + "/" + s.thumbs().permits();
+        synchronized (galleries) {
+            var pass = galleries.get(album.id());
+            if (closing || pass != null && pass.live(key)) return closing ? null : pass.gallery();
+        }
+        var path = s.locate(album.path());
+        boolean sequential;
+        try (var c = containers.open(album.kind(), path, Exclusions.NONE)) {
+            sequential = c.sequential();
+        }
+        var fresh = !sequential ? null : new Gallery(() -> containers.open(album.kind(), path, Exclusions.NONE),
+                repo.entries(album.id()).stream().map(Entry::name).toList(), lane(s, album.path()), thumbQueue, thumbSlots,
+                s.thumbs(), thumbnailer);
+        synchronized (galleries) {
+            var pass = galleries.get(album.id());
+            if (closing || pass != null && pass.live(key)) return closing ? null : pass.gallery();
+            if (pass != null) pass.close();
+            galleries.put(album.id(), new Pass(key, fresh));
+            if (fresh != null) fresh.start();
+            return fresh;
+        }
+    }
+
+    @EventListener(ContextClosedEvent.class)
+    void closeGalleries() {
+        synchronized (galleries) {
+            closing = true;
+            galleries.values().forEach(Pass::close);
+            galleries.clear();
+        }
+    }
 
     private Album changed(Album album) {
         events.publishEvent(new AlbumEvent.Changed(album));
         return album;
     }
 
-    private Optional<Thumb> render(Album album, String entry, Limiter slots, Function<Settings, Render> spec) {
+    private Optional<Thumb> render(Album album, String entry, Limiter queue, Limiter slots, Function<Settings, Render> spec) {
         var s = settings.get();
         try (var container = containers.open(album.kind(), s.locate(album.path()), Exclusions.NONE)) {
-            return Optional.of(render(container, entry, slots, spec.apply(s)));
+            return Optional.of(render(container, entry, queue, slots, spec.apply(s), lane(s, album.path()).enter()));
         } catch (IOException | RuntimeException e) {
             log.warn("Cannot render {} of {}: {}", entry, album.path(), e.toString());
             return Optional.empty();
         }
     }
 
-    private Thumb render(AlbumContainer container, String entry, Limiter slots, Render spec) throws IOException {
-        slots.enter(spec.permits());
-        try {
-            return thumbnailer.render(container, entry, spec);
-        } finally {
-            slots.release();
+    /** The UI's lane on the disk of the root holding {@code path}. */
+    private Disks.Lane lane(Settings s, String path) {
+        var disk = s.root(path).map(r -> disks.disk(s.locate(r.path()), r.storage()))
+                .orElseGet(() -> disks.disk(s.locate(path).getRoot(), null));
+        return disks.lane(disk, Disks.Use.VIEW);
+    }
+
+    /**
+     * Reads during {@code turn} and ends it, then decodes. Taken in one order only, turn → queue place → decode slot, and
+     * no holder waits for an earlier one: deadlock-free. A full queue holds the reader back, so memory stays bounded.
+     */
+    private Thumb render(AlbumContainer container, String entry, Limiter queue, Limiter slots, Render spec,
+                         Disks.Hold turn) throws IOException {
+        try (turn; var arena = Arena.ofConfined()) {
+            queue.enter(2 * spec.permits());
+            try {
+                var data = container.read(entry, arena);
+                turn.close(); // the disk serves the next reader while this file waits for and goes through a decoder
+                slots.enter(spec.permits());
+                try {
+                    return thumbnailer.render(data, entry, spec);
+                } finally {
+                    slots.release();
+                }
+            } finally {
+                queue.release();
+            }
         }
     }
 

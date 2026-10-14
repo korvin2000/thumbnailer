@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -51,6 +52,8 @@ final class SevenZipContainer implements AlbumContainer {
     static final Set<String> EXTENSIONS = Set.of("rar", "7z", "tar", "iso", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "z", "taz");
     private static final Set<ArchiveFormat> STREAMS = Set.of(ArchiveFormat.GZIP, ArchiveFormat.BZIP2, ArchiveFormat.XZ, ArchiveFormat.Z);
     private static final Pattern TARRED = Pattern.compile("(?i).*\\.(tar\\.[^.]+|tgz|tbz2?|txz|taz)");
+    /** Methods that store bytes as they are (7z Copy, RAR m0): reading them costs disk time, not CPU. */
+    private static final Pattern STORED = Pattern.compile("(?i)(copy|store|m0)\\b.*|.*:m0\\b.*");
     /** Head kept per wrapped-tar file, and the memory those heads may hold. */
     private static final int KEEP = 128 << 10, BUDGET = 64 << 20;
 
@@ -175,21 +178,44 @@ final class SevenZipContainer implements AlbumContainer {
         return out.seg.asSlice(0, out.at).reinterpret(arena, s -> shared.close());
     }
 
+    /** Known from the archive header: no listing pass for a wrapped tar. */
+    @Override
+    public boolean sequential() {
+        try {
+            arc();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return solid || wrapped;
+    }
+
+    /** A compressed archive read in one pass; tar, ISO and stored (Copy, m0) archives cost disk time instead. */
+    @Override
+    public boolean cpuBound() {
+        if (!sequential()) return false;
+        try {
+            return !STORED.matcher(String.valueOf(arc.getProperty(0, PropID.METHOD))).matches();
+        } catch (SevenZipException e) {
+            return false;
+        }
+    }
+
     /**
-     * Random-access archives read head by head. Solid and wrapped ones deliver every head from inside one
-     * decompression pass, possibly on a 7-Zip thread: such a sink must not read this container (see the interface).
+     * Random-access archives read head by head, in archive order. Solid and wrapped ones deliver every head from inside
+     * one decompression pass, possibly on a 7-Zip thread: such a sink must not read this container (see the
+     * interface); heads up to {@link #KEEP} stay for later {@link #head} calls while the budget lasts.
      */
     @Override
     public void heads(Collection<String> names, int limit, HeadSink sink) throws IOException {
         items();
+        var packed = names.stream().filter(refs::containsKey).sorted(Comparator.comparingInt(n -> refs.get(n).index)).toList();
         if (!solid && !wrapped) {
-            AlbumContainer.super.heads(names, limit, sink);
+            AlbumContainer.super.heads(packed, limit, sink);
             return;
         }
         var wanted = new HashMap<Integer, String>();
-        for (var n : names) {
+        for (var n : packed) {
             var r = refs.get(n);
-            if (r == null) continue;
             var k = kept.get(n);
             if (k != null && (k.length >= limit || k.length == r.size)) sink.accept(n, k.length > limit ? Arrays.copyOf(k, limit) : k);
             else wanted.put(r.index, n);
@@ -205,6 +231,8 @@ final class SevenZipContainer implements AlbumContainer {
             @Override
             public void end(boolean ok) throws SevenZipException {
                 if (!ok || at < buf.length) return;
+                if (buf.length <= KEEP && keptBytes + buf.length <= BUDGET && kept.putIfAbsent(wanted.get(i), buf) == null)
+                    keptBytes += buf.length; // read again by the metadata extractors without another pass
                 try {
                     sink.accept(wanted.get(i), buf);
                 } catch (IOException e) {

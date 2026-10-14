@@ -8,7 +8,9 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import org.springframework.stereotype.Component;
@@ -52,6 +54,13 @@ final class ZipContainer implements AlbumContainer {
     }
 
     @Override public InputStream open(String entry) throws IOException { return zip().getInputStream(entry(entry)); }
+
+    /** In central-directory order, which writers keep in the order of the entries in the file. */
+    @Override
+    public void heads(Collection<String> names, int limit, HeadSink sink) throws IOException {
+        var wanted = Set.copyOf(names);
+        AlbumContainer.super.heads(zip().stream().map(ZipEntry::getName).filter(wanted::contains).distinct().toList(), limit, sink);
+    }
 
     /**
      * Native memory of the arena, filled through a small cache-hot buffer: parallel renders of camera images made

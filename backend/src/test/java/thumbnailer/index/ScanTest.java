@@ -49,6 +49,7 @@ import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Disks;
 import thumbnailer.source.Kind;
 
 /** Scanning end to end against real files, an in-memory H2 and the real MVStore. */
@@ -401,6 +402,24 @@ class ScanTest {
     }
 
     @Test
+    void rootsOnDifferentDisksAreScannedAtOnceAndEachPrunes() throws IOException {
+        Path fast = root.resolve("fast"), slow = root.resolve("slow"); // forced apart: one SSD walker, one HDD walker
+        dir(fast.resolve("A"), "a.jpg", "b.jpg");
+        dir(slow.resolve("B"), "c.jpg", "d.jpg");
+        dir(slow.resolve("C"), "e.jpg", "f.jpg");
+        settings.set(new Settings(List.of(new Settings.Root(fast.toString(), List.of(), Disks.Storage.SSD),
+                new Settings.Root(slow.toString(), List.of(), Disks.Storage.HDD)), List.of(), false, null, null, null));
+        assertThat(scans.scan(null, () -> false).changed()).isEqualTo(3);
+        assertThat(albums.storedCover(byName(Containers.normalize(slow), "B"))).as("read one by one, rendered").isPresent();
+        FileSystemUtils.deleteRecursively(slow.resolve("C"));
+        var progress = scans.scan(null, () -> false);
+        assertThat(progress.message()).isEqualTo("Done");
+        assertThat(progress.removed()).isEqualTo(1);
+        assertThat(repo.byRoot(Containers.normalize(fast))).hasSize(1);
+        assertThat(repo.byRoot(Containers.normalize(slow))).hasSize(1);
+    }
+
+    @Test
     void sevenZipArchivesBecomeAlbumsAndRescanByStat() throws IOException {
         var images = new java.util.LinkedHashMap<String, byte[]>();
         for (int i = 0; i < 3; i++) images.put("set/" + (char) ('a' + i) + ".jpg", jpeg(i));
@@ -416,6 +435,10 @@ class ScanTest {
         assertThat(d.cover()).as("smallest image").isEqualTo("set/a.jpg");
         assertThat(albums.storedCover(d)).isPresent();
         assertThat(albums.storedCover(e)).isPresent();
+        for (var album : List.of(d, e))
+            for (var entry : repo.entries(album.id()))
+                assertThat(albums.thumb(album, entry)).as("one gallery pass, then alone: " + entry.name()).isPresent();
+        assertThat(albums.thumb(d, repo.entries(d.id()).getFirst())).as("taken before: rendered alone").isPresent();
         assertThat(scan(() -> false).changed()).as("unchanged archives are not opened").isZero();
     }
 

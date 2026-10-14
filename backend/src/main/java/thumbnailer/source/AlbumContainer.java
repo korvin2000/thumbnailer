@@ -56,8 +56,9 @@ public interface AlbumContainer extends Closeable {
 
     /**
      * Feeds {@code sink} the first {@code limit} bytes of each named file, in whatever order reads the container
-     * fastest (a solid archive decompresses once for all of them). A file that cannot be read is skipped. The sink may
-     * run inside that decompression, on another thread: it must not read this container and must be thread-safe.
+     * fastest: the order of the files on disk or in the archive (a solid archive decompresses once for all of them).
+     * A file that cannot be read is skipped. The sink may run inside that decompression, on another thread: it must
+     * not read this container and must be thread-safe.
      */
     default void heads(Collection<String> names, int limit, HeadSink sink) throws IOException {
         for (var name : names) {
@@ -72,6 +73,18 @@ public interface AlbumContainer extends Closeable {
     }
 
     interface HeadSink { void accept(String name, byte[] head) throws IOException; }
+
+    /**
+     * Whether reading one file costs a pass over every file packed before it (a solid archive, a compressed tar): read
+     * several only through {@link #heads}, which takes them in packing order in one pass.
+     */
+    default boolean sequential() { return false; }
+
+    /**
+     * Whether reading it is bound by the CPU, not the disk: one decompression pass over a compressed solid archive or
+     * tar. Its reads hold no turn on a disk that pays for seeks: other albums read while it decompresses.
+     */
+    default boolean cpuBound() { return false; }
 
     default List<Item> images() { return items().stream().filter(i -> isImage(i.name())).toList(); }
 

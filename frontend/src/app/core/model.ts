@@ -93,7 +93,9 @@ export interface AlbumPatch {
   cover?: string;
 }
 
-export interface ScanRoot { path: string; exclusions: string[] }
+/** How a root's disk is read: detected (AUTO), or forced; an HDD (also network/unknown) is read one file at a time. */
+export type Storage = 'AUTO' | 'SSD' | 'HDD';
+export interface ScanRoot { path: string; exclusions: string[]; storage?: Storage }
 export type ImageFormat = 'WEBP' | 'JPEG';
 /** How covers or thumbnails are rendered: `size` = longer side, `threads` 0 = CPU count. */
 export interface Render { format: ImageFormat; quality: number; size: number; threads: number }
@@ -102,7 +104,7 @@ export interface Mapping { from: string; to: string }
 export interface Settings { roots: ScanRoot[]; exclusions: string[]; scanOnStart: boolean; pathMap: Mapping[]; covers: Render; thumbs: Render }
 export const DEFAULT_SETTINGS: Settings = { roots: [], exclusions: [], scanOnStart: true, pathMap: [], covers: { format: 'WEBP', quality: 75, size: 512, threads: 4 }, thumbs: { format: 'JPEG', quality: 85, size: 512, threads: 0 } };
 /** `location` = `path` after the path map, i.e. where the root is looked for on this machine. */
-export interface RootStatus { path: string; location: string; exists: boolean; albumCount: number; lastScanAt: string | null }
+export interface RootStatus { path: string; location: string; exists: boolean; albumCount: number; lastScanAt: string | null; storage: 'SSD' | 'HDD' }
 export interface SettingsInfo { settings: Settings; dataDir: string; roots: RootStatus[]; renderEpoch: string }
 
 /** Child folder of a stored album path; `albums` counts at or below it, `nested` = some lie strictly below. */

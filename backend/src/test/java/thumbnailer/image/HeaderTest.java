@@ -12,16 +12,17 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.List;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 
-class JpegHeaderTest {
+class HeaderTest {
 
     @Test
     void readsSizeAndTheThreeTagsLikeMetadataExtractorInBothByteOrders() throws IOException {
         for (var order : new ByteOrder[] {ByteOrder.BIG_ENDIAN, ByteOrder.LITTLE_ENDIAN}) {
             byte[] jpeg = withSegments(jpeg(300, 200), exif(order, 6, "Ivan Ivanov", "2024:05:17 14:03:59"), xmp(90_000));
-            var h = JpegHeader.parse(MemorySegment.ofArray(jpeg));
+            var h = Header.parse(MemorySegment.ofArray(jpeg));
             assertThat(h).as(order.toString()).isNotNull();
             assertThat(h.width() + "x" + h.height()).isEqualTo("300x200");
             assertThat(h.exif()).as(order.toString()).isEqualTo(new ImageProbe.Exif(6, LocalDateTime.of(2024, 5, 17, 14, 3, 59), "Ivan Ivanov"))
@@ -33,12 +34,30 @@ class JpegHeaderTest {
     @Test
     void plainJpegHasNoExifAndAPrefixWithoutTheFrameHeaderIsNull() throws IOException {
         byte[] jpeg = jpeg(64, 48);
-        var h = JpegHeader.parse(MemorySegment.ofArray(jpeg));
+        var h = Header.parse(MemorySegment.ofArray(jpeg));
         assertThat(h.width() + "x" + h.height()).isEqualTo("64x48");
         assertThat(h.exif()).isEqualTo(ImageProbe.Exif.NONE);
         byte[] big = withSegments(jpeg, exif(ByteOrder.BIG_ENDIAN, 3, null, null), xmp(200_000));
-        assertThat(JpegHeader.parse(MemorySegment.ofArray(Arrays.copyOf(big, ImageProbe.HEAD)))).as("frame header past the head").isNull();
-        assertThat(JpegHeader.parse(MemorySegment.ofArray(new byte[] {'R', 'I', 'F', 'F', 0, 0}))).isNull();
+        assertThat(Header.parse(MemorySegment.ofArray(Arrays.copyOf(big, ImageProbe.HEAD)))).as("frame header past the head").isNull();
+        assertThat(Header.parse(MemorySegment.ofArray(new byte[] {'R', 'I', 'F', 'F', 0, 0}))).isNull();
+    }
+
+    @Test
+    void otherFormatsGiveTheSizeImageIoReadsFromTheirHead() throws IOException {
+        for (var format : List.of("png", "gif", "bmp", "tiff")) {
+            var out = new ByteArrayOutputStream();
+            ImageIO.write(new BufferedImage(300, 200, BufferedImage.TYPE_INT_RGB), format, out);
+            var probe = ImageProbe.probe(out.toByteArray());
+            assertThat(probe).as(format).isNotNull();
+            assertThat(probe.width() + "x" + probe.height()).as(format).isEqualTo("300x200");
+            assertThat(Header.parse(MemorySegment.ofArray(Arrays.copyOf(out.toByteArray(), 3)))).as(format + " cut short").isNull();
+            if (format.equals("png")) assertThat(Header.parse(MemorySegment.ofArray(Arrays.copyOf(out.toByteArray(), 40))))
+                    .as("png ending before IDAT: an eXIf may follow, so the full read decides").isNull();
+        }
+        byte[] gif = {'G', 'I', 'F', '8', '9', 'a', (byte) 0xE8, 3, (byte) 0xE8, 3, (byte) 0x80, 0, 0, // 1000x1000 screen, 2-colour table
+                0, 0, 0, 1, 1, 1, 0x21, (byte) 0xF9, 4, 0, 0, 0, 0, 0, 0x2C, 0, 0, 0, 0, 100, 0, 50, 0, 0};
+        var frame = Header.parse(MemorySegment.ofArray(gif));
+        assertThat(frame.width() + "x" + frame.height()).as("the first frame, as ImageIO reads it").isEqualTo("100x50");
     }
 
     private static byte[] jpeg(int w, int h) throws IOException {

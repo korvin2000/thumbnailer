@@ -41,21 +41,26 @@ public class Thumbnailer {
     private record Decoded(Pixels pixels, int width, int height, int orientation, boolean boxed) {}
 
     public Thumb render(AlbumContainer container, String name, Render spec) throws IOException {
-        int size = spec.size();
         try (var arena = Arena.ofConfined()) {
-            var d = decode(container.read(name, arena), name, size);
-            double scale = Math.min(1, (double) size / Math.max(d.width, d.height));
-            var p = d.pixels;
-            p = Resampler.resize(p, Math.clamp(Math.round(d.width * scale), 1, p.width()), Math.clamp(Math.round(d.height * scale), 1, p.height()),
-                    d.boxed).oriented(d.orientation);
-            var bytes = spec.format() == Render.Format.WEBP ? WebP.encode(p, spec.quality()) : TurboJpeg.encode(p, spec.quality());
-            return new Thumb(bytes, spec.format(), spec.epoch(), p.height() > p.width());
+            return render(container.read(name, arena), name, spec);
         }
+    }
+
+    /** From the whole file in memory: the caller reads it, so the disk is free again while this decodes. */
+    public Thumb render(MemorySegment data, String name, Render spec) throws IOException {
+        int size = spec.size();
+        var d = decode(data, name, size);
+        double scale = Math.min(1, (double) size / Math.max(d.width, d.height));
+        var p = d.pixels;
+        p = Resampler.resize(p, Math.clamp(Math.round(d.width * scale), 1, p.width()), Math.clamp(Math.round(d.height * scale), 1, p.height()),
+                d.boxed).oriented(d.orientation);
+        var bytes = spec.format() == Render.Format.WEBP ? WebP.encode(p, spec.quality()) : TurboJpeg.encode(p, spec.quality());
+        return new Thumb(bytes, spec.format(), spec.epoch(), p.height() > p.width());
     }
 
     private static Decoded decode(MemorySegment data, String name, int size) throws IOException {
         if (TurboJpeg.isJpeg(data)) {
-            var h = JpegHeader.parse(data);
+            var h = Header.parse(data);
             try {
                 var p = TurboJpeg.decode(data, h == null ? Integer.MAX_VALUE : (int) Math.ceil(size * GAP));
                 return h == null ? new Decoded(p, p.width(), p.height(), 1, false)

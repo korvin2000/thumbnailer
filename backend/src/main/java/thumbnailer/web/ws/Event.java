@@ -11,6 +11,7 @@ import thumbnailer.album.Entry;
 import thumbnailer.album.Facets;
 import thumbnailer.index.ScanProgress;
 import thumbnailer.settings.Settings;
+import thumbnailer.source.Disks;
 
 /** Server to client messages: replies (carrying the request {@code id}) and broadcasts. */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
@@ -36,8 +37,11 @@ sealed interface Event {
 
     @JsonTypeName("error") record Error(String message) implements Event {}
 
-    /** {@code location}: where the root is on disk after the path map; {@code exists} tests it. */
-    record RootStatus(String path, String location, boolean exists, int albumCount, Instant lastScanAt) {}
+    /**
+     * {@code location}: where the root is on disk after the path map; {@code exists} tests it; {@code storage}: how its
+     * disk is read (SSD or HDD), detected or forced by the root's setting.
+     */
+    record RootStatus(String path, String location, boolean exists, int albumCount, Instant lastScanAt, Disks.Storage storage) {}
 
     @JsonTypeName("folders") record FolderList(String path, List<AlbumRepository.Folder> folders) implements Event {}
 

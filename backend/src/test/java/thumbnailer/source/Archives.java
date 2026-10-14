@@ -41,6 +41,9 @@ public final class Archives {
         return out.toByteArray();
     }
 
+    /** An archive as the app opens it (7-Zip formats). */
+    public static AlbumContainer open(Path file) { return new SevenZipContainer(file, Exclusions.NONE); }
+
     public static byte[] gzip(byte[] data) throws IOException {
         var b = new ByteArrayOutputStream();
         try (var out = new GZIPOutputStream(b)) {
