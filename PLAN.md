@@ -69,8 +69,8 @@ undo. Reference SPEC IDs.
    7z's CPU-bound decompression); an O_DIRECT read benchmark confirms one album at a time on the HDD (53.8 vs
    20.1 MB/s); the folder gallery is 1.5x faster (p95 377 → 63 ms), the solid 7z gallery 2.9 s vs minutes. Fixed:
    `cpuBound()` archives give the disk turn back after their listing. Done: the scan pauses while the UI reads the
-   same HDD (`Lane.giveWay`, `QUIET` 300 ms; verified live). Open: a cold rerun of the new code needs another cache
-   drop.
+   same HDD (`Lane.giveWay`, `QUIET` 300 ms; verified live). Cold rerun of the fixed code (third cache drop): 9.5 s
+   vs 12.5 s for the old code; folder gallery 1.05 s (p95 69 ms), solid 7z gallery 3.1 s.
 
 ## Tech debt / hygiene
 
