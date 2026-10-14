@@ -25,6 +25,7 @@ replay_pid*
 
 # build / tooling
 !gradle/wrapper/gradle-wrapper.jar
+!backend/libs/*.jar
 .gradle/
 build/
 node_modules/
@@ -37,3 +38,7 @@ frontend/.angular/
 CLAUDE.local.md
 gradle/
 .idea/
+kvbench/
+
+# scaler competition workspaces (scalebench/lab/<agent>/, standalone copies)
+scalebench/lab/

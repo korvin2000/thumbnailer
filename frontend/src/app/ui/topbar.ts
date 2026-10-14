@@ -1,11 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, ElementRef, inject, output, signal, viewChild } from '@angular/core';
 import { formatBytes, formatMegapixels } from '../core/format';
-import { Prefs, Theme } from '../core/prefs';
+import { Prefs, SidebarTab, Theme } from '../core/prefs';
 import { SORTS } from '../core/model';
 import { AlbumStore } from '../core/store';
 import { Icon, IconName } from './shared/icon';
 
-interface Chip { key: string; label: string; remove: () => void }
+interface Chip { key: string; label: string; icon?: IconName; remove: () => void }
 
 const THEMES: Theme[] = ['system', 'light', 'dark'];
 const THEME_ICON: Record<Theme, IconName> = { system: 'monitor', light: 'sun', dark: 'moon' };
@@ -16,9 +16,10 @@ const THEME_ICON: Record<Theme, IconName> = { system: 'monitor', light: 'sun', d
   template: `
     <div class="brand" title="Thumbnailer"><span class="logo"><app-icon name="images" [size]="18" /></span><span class="name">Thumbnailer</span></div>
 
-    <button class="btn icon-btn" [class.active]="prefs.filtersOpen()" title="Refine search (F)" (click)="prefs.filtersOpen.set(!prefs.filtersOpen())">
+    <button class="btn icon-btn" [class.active]="prefs.sidebar() === 'folders'" title="Folders (E)" (click)="toggleTab('folders')"><app-icon name="folder" /></button>
+    <button class="btn icon-btn" [class.active]="prefs.sidebar() === 'refine'" title="Refine (F)" (click)="toggleTab('refine')">
       <app-icon name="filter" />
-      @if (store.activeFilters()) { <span class="count">{{ store.activeFilters() }}</span> }
+      @if (store.refining()) { <span class="count">{{ store.refining() }}</span> }
     </button>
 
     <div class="search" [class.focused]="focused()">
@@ -27,7 +28,7 @@ const THEME_ICON: Record<Theme, IconName> = { system: 'monitor', light: 'sun', d
              (keydown.escape)="onEscape(q, $event)" placeholder="Search albums · #tag · model: · studio: · by: · kind:zip" autocomplete="off" spellcheck="false" />
       <div class="chips">
         @for (c of chips(); track c.key) {
-          <button class="chip active" (click)="c.remove()" [title]="'Remove ' + c.label"><span>{{ c.label }}</span><app-icon name="x" [size]="11" /></button>
+          <button class="chip active" (click)="c.remove()" [title]="'Remove ' + c.label">@if (c.icon) { <app-icon [name]="c.icon" [size]="12" /> }<span>{{ c.label }}</span><app-icon name="x" [size]="11" /></button>
         }
       </div>
       @if (store.loading()) { <span class="spinner"></span> }
@@ -98,8 +99,8 @@ export class Topbar {
       if (q[key]) out.push({ key, label: `${prefix} ${q[key]}`, remove: () => { s.setFilter(key, null); strip(new RegExp(`\\b(${keys}):("[^"]*"|\\S+)`, 'ig')); } });
     };
     facet('model', 'model:', 'model|m'); facet('studio', 'studio:', 'studio|s'); facet('photographer', 'by:', 'by|photographer|p');
-    if (q.kind) out.push({ key: 'kind', label: q.kind === 'ZIP' ? 'zip archives' : 'folders', remove: () => { s.setFilter('kind', null); strip(/\bkind:\S+/ig); } });
-    if (q.roots?.length) out.push({ key: 'roots', label: `${q.roots.length} root${q.roots.length > 1 ? 's' : ''}`, remove: () => s.setFilter('roots', null) });
+    if (q.kind) out.push({ key: 'kind', label: q.kind === 'ZIP' ? 'zip archives' : q.kind === 'ARCHIVE' ? 'archives' : 'folders', remove: () => { s.setFilter('kind', null); strip(/\bkind:\S+/ig); } });
+    if (q.roots?.length) out.push({ key: 'roots', label: 'in: ' + q.roots[0].split('/').filter(Boolean).slice(-2).join('/'), icon: 'folder', remove: () => s.goTo(null) });
     if (q.minBytes != null || q.maxBytes != null) out.push({ key: 'bytes', label: `size ${q.minBytes != null ? formatBytes(q.minBytes, 0) : '0'} – ${q.maxBytes != null ? formatBytes(q.maxBytes, 0) : '∞'}`, remove: () => { s.setFilter('minBytes', null); s.setFilter('maxBytes', null); } });
     if (q.minCount != null || q.maxCount != null) out.push({ key: 'count', label: `${q.minCount ?? 0} – ${q.maxCount ?? '∞'} photos`, remove: () => { s.setFilter('minCount', null); s.setFilter('maxCount', null); } });
     if (q.minMegapixels != null || q.maxMegapixels != null) out.push({ key: 'mp', label: `${q.minMegapixels != null ? formatMegapixels(q.minMegapixels * 1e6) : '0'} – ${q.maxMegapixels != null ? formatMegapixels(q.maxMegapixels * 1e6) : '∞'}`, remove: () => { s.setFilter('minMegapixels', null); s.setFilter('maxMegapixels', null); } });
@@ -113,6 +114,9 @@ export class Topbar {
   protected onEscape(input: HTMLInputElement, e: Event) {
     if (input.value) { this.store.text.set(''); e.stopPropagation(); } else input.blur();
   }
+
+  /** Opens the tab, or closes the sidebar when that tab is already showing. */
+  protected toggleTab(tab: SidebarTab) { this.prefs.sidebar.update(v => v === tab ? 'none' : tab); }
 
   protected cycleTheme() { this.prefs.theme.set(THEMES[(THEMES.indexOf(this.prefs.theme()) + 1) % THEMES.length]); }
 }

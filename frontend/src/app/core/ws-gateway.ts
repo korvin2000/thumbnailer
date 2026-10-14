@@ -1,7 +1,8 @@
 import { Subject } from 'rxjs';
 import { Gateway } from './gateway';
 import {
-  Album, AlbumDetails, AlbumPatch, AlbumQuery, Facets, Filters, GatewayEvent, SearchResult, Settings, SettingsInfo,
+  Album, AlbumDetails, AlbumPatch, AlbumQuery, Facets, Filters, Folder, GatewayEvent, LibraryInfo, Listing, SearchResult,
+  Settings, SettingsInfo,
 } from './model';
 
 interface Pending { resolve: (m: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -16,6 +17,8 @@ export class WsGateway extends Gateway {
   private ready!: Promise<WebSocket>;
   private seq = 0;
   private backoff = 500;
+  /** Last render spec epoch seen in a settings reply; a changed spec changes image URLs, bypassing the browser cache. */
+  private epoch = '';
   private readonly pending = new Map<string, Pending>();
 
   constructor(private readonly url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`) {
@@ -26,16 +29,25 @@ export class WsGateway extends Gateway {
   search = (query: AlbumQuery) => this.request<SearchResult>('search', { query });
   album = (albumId: string) => this.request<AlbumDetails>('album', { albumId });
   update = (albumId: string, patch: AlbumPatch) => this.request<{ album: Album }>('update', { albumId, patch }).then(r => r.album);
-  scan = (roots?: string[]) => this.request<void>('scan', { roots: roots ?? null });
+  scan = (paths?: string[]) => this.request<void>('scan', { paths: paths ?? null });
   cancelScan = () => this.request<void>('cancelScan', {});
-  getSettings = () => this.request<SettingsInfo>('getSettings', {});
-  setSettings = (settings: Settings) => this.request<SettingsInfo>('setSettings', { settings });
+  getSettings = () => this.request<SettingsInfo>('getSettings', {}).then(s => this.stamp(s));
+  setSettings = (settings: Settings) => this.request<SettingsInfo>('setSettings', { settings }).then(s => this.stamp(s));
   facets = (filters?: Filters) => this.request<Facets>('facets', { query: filters ? { ...filters, sort: 'NAME', offset: 0, limit: 1 } : null });
   reveal = (albumId: string) => this.request<void>('reveal', { albumId });
+  folders = (path: string) => this.request<{ folders: Folder[] }>('folders', { path }).then(r => r.folders);
+  browse = (path: string | null) => this.request<Listing>('browse', { path });
+  library = () => this.request<LibraryInfo>('library', {});
+  switchLibrary = (dir: string) => this.request<void>('switchLibrary', { dir });
+  forgetLibrary = (dir: string) => this.request<LibraryInfo>('forgetLibrary', { dir });
+  optimize = () => this.request<void>('optimize', {});
 
-  coverUrl = (a: Album) => `/img/${a.id}/cover?v=${a.revision}`;
-  thumbUrl = (a: Album, i: number) => `/img/${a.id}/${i}/thumb?v=${a.revision}`;
+  coverUrl = (a: Album) => `/img/${a.id}/cover?v=${a.revision}${this.r()}`;
+  thumbUrl = (a: Album, i: number) => `/img/${a.id}/${i}/thumb?v=${a.revision}${this.r()}`;
   originalUrl = (a: Album, i: number) => `/img/${a.id}/${i}?v=${a.revision}`;
+
+  private r() { return this.epoch ? `&r=${this.epoch}` : ''; }
+  private stamp(s: SettingsInfo) { if (s.renderEpoch) this.epoch = s.renderEpoch; return s; }
 
   private connect() {
     const ws = new WebSocket(this.url);

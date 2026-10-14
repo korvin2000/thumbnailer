@@ -11,7 +11,7 @@ import thumbnailer.album.Entry;
 public interface CoverStrategy {
 
     Optional<Entry> pick(List<Entry> entries);
-
+    //board, folder, *_ch, 0.jpg, logo, icon, covet
     Pattern HINT = Pattern.compile("(?i)cover|poster|logo|_cv\\.[^.]+$");
 
     /** A file name announcing a cover: cover, poster, logo, or a {@code _cv} suffix. */

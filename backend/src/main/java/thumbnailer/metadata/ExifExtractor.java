@@ -22,11 +22,7 @@ class ExifExtractor implements MetadataExtractor {
         var date = entries.stream().map(Entry::shotAt).filter(Objects::nonNull).min(Comparator.naturalOrder())
                 .map(LocalDateTime::toLocalDate).orElse(null);
         String artist = null;
-        if (!entries.isEmpty()) {
-            try (var in = container.open(entries.getFirst().name())) {
-                artist = ImageProbe.exif(in).artist();
-            }
-        }
+        if (!entries.isEmpty()) artist = ImageProbe.exif(container.head(entries.getFirst().name(), ImageProbe.HEAD)).artist();
         return new AlbumMeta(null, null, null, artist, null, date, null);
     }
 }

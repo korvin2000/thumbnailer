@@ -10,7 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
-/** {@link Settings} persisted as {@code settings.json} in the data directory. */
+/** {@link Settings} persisted as {@code settings.json} in the active library directory. */
 @Component
 public class SettingsStore {
 
@@ -18,7 +18,7 @@ public class SettingsStore {
     private final JsonMapper json;
     private volatile Settings current;
 
-    SettingsStore(@Value("${thumbnailer.data-dir}") Path dataDir, JsonMapper json) throws IOException {
+    SettingsStore(@Value("${thumbnailer.library-dir:${thumbnailer.data-dir}}") Path dataDir, JsonMapper json) throws IOException {
         this.file = Files.createDirectories(dataDir).toAbsolutePath().normalize().resolve("settings.json");
         this.json = json;
         this.current = Files.exists(file) ? json.readValue(file.toFile(), Settings.class) : Settings.DEFAULT;
@@ -34,4 +34,6 @@ public class SettingsStore {
     }
 
     public Path dataDir() { return file.getParent(); }
+
+    public Path file() { return file; }
 }

@@ -62,7 +62,8 @@ class DemoAlbums implements ApplicationRunner {
         }
         var s = settings.get();
         if (s.roots().isEmpty())
-            settings.set(new Settings(List.of(new Settings.Root(demo.toString(), List.of())), s.exclusions(), s.scanOnStart()));
+            settings.set(new Settings(List.of(new Settings.Root(demo.toString(), List.of())), s.exclusions(), s.scanOnStart(),
+                    s.pathMap(), s.covers(), s.thumbs()));
     }
 
     private static void generate(Path demo) throws IOException {

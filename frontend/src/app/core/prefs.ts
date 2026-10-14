@@ -2,6 +2,8 @@ import { effect, Injectable, signal, WritableSignal } from '@angular/core';
 import { LAYOUT_MODES, LayoutMode } from './layout';
 
 export type Theme = 'system' | 'light' | 'dark';
+export type SidebarTab = 'folders' | 'refine' | 'none';
+const SIDEBARS: SidebarTab[] = ['folders', 'refine', 'none'];
 
 /** User preferences that live in this browser only; each one is a signal persisted under `thumbnailer.<key>`. */
 @Injectable({ providedIn: 'root' })
@@ -11,12 +13,14 @@ export class Prefs {
   readonly layoutMode = this.persisted<LayoutMode>('layout', 'bricks');
   readonly showTags = this.persisted('showTags', true);
   readonly followHover = this.persisted('followHover', true);
-  readonly filtersOpen = this.persisted('filtersOpen', false);
+  /** Which sidebar tab is shown; `none` = sidebar closed. */
+  readonly sidebar = this.persisted<SidebarTab>('sidebar', 'folders');
   readonly detailsOpen = this.persisted('detailsOpen', false);
 
   constructor() {
     effect(() => { document.documentElement.dataset['theme'] = this.theme() === 'system' ? '' : this.theme(); });
     if (!LAYOUT_MODES.includes(this.layoutMode())) this.layoutMode.set('bricks');
+    if (!SIDEBARS.includes(this.sidebar())) this.sidebar.set('folders');
   }
 
   setColumns(n: number) { this.columns.set(Math.max(1, Math.min(12, Math.round(n)))); }

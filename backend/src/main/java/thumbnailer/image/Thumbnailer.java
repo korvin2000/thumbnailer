@@ -1,108 +1,83 @@
 package thumbnailer.image;
 
-import java.awt.Color;
-import java.awt.Rectangle;
-import java.awt.RenderingHints;
-import java.awt.geom.AffineTransform;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import org.springframework.beans.factory.annotation.Value;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import org.springframework.stereotype.Component;
 import thumbnailer.source.AlbumContainer;
 
-/** Renders 16:9 (landscape) or 9:16 (portrait) JPEG thumbnails whose longer side is {@code thumbnailer.thumb-width}. */
+/**
+ * Renders thumbnails as a {@link Render} spec says: longer side {@code size}, proportions kept, never upscaled, WebP or
+ * JPEG. The chain is native where it is hot and copies nothing between stages: the entry is read once into native
+ * memory (no multi-MB heap arrays), a JPEG decodes through TurboJPEG at the smallest DCT scale that still covers
+ * {@link #GAP} times the target (1/4 for a camera image and a 512 px thumbnail) straight into {@link Pixels}, the
+ * {@link Resampler} finishes the shrink, EXIF orientation is applied to the small result, and libwebp or TurboJPEG
+ * encode the same array.
+ * WebP stills decode through libwebp; animations and other formats through ImageIO, subsampled to at most twice
+ * the target.
+ */
 @Component
 public class Thumbnailer {
 
-    private final int size;
-
-    public Thumbnailer(@Value("${thumbnailer.thumb-width:640}") int size) { this.size = size; }
-
-    public record Thumb(byte[] jpeg, boolean portrait) {}
-
     /**
-     * Streams the entry and decodes only the centred crop, subsampled so its longer side is at most twice the target:
-     * memory stays bounded by the thumbnail size, not by the original's.
+     * Decode to at least this multiple of the target. A DCT scale averages like a box; on a 24 MP JPEG to 512 px
+     * (PSNR against a full decode + float Lanczos3): 1/8 scored 38.4 dB in 50 ms, 1/4 + Lanczos3 50.8 dB in 57 ms,
+     * 1/2 50.6 dB in 64 ms, a full decode 49.3 dB in 77 ms; entropy decoding dominates, so smaller scales save little.
      */
-    public Thumb render(AlbumContainer container, String name) throws IOException {
-        ImageProbe.Exif exif;
-        try (var in = container.open(name)) {
-            exif = ImageProbe.exif(in);
+    static final double GAP = 1.5;
+
+    public Thumbnailer() {
+        WebP.features(new byte[16]); // loads both natives now: a missing one fails the start, not the first scan
+        TurboJpeg.isJpeg(MemorySegment.ofArray(new byte[0]));
+    }
+
+    /** Encoded bytes with the format and {@link Render#epoch()} that made them. */
+    public record Thumb(byte[] bytes, Render.Format format, long epoch, boolean portrait) {}
+
+    /** Decoded pixels with the stored full size, the EXIF orientation and whether a DCT scale already averaged them. */
+    private record Decoded(Pixels pixels, int width, int height, int orientation, boolean boxed) {}
+
+    public Thumb render(AlbumContainer container, String name, Render spec) throws IOException {
+        int size = spec.size();
+        try (var arena = Arena.ofConfined()) {
+            var d = decode(container.read(name, arena), name, size);
+            double scale = Math.min(1, (double) size / Math.max(d.width, d.height));
+            var p = d.pixels;
+            p = Resampler.resize(p, Math.clamp(Math.round(d.width * scale), 1, p.width()), Math.clamp(Math.round(d.height * scale), 1, p.height()),
+                    d.boxed).oriented(d.orientation);
+            var bytes = spec.format() == Render.Format.WEBP ? WebP.encode(p, spec.quality()) : TurboJpeg.encode(p, spec.quality());
+            return new Thumb(bytes, spec.format(), spec.epoch(), p.height() > p.width());
         }
-        boolean swap = exif.swapsAxes();
-        int tw, th;
-        BufferedImage decoded;
-        try (var raw = container.open(name); var in = ImageIO.createImageInputStream(raw)) {
-            var reader = ImageProbe.reader(in, name);
+    }
+
+    private static Decoded decode(MemorySegment data, String name, int size) throws IOException {
+        if (TurboJpeg.isJpeg(data)) {
+            var h = JpegHeader.parse(data);
             try {
-                int w = reader.getWidth(0), h = reader.getHeight(0);
-                double ow = swap ? h : w, oh = swap ? w : h; // as displayed
-                tw = oh > ow ? size * 9 / 16 : size;
-                th = oh > ow ? size : size * 9 / 16;
-                double cw = Math.min(ow, oh * tw / th), ch = Math.min(oh, ow * th / tw);
-                // A centred crop stays centred under every EXIF orientation, so it can be taken in stored coordinates.
-                int rw = (int) Math.round(swap ? ch : cw), rh = (int) Math.round(swap ? cw : ch);
-                int step = Math.max(1, (int) Math.ceil(Math.max(cw, ch) / (2.0 * size)));
-                var param = reader.getDefaultReadParam();
-                param.setSourceRegion(new Rectangle((w - rw) / 2, (h - rh) / 2, Math.max(1, rw), Math.max(1, rh)));
-                param.setSourceSubsampling(step, step, 0, 0);
-                decoded = reader.read(0, param);
-            } finally {
-                reader.dispose();
+                var p = TurboJpeg.decode(data, h == null ? Integer.MAX_VALUE : (int) Math.ceil(size * GAP));
+                return h == null ? new Decoded(p, p.width(), p.height(), 1, false)
+                        : new Decoded(p, h.width(), h.height(), h.exif().orientation(), p.width() < h.width());
+            } catch (IOException e) {
+                // CMYK, 12-bit or broken beyond libjpeg's tolerance: ImageIO below
             }
         }
-        int dw = decoded.getWidth(), dh = decoded.getHeight();
-        var t = AffineTransform.getScaleInstance((double) tw / (swap ? dh : dw), (double) th / (swap ? dw : dh));
-        t.concatenate(orientation(exif.orientation(), dw, dh));
-        return new Thumb(jpeg(draw(decoded, t, tw, th)), th > tw);
-    }
-
-    /** Maps stored pixels to displayed ones for EXIF orientations 2..8, mirrored variants included. */
-    static AffineTransform orientation(int o, int w, int h) {
-        return switch (o) {
-            case 2 -> new AffineTransform(-1, 0, 0, 1, w, 0);
-            case 3 -> new AffineTransform(-1, 0, 0, -1, w, h);
-            case 4 -> new AffineTransform(1, 0, 0, -1, 0, h);
-            case 5 -> new AffineTransform(0, 1, 1, 0, 0, 0);
-            case 6 -> new AffineTransform(0, 1, -1, 0, h, 0);
-            case 7 -> new AffineTransform(0, -1, -1, 0, h, w);
-            case 8 -> new AffineTransform(0, -1, 1, 0, 0, w);
-            default -> new AffineTransform();
-        };
-    }
-
-    /** One bilinear draw: the decoded crop is at most twice the target, where bilinear still averages every pixel. */
-    private static BufferedImage draw(BufferedImage src, AffineTransform t, int w, int h) {
-        var dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-        var g = dst.createGraphics();
-        try {
-            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-            g.setColor(Color.WHITE); // background for transparent sources
-            g.fillRect(0, 0, w, h);
-            g.drawImage(src, t, null);
-        } finally {
-            g.dispose();
+        var bytes = data.heapBase().orElse(null) instanceof byte[] b && b.length == data.byteSize() ? b : data.toArray(ValueLayout.JAVA_BYTE);
+        var exif = ImageProbe.exif(bytes);
+        if (WebP.isWebP(bytes)) {
+            try {
+                var p = WebP.decode(bytes);
+                return new Decoded(p, p.width(), p.height(), exif.orientation(), false);
+            } catch (IOException animated) {
+                // ImageIO below decodes the first frame
+            }
         }
-        return dst;
-    }
-
-    private static byte[] jpeg(BufferedImage img) throws IOException {
-        var writer = ImageIO.getImageWritersByFormatName("jpeg").next();
-        var param = writer.getDefaultWriteParam();
-        param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-        param.setCompressionQuality(.85f);
-        var out = new ByteArrayOutputStream(64 << 10);
-        try (var ios = ImageIO.createImageOutputStream(out)) {
-            writer.setOutput(ios);
-            writer.write(null, new IIOImage(img, null, null), param);
-        } finally {
-            writer.dispose();
-        }
-        return out.toByteArray();
+        return ImageProbe.decode(new ByteArrayInputStream(bytes), name, exif, (reader, x) -> {
+            int w = reader.getWidth(0), h = reader.getHeight(0), step = Math.max(1, Math.ceilDiv(Math.max(w, h), 2 * size));
+            var param = reader.getDefaultReadParam();
+            param.setSourceSubsampling(step, step, 0, 0);
+            return new Decoded(Pixels.of(reader.read(0, param)), w, h, x.orientation(), false); // point-sampled, not averaged
+        });
     }
 }

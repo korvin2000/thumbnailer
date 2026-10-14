@@ -30,15 +30,39 @@ CREATE TABLE IF NOT EXISTS album (
 );
 CREATE INDEX IF NOT EXISTS album_root ON album (root);
 CREATE INDEX IF NOT EXISTS album_content ON album (content_id);
+-- Scopes, folders and the root filter select by path prefix: path = ? OR path LIKE 'dir/%'.
+CREATE INDEX IF NOT EXISTS album_path ON album (path);
+-- One index per sort order (JdbcAlbumRepository.order, same columns and directions): a page is an index scan that stops
+-- after offset + limit rows instead of sorting every matching row. LOWER(name) cannot be indexed, sort_name can.
+ALTER TABLE album ADD COLUMN IF NOT EXISTS sort_name VARCHAR(1024) GENERATED ALWAYS AS (LOWER(name));
+CREATE INDEX IF NOT EXISTS album_newest ON album (shot_date DESC NULLS LAST, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_oldest ON album (shot_date ASC NULLS LAST, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_largest ON album (bytes DESC, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_smallest ON album (bytes, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_most ON album (image_count DESC, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_fewest ON album (image_count, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_quality ON album (avg_pixels DESC, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_rated ON album (rating DESC, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_name ON album (sort_name, id);
+CREATE INDEX IF NOT EXISTS album_indexed ON album (indexed_at DESC, sort_name, id);
 
-CREATE TABLE IF NOT EXISTS entry (
-    album_id VARCHAR(36)   NOT NULL,
-    idx      INT           NOT NULL,
-    name     VARCHAR(4096) NOT NULL,
-    bytes    BIGINT        NOT NULL,
-    mtime    BIGINT        NOT NULL,
-    width    INT           NOT NULL,
-    height   INT           NOT NULL,
-    shot_at  TIMESTAMP,
-    PRIMARY KEY (album_id, idx)
+-- One packed value per album (store/jdbc/EntryCodec), not one row per image; JdbcAlbumRepository packs and drops the
+-- per-image table of older versions on start.
+CREATE TABLE IF NOT EXISTS entries (
+    album_id VARCHAR(36) PRIMARY KEY,
+    data     VARBINARY   NOT NULL
 );
+
+-- Tombstones (AlbumRepository.delete / recall), by content: an album that comes back after a removal (moved out of a
+-- rescanned folder, restored from a backup, a copy) takes back its id, rating, edits and pinned cover.
+CREATE TABLE IF NOT EXISTS removed (
+    content_id   VARCHAR(64)   PRIMARY KEY,
+    id           VARCHAR(36)   NOT NULL,
+    revision     BIGINT        NOT NULL,
+    rating       INT           NOT NULL,
+    cover        VARCHAR(4096),
+    cover_pinned BOOLEAN       NOT NULL,
+    edited_json  CLOB          NOT NULL,
+    removed_at   BIGINT        NOT NULL
+);
+CREATE INDEX IF NOT EXISTS removed_id ON removed (id); -- every save consumes the tombstones of its id

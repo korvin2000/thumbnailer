@@ -3,7 +3,6 @@ package thumbnailer.web;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Optional;
 import org.springframework.core.io.InputStreamResource;
@@ -22,10 +21,15 @@ import thumbnailer.album.Album;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
 import thumbnailer.album.Entry;
+import thumbnailer.image.Thumbnailer.Thumb;
+import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Exclusions;
 
-/** Image bytes; URLs carry {@code ?v=revision}, so responses are cacheable for a day and the ETag is the revision. */
+/**
+ * Image bytes; URLs carry {@code ?v=revision} (and {@code &r=render epoch} for covers and thumbnails), so responses are
+ * cacheable for a day; the ETag is the revision, plus the epoch of the render spec for rendered images.
+ */
 @RestController
 @RequestMapping("/img/{albumId}")
 class ImageController {
@@ -35,23 +39,26 @@ class ImageController {
     private final AlbumRepository repo;
     private final AlbumService albums;
     private final Containers containers;
+    private final SettingsStore settings;
 
-    ImageController(AlbumRepository repo, AlbumService albums, Containers containers) {
+    ImageController(AlbumRepository repo, AlbumService albums, Containers containers, SettingsStore settings) {
         this.repo = repo;
         this.albums = albums;
         this.containers = containers;
+        this.settings = settings;
     }
 
     @GetMapping("/cover")
     ResponseEntity<byte[]> cover(@PathVariable String albumId, WebRequest request) {
         var album = album(albumId);
-        return request.checkNotModified(etag(album)) ? null : jpeg(album, albums.cover(album));
+        return request.checkNotModified(etag(album, settings.get().covers().epoch())) ? null : image(album, albums.cover(album));
     }
 
     @GetMapping("/{index}/thumb")
     ResponseEntity<byte[]> thumb(@PathVariable String albumId, @PathVariable int index, WebRequest request) {
         var album = album(albumId);
-        return request.checkNotModified(etag(album)) ? null : jpeg(album, albums.thumb(album, entry(albumId, index)));
+        return request.checkNotModified(etag(album, settings.get().thumbs().epoch())) ? null
+                : image(album, albums.thumb(album, entry(albumId, index)));
     }
 
     @GetMapping("/{index}")
@@ -60,7 +67,7 @@ class ImageController {
         var album = album(albumId);
         var entry = entry(albumId, index);
         if (request.checkNotModified(etag(album))) return null;
-        var container = containers.open(album.kind(), Path.of(album.path()), Exclusions.NONE);
+        var container = containers.open(album.kind(), settings.get().locate(album.path()), Exclusions.NONE);
         InputStream in;
         try {
             in = container.open(entry.name());
@@ -91,8 +98,12 @@ class ImageController {
 
     private static String etag(Album album) { return String.valueOf(album.revision()); }
 
-    private static ResponseEntity<byte[]> jpeg(Album album, Optional<byte[]> bytes) {
-        return bytes.map(b -> ResponseEntity.ok().cacheControl(CACHE).eTag(etag(album)).contentType(MediaType.IMAGE_JPEG).body(b))
+    private static String etag(Album album, long epoch) { return album.revision() + "-" + Long.toHexString(epoch); }
+
+    /** Tagged with the epoch the bytes carry, which differs from the requested one only while the spec changes. */
+    private static ResponseEntity<byte[]> image(Album album, Optional<Thumb> thumb) {
+        return thumb.map(t -> ResponseEntity.ok().cacheControl(CACHE).eTag(etag(album, t.epoch()))
+                        .contentType(MediaType.parseMediaType(t.format().mediaType())).body(t.bytes()))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 }

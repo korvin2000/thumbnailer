@@ -31,4 +31,16 @@ public class Containers {
 
     /** What every path below a normalized directory starts with; a drive root such as {@code C:/} already ends in '/'. */
     public static String prefix(String dir) { return dir.endsWith("/") ? dir : dir + "/"; }
+
+    /** Whether normalized {@code path} is directory {@code dir} or lies below it, ignoring case. */
+    public static boolean within(String path, String dir) {
+        var d = prefix(dir);
+        return prefix(path).regionMatches(true, 0, d, 0, d.length());
+    }
+
+    /** {@code path}, {@link #within} directory {@code from}, re-expressed below directory {@code to}. */
+    public static String rebase(String path, String from, String to) {
+        int n = prefix(from).length();
+        return path.length() > n ? prefix(to) + path.substring(n) : to;
+    }
 }

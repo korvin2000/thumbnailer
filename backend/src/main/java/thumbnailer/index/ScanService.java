@@ -1,26 +1,27 @@
 package thumbnailer.index;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,11 +31,16 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Exclusions;
 
-/** Runs one scan at a time: discovery on the scan thread, reconciliation on a CPU-sized pool. */
+/**
+ * Runs one scan at a time, of every root or of folders at or below roots (scopes): discovery on the scan thread, one
+ * virtual thread per album; the walk waits while {@code index-threads} albums are in flight, so memory and open files
+ * stay bounded at any library size.
+ */
 @Service
 public class ScanService implements AutoCloseable {
 
@@ -45,9 +51,11 @@ public class ScanService implements AutoCloseable {
     private final Reconciler reconciler;
     private final ApplicationEventPublisher events;
     private final ExecutorService pool;
+    private final int width; // albums indexed at once
     private final AtomicReference<AtomicBoolean> running = new AtomicReference<>(); // the running scan's cancel flag
     private final Map<String, Instant> lastScans = new ConcurrentHashMap<>();
     private volatile Thread coordinator;
+    private volatile boolean frozen; // a restart is pending: no scan may start
 
     ScanService(SettingsStore settings, AlbumDiscovery discovery, Reconciler reconciler,
                 ApplicationEventPublisher events, @Value("${thumbnailer.index-threads:0}") int threads) {
@@ -55,18 +63,23 @@ public class ScanService implements AutoCloseable {
         this.discovery = discovery;
         this.reconciler = reconciler;
         this.events = events;
-        this.pool = Executors.newFixedThreadPool(threads > 0 ? threads : Runtime.getRuntime().availableProcessors(),
-                Thread.ofPlatform().name("index-", 1).daemon(true).factory());
+        this.width = threads > 0 ? threads : Runtime.getRuntime().availableProcessors();
+        this.pool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("index-", 1).factory());
     }
 
-    /** Starts scanning the given roots ({@code null} = all) in the background; false if a scan is running. */
-    public boolean start(List<String> roots) {
+    /**
+     * Starts scanning the given paths ({@code null} = every root) in the background; false if a scan is running. Each
+     * path must be a root or lie below one. Also false once {@link #freeze frozen}.
+     */
+    public boolean start(List<String> paths) {
+        var s = settings.get();
+        var scopes = scopes(s, paths);
         var cancel = new AtomicBoolean();
-        if (!running.compareAndSet(null, cancel)) return false;
+        if (frozen || !running.compareAndSet(null, cancel)) return false;
         coordinator = Thread.ofPlatform().name("scan").daemon(true).start(() -> {
             ScanProgress last;
             try {
-                last = scan(roots, cancel::get);
+                last = scan(s, scopes, cancel::get);
             } finally {
                 running.set(null);
             }
@@ -74,6 +87,16 @@ public class ScanService implements AutoCloseable {
         });
         return true;
     }
+
+    public boolean running() { return running.get() != null; }
+
+    /**
+     * Refuses every later {@link #start}, for the restart a library operation scheduled; the new context starts thawed.
+     * A scan that started just before is stopped by the restart's close like any other.
+     */
+    public void freeze() { frozen = true; }
+
+    public boolean frozen() { return frozen; }
 
     public void cancel() {
         var cancel = running.get();
@@ -88,44 +111,74 @@ public class ScanService implements AutoCloseable {
     }
 
     /** Scans synchronously and returns the final progress, which the caller publishes. */
-    ScanProgress scan(List<String> only, BooleanSupplier cancelled) {
-        var wanted = only == null ? null : only.stream().map(r -> Containers.normalize(Path.of(r))).collect(Collectors.toSet());
+    ScanProgress scan(List<String> paths, BooleanSupplier cancelled) {
+        var s = settings.get();
+        return scan(s, scopes(s, paths), cancelled);
+    }
+
+    /** A directory to walk and the root it lies in, which supplies the exclusions and the albums' root. */
+    private record Scope(Settings.Root root, String path) {}
+
+    /**
+     * Every root, or the given paths, each spelled like its root below which the file system's spelling of an existing
+     * folder wins (a typed {@code album} is the stored {@code Album}); a path inside another is covered by that one.
+     */
+    private static List<Scope> scopes(Settings s, List<String> paths) {
+        if (paths == null) return s.roots().stream().map(r -> new Scope(r, r.path())).toList();
+        var scopes = new ArrayList<Scope>();
+        paths.stream().filter(Objects::nonNull).map(p -> Containers.normalize(Path.of(p)))
+                .sorted(Comparator.comparingInt(String::length)).forEach(p -> {
+                    var root = s.roots().stream().filter(r -> Containers.within(p, r.path())).findFirst()
+                            .orElseThrow(() -> new IllegalArgumentException("Not inside an indexed folder: " + p));
+                    if (scopes.stream().noneMatch(x -> Containers.within(p, x.path())))
+                        scopes.add(new Scope(root, spelled(s, root.path(), Containers.rebase(p, root.path(), root.path()))));
+                });
+        return scopes;
+    }
+
+    /** {@code scope} as the file system spells it below {@code root}; as typed if gone or reached through a link. */
+    private static String spelled(Settings s, String root, String scope) {
+        try {
+            var real = Containers.normalize(s.locate(scope).toRealPath());
+            var base = Containers.normalize(s.locate(root).toRealPath());
+            return Containers.within(real, base) ? Containers.rebase(real, base, root) : scope;
+        } catch (IOException e) {
+            return scope;
+        }
+    }
+
+    /**
+     * Each scope is walked where the path map finds it; what the walk meets is stored under its canonical path. Albums
+     * at or below a completely walked scope that the walk did not meet are removed at the end, unless cancelled.
+     */
+    private ScanProgress scan(Settings s, List<Scope> scopes, BooleanSupplier cancelled) {
         var progress = new Progress();
-        var pass = reconciler.begin();
         var completed = new ArrayList<String>();
         try {
-            var s = settings.get();
-            for (var root : s.roots()) {
-                if (wanted != null && !wanted.contains(root.path()) || cancelled.getAsBoolean()) continue;
-                if (!Files.isDirectory(Path.of(root.path()))) {
-                    log.warn("Root {} is unreachable, skipped", root.path());
+            var pass = reconciler.begin(s);
+            for (var scope : scopes) {
+                if (cancelled.getAsBoolean()) break;
+                var root = scope.root().path();
+                var physical = s.locate(scope.path());
+                var globs = Exclusions.of(Stream.concat(s.exclusions().stream(), scope.root().exclusions().stream()).toList());
+                // Below a reachable root, a folder that is gone or excluded holds no albums: an empty, complete walk.
+                boolean empty = !scope.path().equals(root) && (excluded(globs, root, scope.path())
+                        || Files.notExists(physical) && Files.isDirectory(s.locate(root)));
+                if (!empty && !Files.isDirectory(physical)) {
+                    log.warn("{} is unreachable at {}, skipped", scope.path(), physical);
                     continue;
                 }
                 long t0 = System.nanoTime();
                 int found0 = progress.discovered.get(), changed0 = progress.changed.get();
-                progress.root = root.path();
+                progress.root = scope.path();
                 progress.publish(true);
-                pass.load(root.path());
-                var tasks = new ArrayList<Future<?>>();
-                var exclusions = Exclusions.of(Stream.concat(s.exclusions().stream(), root.exclusions().stream()).toList());
-                boolean complete = discovery.walk(Path.of(root.path()), exclusions, cancelled, found -> {
-                    progress.discovered.incrementAndGet();
-                    tasks.add(pool.submit(() -> {
-                        try {
-                            if (pass.reconcile(root.path(), exclusions, found, cancelled)) progress.changed.incrementAndGet();
-                        } catch (Exception e) {
-                            log.warn("Cannot index {}: {}", found.path(), e.toString());
-                        }
-                        progress.indexed.incrementAndGet();
-                        progress.publish(false);
-                    }));
-                });
-                tasks.forEach(ScanService::await);
+                pass.load(scope.path());
+                boolean complete = empty || walk(pass, scope, physical, globs, progress, cancelled);
                 if (complete && !cancelled.getAsBoolean()) {
-                    completed.add(root.path());
-                    lastScans.put(root.path(), Instant.now());
+                    completed.add(scope.path());
+                    if (scope.path().equals(root)) lastScans.put(root, Instant.now());
                 }
-                log.info("Scanned {}: {} albums, {} changed{} in {} ms", root.path(), progress.discovered.get() - found0,
+                log.info("Scanned {}: {} albums, {} changed{} in {} ms", scope.path(), progress.discovered.get() - found0,
                         progress.changed.get() - changed0, complete ? "" : " (incomplete, nothing will be removed)",
                         (System.nanoTime() - t0) / 1_000_000);
             }
@@ -139,28 +192,55 @@ public class ScanService implements AutoCloseable {
         return progress.snapshot(Instant.now());
     }
 
+    /** Walks one scope, indexing what it finds; returns whether the walk was complete. */
+    private boolean walk(Reconciler.Pass pass, Scope scope, Path physical, Exclusions globs, Progress progress,
+                         BooleanSupplier cancelled) {
+        var at = Containers.normalize(physical);
+        var exclusions = globs.rebased(at, scope.path());
+        var slots = new Semaphore(width);
+        try {
+            return discovery.walk(physical, exclusions, cancelled, found -> {
+                progress.discovered.incrementAndGet();
+                slots.acquireUninterruptibly();
+                try {
+                    pool.execute(() -> {
+                        try {
+                            var path = Containers.rebase(Containers.normalize(found.path()), at, scope.path());
+                            if (pass.reconcile(scope.root().path(), path, exclusions, found, cancelled)) progress.changed.incrementAndGet();
+                        } catch (Exception e) {
+                            log.warn("Cannot index {}: {}", found.path(), e.toString());
+                        } finally {
+                            progress.indexed.incrementAndGet();
+                            slots.release();
+                        }
+                        progress.publish(false);
+                    });
+                } catch (RejectedExecutionException e) { // closing: the walk stops, nothing will be pruned
+                    slots.release();
+                    throw e;
+                }
+            });
+        } finally {
+            slots.acquireUninterruptibly(width); // every worker of this scope has finished
+        }
+    }
+
+    /** Whether the walk of {@code root} skips folder {@code path} or a folder between the two (canonical globs). */
+    private static boolean excluded(Exclusions globs, String root, String path) {
+        for (var p = path; p.length() > root.length(); p = p.substring(0, p.lastIndexOf('/')))
+            if (globs.excludes(p + "/")) return true;
+        return false;
+    }
+
     /** Stops a running scan before any bean is destroyed, so no worker writes to a closing store. Idempotent. */
     @Override
     @EventListener(ContextClosedEvent.class)
     public void close() throws InterruptedException {
         cancel();
-        // Queued tasks never run after shutdownNow(): cancel them, or the coordinator would wait on them forever.
-        pool.shutdownNow().forEach(task -> ((Future<?>) task).cancel(false));
+        pool.shutdownNow(); // interrupts the workers; indexers honour it
         pool.awaitTermination(5, TimeUnit.SECONDS);
         var scan = coordinator;
         if (scan != null) scan.join(Duration.ofSeconds(5));
-    }
-
-    private static void await(Future<?> task) {
-        try {
-            task.get();
-        } catch (ExecutionException e) {
-            log.warn("Indexing task failed", e.getCause());
-        } catch (CancellationException e) {
-            // shutting down
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 
     private final class Progress {

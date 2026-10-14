@@ -1,0 +1,7 @@
+# Natives: manifests byte-identical on every checkout (their hash names the cache bundle), libraries never converted
+*.sha256 text eol=lf
+*.dll binary
+*.so binary
+*.dylib binary
+*.jar binary
+*.png binary

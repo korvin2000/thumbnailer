@@ -3,10 +3,15 @@ package thumbnailer.source;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.springframework.stereotype.Component;
 
@@ -44,6 +49,26 @@ final class DirectoryContainer implements AlbumContainer {
     }
 
     @Override public InputStream open(String name) throws IOException { return Files.newInputStream(dir.resolve(name)); }
+
+    @Override
+    public byte[] head(String name, int limit) throws IOException {
+        try (var ch = FileChannel.open(dir.resolve(name))) {
+            var b = ByteBuffer.allocate((int) Math.min(limit, ch.size()));
+            while (b.hasRemaining() && ch.read(b) >= 0) {}
+            return b.position() == b.capacity() ? b.array() : Arrays.copyOf(b.array(), b.position());
+        }
+    }
+
+    /** One read into native memory of the arena: no heap array to zero or collect. */
+    @Override
+    public MemorySegment read(String name, Arena arena) throws IOException {
+        try (var ch = FileChannel.open(dir.resolve(name))) {
+            var seg = arena.allocate(ch.size());
+            var buf = seg.asByteBuffer();
+            while (buf.hasRemaining() && ch.read(buf) >= 0) {}
+            return seg.asSlice(0, buf.position());
+        }
+    }
 
     @Override public void close() {}
 

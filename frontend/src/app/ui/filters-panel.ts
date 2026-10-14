@@ -1,9 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { formatBytes } from '../core/format';
 import { Facet, Filters, Kind } from '../core/model';
-import { Prefs } from '../core/prefs';
 import { AlbumStore } from '../core/store';
-import { BasenamePipe } from '../core/format';
 import { Icon } from './shared/icon';
 import { Range, RangeValue } from './shared/range';
 
@@ -14,95 +12,74 @@ const MEGAPIXELS = [0, 1, 2, 4, 8, 12, 16, 24, 36, 50, 100, Infinity];
 
 @Component({
   selector: 'app-filters-panel',
-  imports: [Icon, Range, BasenamePipe],
+  imports: [Icon, Range],
   template: `
-    <header>
-      <h2><app-icon name="filter" [size]="15" /> Refine</h2>
-      <button class="btn ghost sm" (click)="store.clearFilters()" [disabled]="!store.activeFilters()">Reset</button>
-      <button class="btn icon-btn sm ghost" (click)="prefs.filtersOpen.set(false)" title="Close (F)"><app-icon name="x" /></button>
-    </header>
-    <div class="body">
-      <section>
-        <h3><app-icon name="hash" [size]="13" /> Tags</h3>
-        <form (submit)="addTag(tag.value); tag.value = ''; $event.preventDefault()">
-          <input #tag class="input sm" placeholder="Add a tag and press Enter" list="facet-tags" />
-          <datalist id="facet-tags">@for (t of facets().tags; track t.value) { <option [value]="t.value"></option> }</datalist>
-        </form>
-        <div class="chips">
-          @for (t of tagChoices(); track t.value) {
-            <button class="chip" [class.active]="activeTags().includes(t.value)" (click)="store.toggleTag(t.value)">#{{ t.value }}<span class="n">{{ t.count }}</span></button>
-          }
-        </div>
-      </section>
+    <section>
+      <h3><app-icon name="hash" [size]="13" /> Tags</h3>
+      <form (submit)="addTag(tag.value); tag.value = ''; $event.preventDefault()">
+        <input #tag class="input sm" placeholder="Add a tag and press Enter" list="facet-tags" />
+        <datalist id="facet-tags">@for (t of facets().tags; track t.value) { <option [value]="t.value"></option> }</datalist>
+      </form>
+      <div class="chips">
+        @for (t of tagChoices(); track t.value) {
+          <button class="chip" [class.active]="activeTags().includes(t.value)" (click)="store.toggleTag(t.value)">#{{ t.value }}<span class="n">{{ t.count }}</span></button>
+        }
+      </div>
+    </section>
 
-      <section class="facets">
-        <label><span><app-icon name="user" [size]="13" /> Model</span>
-          <select class="input sm" [value]="f().model ?? ''" (change)="store.setFilter('model', $any($event.target).value)">
-            <option value="">Any</option>@for (x of facets().models; track x.value) { <option [value]="x.value">{{ x.value }} ({{ x.count }})</option> }
-          </select></label>
-        <label><span><app-icon name="building" [size]="13" /> Studio</span>
-          <select class="input sm" [value]="f().studio ?? ''" (change)="store.setFilter('studio', $any($event.target).value)">
-            <option value="">Any</option>@for (x of facets().studios; track x.value) { <option [value]="x.value">{{ x.value }} ({{ x.count }})</option> }
-          </select></label>
-        <label><span><app-icon name="camera" [size]="13" /> Photographer</span>
-          <select class="input sm" [value]="f().photographer ?? ''" (change)="store.setFilter('photographer', $any($event.target).value)">
-            <option value="">Any</option>@for (x of facets().photographers; track x.value) { <option [value]="x.value">{{ x.value }} ({{ x.count }})</option> }
-          </select></label>
-      </section>
+    <section class="facets">
+      <label><span><app-icon name="user" [size]="13" /> Model</span>
+        <select class="input sm" [value]="f().model ?? ''" (change)="store.setFilter('model', $any($event.target).value)">
+          <option value="">Any</option>@for (x of facets().models; track x.value) { <option [value]="x.value">{{ x.value }} ({{ x.count }})</option> }
+        </select></label>
+      <label><span><app-icon name="building" [size]="13" /> Studio</span>
+        <select class="input sm" [value]="f().studio ?? ''" (change)="store.setFilter('studio', $any($event.target).value)">
+          <option value="">Any</option>@for (x of facets().studios; track x.value) { <option [value]="x.value">{{ x.value }} ({{ x.count }})</option> }
+        </select></label>
+      <label><span><app-icon name="camera" [size]="13" /> Photographer</span>
+        <select class="input sm" [value]="f().photographer ?? ''" (change)="store.setFilter('photographer', $any($event.target).value)">
+          <option value="">Any</option>@for (x of facets().photographers; track x.value) { <option [value]="x.value">{{ x.value }} ({{ x.count }})</option> }
+        </select></label>
+    </section>
 
-      <section class="row">
-        <h3>Kind</h3>
-        <div class="segmented">
-          <button [class.active]="!f().kind" (click)="store.setFilter('kind', null)">All</button>
-          <button [class.active]="f().kind === 'DIRECTORY'" (click)="setKind('DIRECTORY')"><app-icon name="folder" [size]="13" />Folders</button>
-          <button [class.active]="f().kind === 'ZIP'" (click)="setKind('ZIP')"><app-icon name="archive" [size]="13" />Zips</button>
-        </div>
-      </section>
+    <section class="row">
+      <h3>Kind</h3>
+      <div class="segmented">
+        <button [class.active]="!f().kind" (click)="store.setFilter('kind', null)">All</button>
+        <button [class.active]="f().kind === 'DIRECTORY'" (click)="setKind('DIRECTORY')"><app-icon name="folder" [size]="13" />Folders</button>
+        <button [class.active]="f().kind === 'ZIP'" (click)="setKind('ZIP')"><app-icon name="archive" [size]="13" />Zips</button>
+        <button [class.active]="f().kind === 'ARCHIVE'" (click)="setKind('ARCHIVE')"><app-icon name="archive" [size]="13" />Archives</button>
+      </div>
+    </section>
 
-      <section>
-        <h3><app-icon name="calendar" [size]="13" /> Shot between</h3>
-        <div class="dates">
-          <input class="input sm" type="date" [value]="f().dateFrom ?? ''" (change)="store.setFilter('dateFrom', $any($event.target).value)" />
-          <span>→</span>
-          <input class="input sm" type="date" [value]="f().dateTo ?? ''" (change)="store.setFilter('dateTo', $any($event.target).value)" />
-        </div>
-      </section>
+    <section>
+      <h3><app-icon name="calendar" [size]="13" /> Shot between</h3>
+      <div class="dates">
+        <input class="input sm" type="date" [value]="f().dateFrom ?? ''" (change)="store.setFilter('dateFrom', $any($event.target).value)" />
+        <span>→</span>
+        <input class="input sm" type="date" [value]="f().dateTo ?? ''" (change)="store.setFilter('dateTo', $any($event.target).value)" />
+      </div>
+    </section>
 
-      <section>
-        <h3><app-icon name="database" [size]="13" /> Album size</h3>
-        <app-range [max]="sizes.length - 1" [lo]="idx(sizes, f().minBytes, 0)" [hi]="idx(sizes, f().maxBytes, sizes.length - 1)" [format]="fmtSize" (changed)="setRange('minBytes', 'maxBytes', sizes, $event)" />
-      </section>
-      <section>
-        <h3><app-icon name="images" [size]="13" /> Photos per album</h3>
-        <app-range [max]="counts.length - 1" [lo]="idx(counts, f().minCount, 0)" [hi]="idx(counts, f().maxCount, counts.length - 1)" [format]="fmtCount" (changed)="setRange('minCount', 'maxCount', counts, $event)" />
-      </section>
-      <section>
-        <h3><app-icon name="zoom" [size]="13" /> Quality (average resolution)</h3>
-        <app-range [max]="mps.length - 1" [lo]="idx(mps, f().minMegapixels, 0)" [hi]="idx(mps, f().maxMegapixels, mps.length - 1)" [format]="fmtMp" (changed)="setRange('minMegapixels', 'maxMegapixels', mps, $event)" />
-      </section>
-      <section>
-        <h3><app-icon name="star" [size]="13" /> Rating</h3>
-        <app-range [max]="10" [lo]="f().minRating ?? 0" [hi]="f().maxRating ?? 10" [format]="fmtRating" (changed)="setRating($event)" />
-      </section>
-
-      @if (store.roots().length) {
-        <section>
-          <h3><app-icon name="folder" [size]="13" /> Search in</h3>
-          @for (r of store.roots(); track r.path) {
-            <label class="check" [title]="r.path">
-              <input type="checkbox" [checked]="!f().roots || f().roots!.includes(r.path)" (change)="toggleRoot(r.path)" />
-              <span class="path">{{ r.path | basename: 2 }}</span><span class="n">{{ r.albumCount }}</span>
-            </label>
-          }
-        </section>
-      }
-    </div>
+    <section>
+      <h3><app-icon name="database" [size]="13" /> Album size</h3>
+      <app-range [max]="sizes.length - 1" [lo]="idx(sizes, f().minBytes, 0)" [hi]="idx(sizes, f().maxBytes, sizes.length - 1)" [format]="fmtSize" (changed)="setRange('minBytes', 'maxBytes', sizes, $event)" />
+    </section>
+    <section>
+      <h3><app-icon name="images" [size]="13" /> Photos per album</h3>
+      <app-range [max]="counts.length - 1" [lo]="idx(counts, f().minCount, 0)" [hi]="idx(counts, f().maxCount, counts.length - 1)" [format]="fmtCount" (changed)="setRange('minCount', 'maxCount', counts, $event)" />
+    </section>
+    <section>
+      <h3><app-icon name="zoom" [size]="13" /> Quality (average resolution)</h3>
+      <app-range [max]="mps.length - 1" [lo]="idx(mps, f().minMegapixels, 0)" [hi]="idx(mps, f().maxMegapixels, mps.length - 1)" [format]="fmtMp" (changed)="setRange('minMegapixels', 'maxMegapixels', mps, $event)" />
+    </section>
+    <section>
+      <h3><app-icon name="star" [size]="13" /> Rating</h3>
+      <app-range [max]="10" [lo]="f().minRating ?? 0" [hi]="f().maxRating ?? 10" [format]="fmtRating" (changed)="setRating($event)" />
+    </section>
   `,
   styles: `
-    :host { display: flex; flex-direction: column; width: var(--filters-w); height: 100%; background: var(--bg-elev); border-right: 1px solid var(--border); }
-    header { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--border); }
-    h2 { display: flex; align-items: center; gap: 6px; flex: 1; font-size: 13px; font-weight: 600; }
-    .body { flex: 1; overflow: auto; padding: 6px 14px 20px; }
+    :host { display: block; padding: 6px 14px 20px; }
     section { padding: 12px 0; border-bottom: 1px solid var(--border); }
     section:last-child { border-bottom: 0; }
     h3 { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
@@ -113,15 +90,11 @@ const MEGAPIXELS = [0, 1, 2, 4, 8, 12, 16, 24, 36, 50, 100, Infinity];
     .facets label { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
     .facets label span { display: inline-flex; align-items: center; gap: 6px; }
     .dates { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
-    .check { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; cursor: pointer; }
-    .check .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
-    .check .n { color: var(--text-3); font-size: 11px; }
   `,
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class FiltersPanel {
   protected readonly store = inject(AlbumStore);
-  protected readonly prefs = inject(Prefs);
   protected readonly sizes = SIZES;
   protected readonly counts = COUNTS;
   protected readonly mps = MEGAPIXELS;
@@ -163,11 +136,5 @@ export class FiltersPanel {
   protected addTag(raw: string) {
     const tag = raw.trim().replace(/^#/, '').toLowerCase();
     if (tag && !this.activeTags().includes(tag)) this.store.toggleTag(tag);
-  }
-
-  protected toggleRoot(path: string) {
-    const all = this.store.roots().map(r => r.path), current = this.f().roots ?? all;
-    const next = current.includes(path) ? current.filter(p => p !== path) : [...current, path];
-    if (next.length) this.store.setFilter('roots', next.length === all.length ? null : next);
   }
 }

@@ -1,6 +1,6 @@
 /** Wire model — mirrors docs/ARCHITECTURE.md §1 and §3. */
 
-export type Kind = 'DIRECTORY' | 'ZIP';
+export type Kind = 'DIRECTORY' | 'ZIP' | 'ARCHIVE'; // ARCHIVE: any other archive 7-Zip reads (rar, 7z, tar, iso, tar.gz ...)
 
 export interface Album {
   id: string;
@@ -94,9 +94,28 @@ export interface AlbumPatch {
 }
 
 export interface ScanRoot { path: string; exclusions: string[] }
-export interface Settings { roots: ScanRoot[]; exclusions: string[]; scanOnStart: boolean }
-export interface RootStatus { path: string; exists: boolean; albumCount: number; lastScanAt: string | null }
-export interface SettingsInfo { settings: Settings; dataDir: string; roots: RootStatus[] }
+export type ImageFormat = 'WEBP' | 'JPEG';
+/** How covers or thumbnails are rendered: `size` = longer side, `threads` 0 = CPU count. */
+export interface Render { format: ImageFormat; quality: number; size: number; threads: number }
+/** Prefix rewrite applied on this machine; both ends are normalized dirs ending in '/'. */
+export interface Mapping { from: string; to: string }
+export interface Settings { roots: ScanRoot[]; exclusions: string[]; scanOnStart: boolean; pathMap: Mapping[]; covers: Render; thumbs: Render }
+export const DEFAULT_SETTINGS: Settings = { roots: [], exclusions: [], scanOnStart: true, pathMap: [], covers: { format: 'WEBP', quality: 75, size: 512, threads: 4 }, thumbs: { format: 'JPEG', quality: 85, size: 512, threads: 0 } };
+/** `location` = `path` after the path map, i.e. where the root is looked for on this machine. */
+export interface RootStatus { path: string; location: string; exists: boolean; albumCount: number; lastScanAt: string | null }
+export interface SettingsInfo { settings: Settings; dataDir: string; roots: RootStatus[]; renderEpoch: string }
+
+/** Child folder of a stored album path; `albums` counts at or below it, `nested` = some lie strictly below. */
+export interface Folder { name: string; path: string; albums: number; nested: boolean }
+/** One level of the real file system, for the folder picker; `error` with the nearest reachable ancestor when `path` was not. */
+export interface Listing { path: string; parent: string | null; drives: string[]; folders: { name: string; path: string }[]; error: string | null }
+
+export interface LibraryStats {
+  albums: number; images: number; imageBytes: number; lastIndexedAt: string | null;
+  coversCount: number; coversBytes: number; coversFile: number; metadataBytes: number; metadataFile: number; settingsBytes: number;
+}
+/** `home` = data dir holding libraries.json; `dir` = active library; `pinned` = forced by CLI/env, switching disabled. */
+export interface LibraryInfo { home: string; dir: string; known: string[]; pinned: boolean; stats: LibraryStats; about: { version: string; java: string; os: string } }
 
 export interface ScanProgress {
   running: boolean;

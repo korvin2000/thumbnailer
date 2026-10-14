@@ -1,17 +1,21 @@
 package thumbnailer.web.ws;
 
+import com.dynatrace.hash4j.hashing.Hashing;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
@@ -46,6 +50,7 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     private static final Event OK = new Event.Ok();
 
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
+    private volatile boolean closing; // the context is closing: sessions that arrive now are sent away at once
     private final ExecutorService outbox =
             Executors.newSingleThreadExecutor(Thread.ofPlatform().name("ws-broadcast").daemon(true).factory());
     private final JsonMapper json;
@@ -53,18 +58,21 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     private final AlbumService albums;
     private final ScanService scans;
     private final SettingsStore settings;
+    private final Library library;
 
     /** Server-side fields stay off the wire. */
     @JsonIgnoreProperties({"internal", "mtime"})
     private interface ServerOnly {}
 
-    AlbumSocket(JsonMapper json, AlbumRepository repo, AlbumService albums, ScanService scans, SettingsStore settings) {
+    AlbumSocket(JsonMapper json, AlbumRepository repo, AlbumService albums, ScanService scans, SettingsStore settings,
+                Library library) {
         this.json = json.rebuild().addMixIn(Album.class, ServerOnly.class).addMixIn(Entry.class, ServerOnly.class)
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
         this.repo = repo;
         this.albums = albums;
         this.scans = scans;
         this.settings = settings;
+        this.library = library;
     }
 
     @Override
@@ -80,10 +88,24 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     public void afterConnectionEstablished(WebSocketSession session) {
         // Buffers sends so that a slow client never blocks a scan; overflowing the buffer closes that session.
         sessions.put(session.getId(), new ConcurrentWebSocketSessionDecorator(session, 10_000, 32 << 20));
+        if (closing) goingAway(); // put, then read; goingAway sets, then sweeps: one of them sees the other
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) { sessions.remove(session.getId()); }
+
+    /** Clients see 1001 (going away) before the server stops: Undertow drops sockets that Spring upgraded. */
+    @EventListener(ContextClosedEvent.class)
+    void goingAway() {
+        closing = true;
+        sessions.values().forEach(session -> {
+            try {
+                session.close(CloseStatus.GOING_AWAY);
+            } catch (IOException | RuntimeException ignored) {
+                // already gone
+            }
+        });
+    }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
@@ -132,23 +154,41 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
             }
             case Request.Update(var albumId, var patch) ->
                     new Event.AlbumChanged(albums.patch(albumId, Objects.requireNonNull(patch, "patch is required")));
-            case Request.Scan(var roots) -> scans.start(roots) ? OK : new Event.Error("A scan is already running");
+            case Request.Scan(var paths) -> scans.start(paths) ? OK : new Event.Error("A scan is already running");
             case Request.CancelScan c -> {
                 scans.cancel();
                 yield OK;
             }
             case Request.GetSettings g -> settingsInfo();
             case Request.SetSettings(var s) -> {
-                var roots = settings.set(Objects.requireNonNull(s, "settings are required")).roots();
+                Objects.requireNonNull(s, "settings are required");
+                // retainRoots and a changed mapping would move albums under a running scan's feet
+                if (scans.running() && !folders(s).equals(folders(settings.get())))
+                    yield new Event.Error("Stop the scan before changing folders");
+                var roots = settings.set(s).roots();
                 albums.retainRoots(roots.stream().map(Settings.Root::path).toList());
                 yield settingsInfo();
             }
             case Request.FacetsOf(var query) -> new Event.FacetCounts(repo.facets(query == null ? AlbumQuery.ALL : query));
             case Request.Reveal(var albumId) -> {
-                reveal(Path.of(find(albumId).path()));
+                reveal(settings.get().locate(find(albumId).path()));
                 yield OK;
             }
+            case Request.Folders(var path) -> {
+                var parent = Containers.normalize(Path.of(Objects.requireNonNull(path, "path is required")));
+                yield new Event.FolderList(parent, repo.folders(parent));
+            }
+            case Request.Browse(var path) -> Browse.list(path);
+            case Request.GetLibrary l -> library.info();
+            case Request.SwitchLibrary(var dir) -> library.switchTo(dir);
+            case Request.ForgetLibrary(var dir) -> library.forget(dir);
+            case Request.Optimize o -> library.optimize();
         };
+    }
+
+    /** What a scan binds: the root paths and the path map, ignoring order. */
+    private static List<Set<?>> folders(Settings s) {
+        return List.of(Set.copyOf(s.roots().stream().map(Settings.Root::path).toList()), Set.copyOf(s.pathMap()));
     }
 
     private Album find(String albumId) {
@@ -160,9 +200,10 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
         var current = settings.get();
         return new Event.SettingsInfo(current, Containers.normalize(settings.dataDir()), current.roots().stream().map(r -> {
             var stat = stats.get(r.path());
-            return new Event.RootStatus(r.path(), Files.isDirectory(Path.of(r.path())), stat == null ? 0 : stat.albums(),
-                    scans.lastScan(r.path()).orElse(stat == null ? null : stat.lastIndexed()));
-        }).toList());
+            var location = current.locate(r.path());
+            return new Event.RootStatus(r.path(), Containers.normalize(location), Files.isDirectory(location),
+                    stat == null ? 0 : stat.albums(), scans.lastScan(r.path()).orElse(stat == null ? null : stat.lastIndexed()));
+        }).toList(), Long.toHexString(Hashing.wyhashFinal4().hashLongLongToLong(current.covers().epoch(), current.thumbs().epoch())));
     }
 
     /** Opens the containing folder in the OS file manager; Explorer also selects the album. */

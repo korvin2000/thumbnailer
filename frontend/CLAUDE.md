@@ -33,7 +33,15 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
 - Search syntax lives in `search-syntax.ts`, and `Topbar` chip removal strips tokens with mirrored regexes —
   change both.
 - Keyboard: `App.onKey` (global), `AlbumViewer.onKey` (viewer), `TileGrid.onKey` (focused grid) all listen; the App
-  handler skips viewer routes and form fields. Update the settings-dialog cheat sheet and README for new keys.
+  handler skips viewer routes and form fields. Update `ui/settings/keyboard-page.ts` and README for new keys.
+- Native `<dialog>`s live in the top layer: `App`'s toasts are hidden behind an open dialog, so `SettingsDialog` mirrors
+  `Toasts.list()` inside itself; `app-folder-picker` is rendered inside the settings dialog and opened later, so it
+  stacks above it. Folder choice goes through `FolderPicker.pick()` (promise), never a typed path alone.
+- The settings draft belongs to the library it was seeded from (`SettingsDialog.seededDir`): a `dataDir` change reseeds
+  it, so Save can never push one library's roots into another (the server would drop that library's albums).
+- Sidebar state is one pref, `Prefs.sidebar` (`'folders' | 'refine' | 'none'`), not a boolean; the tree owns
+  `filters.roots` (always one path, read via `store.folder()`, set via `store.goTo()`), so Refine's badge/Reset use
+  `store.refining()`/`resetRefine()` and never count or clear the folder. `store.treeVersion` tells the tree to reload.
 - `TileGrid` needs exactly one projected `<ng-template>` for tiles; the empty state is an input `TemplateRef`.
   Library tile ids are album ids; viewer tile ids are `String(entry.index)`.
 - `layout.ts` is pure and spec-covered: landscape = `aspect >= 1`, a portrait tile has the landscape tile's area,
@@ -44,4 +52,4 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
 ## Tests
 
 Plain Vitest specs next to the code (`*.spec.ts`, explicit `import { describe, it, expect } from 'vitest'`), no
-TestBed so far; pure logic in `core/` is the place to test. Covered: `layout.ts`, `search-syntax.ts`.
+TestBed so far; pure logic in `core/` is the place to test. Covered: `layout.ts`, `search-syntax.ts`, `paths.ts`.

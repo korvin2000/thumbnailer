@@ -24,6 +24,17 @@ class ExclusionsTest {
     }
 
     @Test
+    void rebasedTestsPhysicalPathsInTheirCanonicalForm() {
+        var e = Exclusions.of(List.of("W:/pics/raw/*", "*/old/*")).rebased("X:/moved", "W:/pics");
+        assertThat(e.excludes("X:/moved/raw/a.jpg")).isTrue();
+        assertThat(e.excludes("x:/MOVED/raw/")).as("prefix ignores case").isTrue();
+        assertThat(e.excludes("X:/moved/set.zip/old/a.jpg")).isTrue();
+        assertThat(e.excludes("X:/moved/keep/a.jpg")).isFalse();
+        assertThat(Exclusions.of(List.of("W:/pics/raw/*")).rebased("X:/", "W:/pics").excludes("X:/raw/a.jpg")).as("drive root").isTrue();
+        assertThat(e.rebased("C:/a", "C:/a")).isSameAs(e);
+    }
+
+    @Test
     void literalCharactersAreNotRegex() {
         var e = Exclusions.of(List.of("C:/a (1)/*", "  "));
         assertThat(e.excludes("C:/a (1)/x.jpg")).isTrue();

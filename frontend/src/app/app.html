@@ -1,12 +1,13 @@
 <app-topbar (settings)="openSettings()" />
 
-<div class="workspace" [class.filters-open]="prefs.filtersOpen()">
-  @if (prefs.filtersOpen()) {
-    <app-filters-panel class="filters" />
-    <div class="backdrop" (click)="prefs.filtersOpen.set(false)"></div>
+<div class="workspace">
+  @if (prefs.sidebar() !== 'none') {
+    <app-sidebar class="sidebar" />
+    <div class="backdrop" (click)="prefs.sidebar.set('none')"></div>
   }
 
   <main class="main">
+    <app-location-bar />
     <app-tile-grid [tiles]="tiles()" [mode]="prefs.layoutMode()" [columns]="prefs.columns()" [selectedId]="store.selectedId()"
                    [hasMore]="store.albums().length < store.total()" [empty]="emptyState"
                    (select)="store.selectedId.set($event)" (open)="open($event)" (reachedEnd)="store.loadMore()">
@@ -24,6 +25,14 @@
             <h2>No folders to index yet</h2>
             <p>Add the drives or folders that hold your albums, then scan them.</p>
             <button class="btn primary" (click)="openSettings()"><app-icon name="plus" [size]="14" /> Add folders</button>
+          } @else if (emptyFolder()) {
+            <app-icon name="folder" [size]="36" />
+            <h2>No albums in this folder</h2>
+            <p>Nothing indexed below <span class="mono">{{ store.folder() | basename: 2 }}</span>.</p>
+            <div class="actions">
+              <button class="btn" (click)="store.startScan([store.folder()!])"><app-icon name="refresh" [size]="14" /> Rescan this folder</button>
+              <button class="btn ghost" (click)="store.goTo(null)">Show all albums</button>
+            </div>
           } @else if (store.activeFilters() || store.text()) {
             <app-icon name="search" [size]="36" />
             <h2>No albums match</h2>

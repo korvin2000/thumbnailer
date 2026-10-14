@@ -1,7 +1,7 @@
 import { computed, effect, inject, Injectable, signal, untracked } from '@angular/core';
 import { Gateway } from './gateway';
 import {
-  activeFilterCount, Album, AlbumPatch, AlbumQuery, Facets, Filters, GatewayEvent, ScanProgress, Settings, SettingsInfo, Sort,
+  activeFilterCount, Album, AlbumPatch, AlbumQuery, Facets, Filters, GatewayEvent, LibraryInfo, RootStatus, ScanProgress, Settings, SettingsInfo, Sort,
 } from './model';
 import { parseSearch } from './search-syntax';
 import { Toasts } from './toasts';
@@ -28,6 +28,7 @@ export class AlbumStore {
   readonly facets = signal<Facets | null>(null);
   readonly scan = signal<ScanProgress | null>(null);
   readonly settings = signal<SettingsInfo | null>(null);
+  readonly library = signal<LibraryInfo | null>(null);
   readonly connected = signal(true);
   readonly mock = this.gw.mock;
 
@@ -46,6 +47,12 @@ export class AlbumStore {
   readonly selected = computed(() => this.byId().get(this.selectedId() ?? '') ?? null);
   readonly hovered = computed(() => this.byId().get(this.hoveredId() ?? '') ?? null);
   readonly roots = computed(() => this.settings()?.roots ?? []);
+  /** The folder the grid is narrowed to (`filters.roots[0]`, a path-prefix filter); null = whole library. */
+  readonly folder = computed(() => this.filters().roots?.[0] ?? null);
+  /** Active criteria other than the folder, i.e. what the Refine tab owns. */
+  readonly refining = computed(() => this.activeFilters() - (this.folder() ? 1 : 0));
+  /** Bumped whenever stored folders may have changed (scan finished, reconnect, settings saved); the folder tree reloads on it. */
+  readonly treeVersion = signal(0);
 
   private generation = 0;
   /** The query the current `albums` answer; pagination only continues while it is still the active query. */
@@ -78,6 +85,19 @@ export class AlbumStore {
   }
 
   clearFilters() { this.filters.set({}); this.text.set(''); }
+
+  /** Clears search text and refine criteria but keeps the current folder. */
+  resetRefine() { const roots = this.filters().roots; this.filters.set(roots ? { roots } : {}); this.text.set(''); }
+
+  // ---- folders ----
+
+  goTo(path: string | null) { this.setFilter('roots', path ? [path] : null); }
+
+  /** The configured root that `path` equals or lies below (case-insensitive, segment boundary), if any. */
+  rootOf(path: string): RootStatus | null {
+    const p = path.toLowerCase();
+    return this.roots().find(r => { const q = r.path.toLowerCase().replace(/\/+$/, ''); return p === q || p.startsWith(q + '/'); }) ?? null;
+  }
 
   /** Re-runs the current query keeping everything loaded so far; debounced, but never postponed beyond 1.5 s. */
   refresh(delay = 400) {
@@ -120,8 +140,9 @@ export class AlbumStore {
     catch (e) { this.toasts.error(e, 'Cannot open folder: '); }
   }
 
-  async startScan(roots?: string[]) {
-    try { await this.gw.scan(roots); this.toasts.show('Scan started'); }
+  /** `paths`: roots or folders below them; none = every root. */
+  async startScan(paths?: string[]) {
+    try { await this.gw.scan(paths); this.toasts.show('Scan started'); }
     catch (e) { this.toasts.error(e, 'Scan failed: '); }
   }
 
@@ -130,12 +151,39 @@ export class AlbumStore {
   }
 
   async saveSettings(s: Settings) {
-    try { this.settings.set(await this.gw.setSettings(s)); this.toasts.show('Settings saved', 'success'); return true; }
+    try { this.applySettings(await this.gw.setSettings(s)); this.treeVersion.update(v => v + 1); this.toasts.show('Settings saved', 'success'); return true; }
     catch (e) { this.toasts.error(e, 'Saving settings failed: '); return false; }
   }
 
   async loadSettings() {
-    try { this.settings.set(await this.gw.getSettings()); } catch { /* offline: keep the last known settings */ }
+    try { this.applySettings(await this.gw.getSettings()); } catch { /* offline: keep the last known settings */ }
+  }
+
+  private applySettings(info: SettingsInfo) {
+    this.settings.set(info);
+    const f = this.folder(); // a folder of another library (after a switch) or of a removed root is no longer a valid scope
+    if (f && !this.rootOf(f)) this.goTo(null);
+  }
+
+  // ---- library ----
+
+  async loadLibrary() {
+    try { this.library.set(await this.gw.library()); } catch (e) { this.toasts.error(e, 'Library info failed: '); }
+  }
+
+  /** The server restarts on the new library; the reconnect path reloads settings and results. */
+  async switchLibrary(dir: string) {
+    try { await this.gw.switchLibrary(dir); this.library.set(null); this.toasts.show('Switching library…'); }
+    catch (e) { this.toasts.error(e, 'Switch failed: '); }
+  }
+
+  async forgetLibrary(dir: string) {
+    try { this.library.set(await this.gw.forgetLibrary(dir)); } catch (e) { this.toasts.error(e, 'Forget failed: '); }
+  }
+
+  async optimize(): Promise<boolean> {
+    try { await this.gw.optimize(); this.library.set(null); this.toasts.show('Optimizing… the library reopens in a moment'); return true; }
+    catch (e) { this.toasts.error(e, 'Optimize failed: '); return false; }
   }
 
   loadFacets(delay = 800) {
@@ -183,12 +231,12 @@ export class AlbumStore {
         const wasRunning = this.scan()?.running;
         this.scan.set(e as ScanProgress);
         this.refresh(600);
-        if (wasRunning && !e.running) { this.loadSettings(); this.loadFacets(0); this.toasts.show(`Scan finished: ${e.indexed} indexed, ${e.changed} changed, ${e.removed} removed`, 'success'); }
+        if (wasRunning && !e.running) { this.loadSettings(); this.loadFacets(0); this.treeVersion.update(v => v + 1); this.toasts.show(`Scan finished: ${e.indexed} indexed, ${e.changed} changed, ${e.removed} removed`, 'success'); }
         break;
       }
       case 'connection':
         this.connected.set(e.connected);
-        if (e.connected) { this.loadSettings(); this.loadFacets(0); this.refresh(0); }
+        if (e.connected) { this.loadSettings(); this.loadFacets(0); this.refresh(0); this.treeVersion.update(v => v + 1); }
         break;
     }
   }

@@ -1,12 +1,13 @@
 :host { display: grid; grid-template-rows: auto 1fr var(--statusbar-h); height: 100dvh; }
 
 .workspace { position: relative; display: flex; min-height: 0; }
-.main { flex: 1; min-width: 0; position: relative; }
-.filters { flex: none; z-index: 20; }
+.main { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
+.main > app-tile-grid { flex: 1; min-height: 0; height: auto; }
+.sidebar { flex: none; z-index: 20; }
 .backdrop { display: none; }
 
 .details {
-  position: absolute; z-index: 35; right: 12px; top: 12px; bottom: 12px; width: var(--details-w); max-width: calc(100% - 24px);
+  position: absolute; z-index: 35; right: 12px; top: calc(var(--locbar-h) + 12px); bottom: 12px; width: var(--details-w); max-width: calc(100% - 24px);
 }
 
 .empty {
@@ -14,6 +15,7 @@
   h2 { font-size: 15px; font-weight: 600; color: var(--text); margin-top: 6px; }
   p { margin-bottom: 8px; }
   app-icon { color: var(--text-3); }
+  .actions { display: flex; gap: 6px; }
 }
 
 .statusbar {
@@ -41,7 +43,7 @@
 }
 
 @media (max-width: 1100px) {
-  .filters { position: absolute; inset: 0 auto 0 0; box-shadow: var(--shadow-2); }
+  .sidebar { position: absolute; inset: 0 auto 0 0; box-shadow: var(--shadow-2); }
   .backdrop { display: block; position: absolute; inset: 0; z-index: 15; background: oklch(5% 0.01 260 / 0.4); }
 }
 

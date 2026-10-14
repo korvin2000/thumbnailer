@@ -14,7 +14,9 @@ const KEYS: Record<string, 'model' | 'studio' | 'photographer' | 'kind'> = {
   model: 'model', m: 'model', studio: 'studio', s: 'studio', by: 'photographer', photographer: 'photographer', p: 'photographer', kind: 'kind',
 };
 
-const KINDS: Record<string, Kind> = { zip: 'ZIP', archive: 'ZIP', dir: 'DIRECTORY', folder: 'DIRECTORY', directory: 'DIRECTORY' };
+const KINDS: Record<string, Kind> = {
+  zip: 'ZIP', archive: 'ARCHIVE', rar: 'ARCHIVE', '7z': 'ARCHIVE', tar: 'ARCHIVE', iso: 'ARCHIVE', dir: 'DIRECTORY', folder: 'DIRECTORY', directory: 'DIRECTORY',
+};
 
 export function parseSearch(input: string): ParsedSearch {
   const out: ParsedSearch = { tags: [] };

@@ -10,8 +10,14 @@
     {
       "name": "backend",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "set JAVA_HOME=C:\\work\\thumbnailer\\devtools\\jdk-26.0.2.1+1&& gradlew.bat -PskipFrontend :backend:bootRun"],
+      "runtimeArgs": ["/c", "set JAVA_HOME=C:\\work\\thumbnailer\\devtools\\jdk-27&& gradlew.bat -PskipFrontend :backend:bootRun"],
       "port": 8080
+    },
+    {
+      "name": "backend-demo",
+      "runtimeExecutable": "C:\\work\\thumbnailer\\devtools\\jdk-27\\bin\\java.exe",
+      "runtimeArgs": ["--add-modules", "jdk.incubator.vector", "-jar", "backend/build/libs/thumbnailer-0.1.0.jar", "--server.port=8081", "--thumbnailer.data-dir=C:/work/thumbnailer/backend/build/smoke-home", "--thumbnailer.demo=true"],
+      "port": 8081
     }
   ]
 }

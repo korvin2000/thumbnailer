@@ -17,7 +17,7 @@ sealed interface Request {
 
     @JsonTypeName("update") record Update(String albumId, AlbumPatch patch) implements Request {}
 
-    @JsonTypeName("scan") record Scan(List<String> roots) implements Request {}
+    @JsonTypeName("scan") record Scan(List<String> paths) implements Request {}
 
     @JsonTypeName("cancelScan") record CancelScan() implements Request {}
 
@@ -28,4 +28,18 @@ sealed interface Request {
     @JsonTypeName("facets") record FacetsOf(AlbumQuery query) implements Request {}
 
     @JsonTypeName("reveal") record Reveal(String albumId) implements Request {}
+
+    /** The child folders of a stored album path (the library tree). */
+    @JsonTypeName("folders") record Folders(String path) implements Request {}
+
+    /** One directory of the local file system, for the folder picker; null = the user's home. */
+    @JsonTypeName("browse") record Browse(String path) implements Request {}
+
+    @JsonTypeName("library") record GetLibrary() implements Request {}
+
+    @JsonTypeName("switchLibrary") record SwitchLibrary(String dir) implements Request {}
+
+    @JsonTypeName("forgetLibrary") record ForgetLibrary(String dir) implements Request {}
+
+    @JsonTypeName("optimize") record Optimize() implements Request {}
 }

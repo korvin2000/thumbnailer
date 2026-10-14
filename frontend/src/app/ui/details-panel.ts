@@ -34,7 +34,7 @@ type TextField = 'name' | 'model' | 'studio' | 'photographer' | 'description';
 
         <input class="input title" [value]="a.name" (change)="save('name', $any($event.target).value)" title="Album name" />
 
-        <div class="path" [title]="a.path"><app-icon [name]="a.kind === 'ZIP' ? 'archive' : 'folder'" [size]="13" /><span>{{ a.path }}</span></div>
+        <div class="path" [title]="a.path"><app-icon [name]="a.kind === 'DIRECTORY' ? 'folder' : 'archive'" [size]="13" /><span>{{ a.path }}</span></div>
         <div class="actions">
           <button class="btn sm" (click)="store.reveal(a.id)"><app-icon name="externalLink" [size]="13" /> Show in folder</button>
           <button class="btn sm" (click)="copy(a.path)"><app-icon name="copy" [size]="13" /> Copy path</button>

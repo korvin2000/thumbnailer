@@ -11,16 +11,16 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import thumbnailer.album.BlobStore;
 
-/** Thumbnails in an H2 MVStore file ({@code thumbs.mv}); auto-commits in the background, closed on shutdown. */
+/** Alternative cover store ({@code blobs: mvstore}): an H2 MVStore file {@code covers.mv}; auto-commits in the background. */
 @Component
-@ConditionalOnProperty(name = "thumbnailer.store.blobs", havingValue = "mvstore", matchIfMissing = true)
+@ConditionalOnProperty(name = "thumbnailer.store.blobs", havingValue = "mvstore")
 class MvStoreBlobStore implements BlobStore, AutoCloseable {
 
     private final MVStore store;
     private final MVMap<String, byte[]> blobs;
 
-    MvStoreBlobStore(@Value("${thumbnailer.data-dir}") Path dataDir) throws IOException {
-        store = new MVStore.Builder().fileName(Files.createDirectories(dataDir).resolve("thumbs.mv").toString()).open();
+    MvStoreBlobStore(@Value("${thumbnailer.library-dir:${thumbnailer.data-dir}}") Path dataDir) throws IOException {
+        store = new MVStore.Builder().fileName(Files.createDirectories(dataDir).resolve("covers.mv").toString()).open();
         blobs = store.openMap("blobs");
     }
 
@@ -28,15 +28,15 @@ class MvStoreBlobStore implements BlobStore, AutoCloseable {
 
     @Override public Optional<byte[]> get(String key) { return Optional.ofNullable(blobs.get(key)); }
 
+    @Override public void remove(String key) { blobs.remove(key); }
+
     @Override
-    public void remove(String prefix) {
-        // Iterators run over a snapshot, so removing while iterating is safe.
-        for (var keys = blobs.keyIterator(prefix); keys.hasNext(); ) {
-            var key = keys.next();
-            if (!key.startsWith(prefix)) break;
-            blobs.remove(key);
-        }
+    public Stats stats() {
+        long file = store.getFileStore().size();
+        return new Stats(blobs.sizeAsLong(), file * store.getFillRate() / 100, file);
     }
+
+    @Override public void compact() { store.compactFile(30_000); }
 
     @Override public void close() { store.close(); }
 }

@@ -1,20 +1,33 @@
 thumbnailer:
-  data-dir: ${user.home}/.thumbnailer   # settings.json, albums.mv.db (H2), thumbs.mv (MVStore)
-  thumb-width: 640                      # longer side of a thumbnail
+  data-dir: ${user.home}/.thumbnailer   # home: libraries.json (known libraries, the active one) + the default library
+  # library-dir: <dir>                  # the library in use: settings.json, albums.mv.db[.N.part] (H2), covers/ (TuplDB);
+                                        # unset = the active library of libraries.json, else data-dir; setting it (command
+                                        # line, environment) pins it. Never set here: the locator would see it as pinned.
+                                        # cover/thumbnail rendering and the path map live in settings.json (Settings UI)
   min-images: 2                         # a directory needs this many images to count as an album
-  index-threads: 0                      # 0 = available processors
+  index-threads: 0                      # albums indexed at once (virtual threads); 0 = available processors
   demo: false
   store:
     albums: jdbc                        # AlbumRepository adapter
-    blobs: mvstore                      # BlobStore adapter
+    blobs: tupl                         # cover BlobStore adapter: tupl | mvstore
+    tupl:
+      cache-mb: 128                     # off-heap page cache, allocated at start
 
-server:
+server:                                 # embedded Undertow (web/UndertowServer): server.ssl, http2, compression not wired
   address: 127.0.0.1
   port: 8080
 
 spring:
   datasource:
-    url: jdbc:h2:file:${thumbnailer.data-dir}/albums;DB_CLOSE_ON_EXIT=FALSE   # closed by the pool, after scans stop
+    # Measured at 100 k albums (see PLAN decisions): COMPRESS (LZF, 64 KiB pages) halves the file and speeds scans;
+    # RETENTION_TIME 10 s instead of 45 s lets bursts reuse space (1.6 GB -> 0.28 GB) yet outlives OS write-back;
+    # MAX_COMPACT_TIME compacts up to 5 s on close; WRITE_DELAY 1.2 s batches more commits per chunk; CACHE_SIZE 128 MB
+    # (default 16); QUERY_CACHE_SIZE for the dynamic filters; small CLOBs stay in the row; no trace files; split:27 =
+    # files of 2^27 bytes (128 MiB: albums.mv.db, albums.mv.db.1.part, ...). CACHE_TYPE=TQ is set on request but
+    # MVStore ignores it; PAGE_SIZE is superseded by COMPRESS. H2 2.x rejects MVCC (always on) and EARLY_FILTER.
+    # DB_CLOSE_DELAY=-1 + DB_CLOSE_ON_EXIT=FALSE: JdbcAlbumRepository.close() runs SHUTDOWN (SHUTDOWN COMPACT after an
+    # optimize) after scans stop.
+    url: jdbc:h2:split:27:${thumbnailer.library-dir:${thumbnailer.data-dir}}/albums;DB_CLOSE_ON_EXIT=FALSE;DB_CLOSE_DELAY=-1;FILE_LOCK=FS;TRACE_LEVEL_FILE=0;TRACE_LEVEL_SYSTEM_OUT=0;CACHE_SIZE=131072;QUERY_CACHE_SIZE=64;MAX_LENGTH_INPLACE_LOB=4096;COMPRESS=TRUE;RETENTION_TIME=10000;MAX_COMPACT_TIME=5000;WRITE_DELAY=1200;CACHE_TYPE=TQ
     username: sa
     password:
   sql:

@@ -1,4 +1,4 @@
-# Backend rules (Java 26, Spring Boot 4.1) — loaded when working under backend/
+# Backend rules (Java 27, Spring Boot 4.1, Undertow) — loaded when working under backend/
 
 Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–2](../docs/ARCHITECTURE.md#2-backend-package-thumbnailer).
 
@@ -15,33 +15,78 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Nullness by convention (null = not set / no filter / unchanged); `Optional` for lookups. No custom exceptions:
   `IllegalArgumentException` / `NoSuchElementException` / `IllegalStateException`; WS turns any exception into
   `Event.Error`. Per-item I/O failures: `catch (IOException | RuntimeException e)` → `log.warn` → skip.
-- Threads: platform daemon threads named `scan`, `index-N`, `ws-broadcast`; no `@Async`, no virtual threads.
-- Paths: always `Containers.normalize()` (absolute, `/`), compare with `Containers.prefix()`.
+- Threads: platform daemon threads `scan`, `ws-broadcast`, `covers-compact`; the non-daemon `restart` thread; indexing runs one virtual thread per
+  album (`index-N`), bounded by a semaphore (`index-threads` albums); renders are bounded by the two `Limiter`s in
+  `AlbumService` (covers: indexing + cover misses; entry thumbnails), resized from `Settings.covers/thumbs` before
+  each acquire; no `@Async`. HTTP requests and WS messages run on Undertow's `XNIO-n task-m` workers (never its I/O
+  threads: handlers block).
+- Web server: Undertow through `web/UndertowServer` (Boot 4 ships none); `spring-boot-starter-tomcat` is excluded for
+  every configuration, so a new Boot starter cannot bring Tomcat back. Undertow keeps no list of the sockets Spring
+  upgraded: anything that must reach clients at shutdown goes out on `ContextClosedEvent` (`AlbumSocket.goingAway`).
+- Hashing: hash4j `Hashing.wyhashFinal4()` (signatures, content ids, cover tags); `String.hashCode` only for lock stripes.
+- Native code: TuplDB and TurboJPEG (FFM), webp4j and 7-Zip-JBinding (JNI) need `--enable-native-access=ALL-UNNAMED`
+  (manifest, `bootRun`, tests) and the system property `org.cojen.tupl.core.DirectPageOpsSelector=ffm` set before TuplDB
+  loads (`main`, tests). Our natives load only through `natives.LibraryLoader` (`load` for JNI, `path` for FFM lookups),
+  never from temp files; a new native = files + `natives.sha256` lines per platform ([docs/natives.md](../docs/natives.md)).
+  No `critical` downcalls for long native work (a decode held off every other thread's safepoint: -14 % throughput);
+  codecs work in native memory. JNI binds per class loader: `System.load` runs in `LibraryLoader`, so the classes with
+  `native` methods must share its loader (app classes and jars do).
+  Close TuplDB with `shutdown()`, never `close()` (that leaves state to replay). Compaction lives in the adapter.
+- Image pipeline: one `Pixels` layout (packed `0x??RRGGBB`) from decode to encode; read an entry once (`AlbumContainer.read`
+  into a confined arena, `head` for header parsers). 7-Zip calls its output streams from its own threads: callbacks
+  touch no thread-confined state (arenas, `Thread.currentThread()`), and a `heads` sink must not read the container.
+- Paths: always `Containers.normalize()` (absolute, `/`), compare with `Containers.prefix()` / `within()`. Stored
+  paths are canonical and never rewritten; `Settings.locate(canonical)` is the only canonical → physical mapping and
+  every disk access (walk, container open, `Files.notExists`, reveal) goes through it. A scan binds each root to one
+  (canonical, physical) pair from one settings snapshot.
 
 ## Invariants (don't break)
 
 - `AlbumService` is the only writer (`commit`, `patch`, `remove`, `retainRoots`). Writes happen under
   `synchronized (lock(id))`; events are published **after** the lock; `commit` re-reads the stored album under the
   lock so a scan never overwrites a concurrent edit.
-- Every save bumps `revision`; blob keys are `cover/{id}/{rev}` and `thumb/{id}/{rev}/{index}`; `store()` drops all
-  older keys by prefix (`cover/{id}/`, trailing slash matters). Changing the scheme means changing `store()`,
-  `remove()`, `cover()/thumb()` and `BlobStore.remove(prefix)` together.
+- Every save bumps `revision`. Only covers are stored: key = album id, value = 8-byte tag (wyhash seeded by the
+  render epoch, of cover name + signature) + `[len 4][bytes]`; for `Render.LEGACY_EPOCH` (WebP/75/512) the older
+  `[tag 8][webp]` with the RIFF size as length, so old stores stay valid. The epoch travels with the bytes (`Thumb`):
+  a value is tagged with the epoch it was rendered with, never the spec current at commit. `storedCover` serves a value
+  only if its tag matches the album under the current covers spec and its length is whole; anything else is a miss and
+  re-renders. So writes need no ordering with the SQL save, and a change to what a cover depicts or how it is rendered
+  must feed the tag (`Render.epoch()`: format, size, quality). Entry thumbnails are never stored.
 - Metadata merges differ on purpose: `AlbumMeta.over` (edits over extracted, null falls through) vs `orElse`
   (extractor chain, blank falls through, tags union). In the edited layer `""`/`[]` mean "explicitly empty".
 - Identity: `signature` (all files incl. sidecars, with mtime) decides re-index; `contentId` (images, name + bytes)
   decides moves. A move needs the old path to be gone.
-- Removal (`Reconciler.Pass.prune`) only for roots whose walk completed without cancel or errors; an album is marked
-  seen before indexing, so failures never delete. Unreachable roots are skipped.
+- Removal (`Reconciler.Pass.prune`) only for scopes (a root or a folder below one) whose walk completed without cancel
+  or errors, and only of albums at or below the scope; an album is marked seen before indexing, so failures never
+  delete. Unreachable roots are skipped. `AlbumRepository.delete` always leaves a tombstone (`removed`, by content id)
+  that `AlbumService.commit` recalls (a read-only peek) for the next new album with that content (id, revision + 1,
+  rating, edits, pin); `save` deletes the tombstones of the saved id in its own transaction, so adoption is atomic
+  with the save, and `commit` ignores a tombstone whose id is live again.
+- The `root` column is informational: scans, pruning, folders and the root filter select by path prefix
+  (`path = dir OR path LIKE 'dir/%' ESCAPE '!'`, index `album_path`); `retainRoots` (on `setSettings` and at every scan
+  start) re-roots the albums of a removed root that lie under a configured one and removes the rest.
 - `ScanService.close()` (on `ContextClosedEvent`) must stop scans before the stores close; the H2 URL keeps
-  `DB_CLOSE_ON_EXIT=FALSE` for that reason. Indexers honour thread interruption.
-- `JdbcAlbumRepository.save` is delete + insert in one transaction; `entries == null` keeps stored entries; tags are
+  `DB_CLOSE_ON_EXIT=FALSE;DB_CLOSE_DELAY=-1` for that reason and `JdbcAlbumRepository.close()` runs `SHUTDOWN`. Indexers honour thread interruption.
+- Libraries and restart: every store finds its files under `${thumbnailer.library-dir:${thumbnailer.data-dir}}` (only
+  `Libraries`/`LibraryLocator` use `data-dir`, the home); never set `library-dir` in `application.yml` (the locator
+  would take it as pinned). Switch and optimize end in `ThumbnailerApplication.restart()` (close context, run again),
+  so everything must close cleanly on context close and nothing may assume one context per JVM; library operations
+  are refused while a scan runs, and an accepted switch/optimize calls `ScanService.freeze()` (no scan starts, no
+  second operation) until the restart, which falls back to the previous library once if the new one fails to start.
+  `thumbnailer.library-pinned` (set by the locator) is the pinned flag. H2 compacts fully only at close (`compact()` → `SHUTDOWN COMPACT`, offline), TuplDB
+  online (stepped `compactFile`).
+- `JdbcAlbumRepository.save` is two H2 `MERGE ... KEY` upserts (album, packed `entries`) plus the tombstone delete
+  (`removed` by id, index `removed_id`) in one transaction;
+  `entries == null` keeps stored entries; every `order()` must match one index in `schema.sql` exactly (columns,
+  directions, `NULLS LAST`), or that sort falls back to sorting every row (seconds at 100 k albums); tags are
   stored as `" a b "` and matched with `LIKE '% tag %'` — change `album()`, `facets()` and `Where` together.
   `schema.sql` must stay idempotent (`IF NOT EXISTS`); there is no migration tool.
 - Entry `index` = position among readable images (name-sorted); it is the id used by `/img/{id}/{index}` and the UI.
 
 ## Extending (recipes)
 
-- Container kind: `ContainerFactory` `@Component` (copy `ZipContainer.Factory`), add to `Kind`, mirror `Kind` in
+- Container kind: a format 7-Zip reads is one more entry in `SevenZipContainer.EXTENSIONS`; anything else is a
+  `ContainerFactory` `@Component` (copy `ZipContainer.Factory`), add to `Kind`, mirror `Kind` in
   `frontend/src/app/core/model.ts`.
 - Metadata source: `MetadataExtractor` `@Component @Order(n)` returning a partial `AlbumMeta`.
 - Cover rule: new `CoverStrategy` + add it to the chain in `CoverSelector` (chain is hardcoded — see PLAN).

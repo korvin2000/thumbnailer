@@ -13,7 +13,7 @@ import { Icon } from './shared/icon';
     @let a = album();
     <img [src]="gw.coverUrl(a)" [alt]="a.name" loading="lazy" decoding="async" draggable="false" [class.loaded]="loaded()" (load)="loaded.set(true)" />
     <div class="badges">
-      <span class="badge" [title]="a.kind === 'ZIP' ? 'Zip archive' : 'Folder'"><app-icon [name]="a.kind === 'ZIP' ? 'archive' : 'folder'" [size]="12" /></span>
+      <span class="badge" [title]="a.kind === 'DIRECTORY' ? 'Folder' : a.kind === 'ZIP' ? 'Zip archive' : 'Archive'"><app-icon [name]="a.kind === 'DIRECTORY' ? 'folder' : 'archive'" [size]="12" /></span>
       @if (a.rating) { <span class="badge rating"><app-icon name="star" [size]="10" />{{ a.rating }}</span> }
     </div>
     <div class="actions">

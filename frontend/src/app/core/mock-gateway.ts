@@ -1,8 +1,8 @@
 import { Subject } from 'rxjs';
 import { Gateway } from './gateway';
 import {
-  Album, AlbumDetails, AlbumPatch, AlbumQuery, Entry, Facet, Facets, Filters, GatewayEvent, SearchResult, Settings,
-  SettingsInfo, Sort,
+  Album, AlbumDetails, AlbumPatch, AlbumQuery, DEFAULT_SETTINGS, Entry, Facet, Facets, Filters, Folder, GatewayEvent, LibraryInfo,
+  LibraryStats, Listing, SearchResult, Settings, SettingsInfo, Sort,
 } from './model';
 
 const STUDIOS = ['EL-Studio', 'CL-Biki', 'Lumen Lab', 'Northlight Photo', 'Atelier Noir', 'Prism Studio', null, null];
@@ -12,6 +12,12 @@ const TAGS = ['wedding', 'outdoor', 'sport', 'advertising', 'studio', 'portrait'
 const BLURBS = ['Natural light session, soft tones.', 'Commercial shoot for a seasonal campaign.', 'Studio set with two strobes and a beauty dish.', 'Golden hour on the waterfront.', 'Editorial series, muted palette.', null, null];
 const ROOTS = ['D:/Photos/Studio', 'E:/Archive/2019-2023'];
 const SIDES = [1200, 1800, 2400, 3600, 6000];
+const HOME = 'C:/Users/me';
+const LIBRARIES = [`${HOME}/.thumbnailer`, 'D:/Libraries/archive-2023'];
+/** The fake disk the picker browses: E:/Archive is "unplugged" (its root is unreachable) but a copy sits under D:/Backups. */
+const DISK = ['C:/', 'D:/', 'E:/', 'C:/Users', HOME, `${HOME}/.thumbnailer`, `${HOME}/Pictures`, `${HOME}/Documents`, 'C:/Program Files', 'C:/Windows',
+  'D:/Photos', 'D:/Photos/Studio', 'D:/Photos/Personal', 'D:/Photos/Clients', 'D:/Video', 'D:/Libraries', 'D:/Libraries/archive-2023',
+  'D:/Backups', 'D:/Backups/Archive', 'D:/Backups/Archive/2019-2023', 'E:/Library', 'E:/Backup'];
 
 /** Deterministic PRNG so the dummy library is the same on every reload. */
 function rng(seed: number) {
@@ -30,9 +36,12 @@ export class MockGateway extends Gateway {
 
   private readonly albums = new Map<string, Album>();
   private readonly images = new Map<string, string>();
-  private settings: Settings = { roots: ROOTS.map(path => ({ path, exclusions: ['*/raw/*'] })), exclusions: ['*/.*', '*/Thumbs.db'], scanOnStart: true };
+  private settings: Settings = { ...DEFAULT_SETTINGS, roots: ROOTS.map(path => ({ path, exclusions: ['*/raw/*'] })), exclusions: ['*/.*', '*/Thumbs.db'] };
   private scanning = false;
   private seq = 0;
+  private libraryDir = LIBRARIES[0];
+  private known = [...LIBRARIES];
+  private slack = 1.45;
 
   constructor() {
     super();
@@ -74,7 +83,8 @@ export class MockGateway extends Gateway {
     return next;
   }
 
-  async scan(): Promise<void> {
+  /** `paths` are accepted (the fake scan always walks everything). */
+  async scan(_paths?: string[]): Promise<void> {
     if (!this.scanning) void this.runScan();
   }
 
@@ -95,8 +105,87 @@ export class MockGateway extends Gateway {
 
   async cancelScan() { this.scanning = false; }
   async getSettings(): Promise<SettingsInfo> { return this.info(); }
-  async setSettings(s: Settings): Promise<SettingsInfo> { this.settings = s; return this.info(); }
+  /** Same rule as the server: folders and the path map cannot change under a running scan. */
+  async setSettings(s: Settings): Promise<SettingsInfo> {
+    const same = (k: keyof Settings) => JSON.stringify(s[k]) === JSON.stringify(this.settings[k]);
+    if (this.scanning && !(same('roots') && same('pathMap'))) throw new Error('Stop the scan before changing folders');
+    this.settings = s;
+    return this.info();
+  }
   async reveal() { await delay(30); }
+
+  /** Child folders of `path` derived from album paths; '' lists the roots. */
+  async folders(path: string): Promise<Folder[]> {
+    await delay(40);
+    const prefix = path ? path.replace(/\/+$/, '') + '/' : '';
+    const kids = new Map<string, Folder>();
+    for (const a of this.albums.values()) {
+      if (!a.path.startsWith(prefix)) continue;
+      const rest = prefix ? a.path.slice(prefix.length) : a.root;
+      const name = prefix ? rest.split('/')[0] : rest, below = prefix ? rest.includes('/') : a.path !== a.root;
+      if (!below && a.kind !== 'DIRECTORY') continue;
+      const f = kids.get(name) ?? { name, path: prefix + name, albums: 0, nested: false };
+      f.albums++; f.nested ||= below;
+      kids.set(name, f);
+    }
+    return [...kids.values()].sort((x, y) => x.name.localeCompare(y.name));
+  }
+
+  async browse(raw: string | null): Promise<Listing> {
+    await delay(120);
+    const dirs = new Set([...DISK, ...[...this.albums.values()].filter(a => a.kind === 'DIRECTORY' && !a.path.startsWith('E:')).flatMap(a => { const p = a.path.split('/'); return p.map((_, i) => p.slice(0, i + 1).join('/')).map(d => d.endsWith(':') ? d + '/' : d); })]);
+    const norm = (p: string) => { p = p.replace(/\\/g, '/').replace(/\/+$/, ''); return /^[A-Za-z]:$/.test(p) ? p + '/' : p; };
+    let path = raw ? norm(raw) : HOME, error: string | null = null;
+    if (!dirs.has(path)) {
+      error = `${path} is not reachable`;
+      while (!dirs.has(path) && path.includes('/')) path = parentOf(path) ?? 'C:/';
+      if (!dirs.has(path)) path = 'C:/';
+    }
+    const folders = [...dirs].filter(d => parentOf(d) === path).map(d => ({ name: d.split('/').filter(Boolean).pop()!, path: d })).sort((x, y) => x.name.localeCompare(y.name));
+    return { path, parent: parentOf(path), drives: ['C:/', 'D:/', 'E:/'], folders, error };
+  }
+
+  async library(): Promise<LibraryInfo> { await delay(90); return this.libraryInfo(); }
+
+  /** The real server restarts on its new library; emulate the socket dropping and coming back. */
+  async switchLibrary(dir: string) {
+    await delay(60);
+    this.libraryDir = dir;
+    if (!this.known.includes(dir)) this.known.push(dir);
+    this.events.next({ type: 'connection', connected: false });
+    setTimeout(() => this.events.next({ type: 'connection', connected: true }), 1500);
+  }
+
+  async forgetLibrary(dir: string): Promise<LibraryInfo> {
+    await delay(40);
+    if (dir === this.libraryDir) throw new Error('Cannot forget the active library');
+    this.known = this.known.filter(d => d !== dir);
+    return this.libraryInfo();
+  }
+
+  async optimize() {
+    if (this.scanning) throw new Error('A scan is running');
+    await delay(300);
+    this.slack = 1;
+    this.events.next({ type: 'connection', connected: false }); // the real server restarts to compact the database
+    setTimeout(() => this.events.next({ type: 'connection', connected: true }), 1200);
+  }
+
+  private libraryInfo(): LibraryInfo {
+    const n = this.albums.size, covers = n * 11_900, meta = n * 2_600 + 512 * 1024;
+    const stats: LibraryStats = {
+      albums: n, images: [...this.albums.values()].reduce((s, a) => s + a.imageCount, 0), imageBytes: [...this.albums.values()].reduce((s, a) => s + a.bytes, 0),
+      lastIndexedAt: new Date(Date.now() - 3_600_000).toISOString(),
+      coversCount: n, coversBytes: covers, coversFile: Math.round(covers * this.slack) + 256 * 1024, metadataBytes: meta, metadataFile: Math.round(meta * this.slack) + 128 * 1024, settingsBytes: 410,
+    };
+    return { home: HOME, dir: this.libraryDir, known: [...this.known], pinned: false, stats, about: { version: 'dev', java: '26', os: 'Windows 10' } };
+  }
+
+  /** Longest-prefix rewrite, as `Containers.locate` on the server. */
+  private locate(path: string): string {
+    const m = this.settings.pathMap.filter(x => path.startsWith(x.from)).sort((a, b) => b.from.length - a.from.length)[0];
+    return m ? m.to + path.slice(m.from.length) : path;
+  }
 
   async facets(filters?: Filters): Promise<Facets> {
     const albums = [...this.albums.values()].filter(a => !filters || matches(a, filters));
@@ -115,8 +204,9 @@ export class MockGateway extends Gateway {
   private info(): SettingsInfo {
     return {
       settings: this.settings,
-      dataDir: 'C:/Users/me/.thumbnailer',
-      roots: this.settings.roots.map(r => ({ path: r.path, exists: !r.path.startsWith('E:'), albumCount: [...this.albums.values()].filter(a => a.root === r.path).length, lastScanAt: new Date(Date.now() - 3_600_000).toISOString() })),
+      dataDir: this.libraryDir,
+      roots: this.settings.roots.map(r => { const location = this.locate(r.path); return { path: r.path, location, exists: !location.startsWith('E:'), albumCount: [...this.albums.values()].filter(a => a.root === r.path).length, lastScanAt: new Date(Date.now() - 3_600_000).toISOString() }; }),
+      renderEpoch: hash(JSON.stringify([this.settings.covers, this.settings.thumbs])).toString(16),
     };
   }
 
@@ -200,6 +290,13 @@ function hash(s: string): number {
 
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
+/** 'D:/a/b' → 'D:/a', 'D:/a' → 'D:/', 'D:/' → null. */
+function parentOf(path: string): string | null {
+  if (/^[A-Za-z]:\/$/.test(path)) return null;
+  const i = path.lastIndexOf('/');
+  return i < 0 ? null : i === 2 ? path.slice(0, 3) : path.slice(0, i);
+}
+
 const has = (hay: string | null, needle: string) => !!hay && hay.toLowerCase().includes(needle);
 const eq = (a: string | null, b?: string) => !b || (a ?? '').toLowerCase() === b.toLowerCase();
 
@@ -210,7 +307,7 @@ function matches(a: Album, q: Filters): boolean {
   return (!t || has(a.name, t) || has(a.model, t) || has(a.studio, t) || has(a.photographer, t) || has(a.description, t) || a.tags.some(x => x.includes(t)))
     && (q.tags ?? []).every(x => a.tags.includes(x.toLowerCase()))
     && eq(a.model, q.model) && eq(a.studio, q.studio) && eq(a.photographer, q.photographer)
-    && (!q.roots?.length || q.roots.includes(a.root)) && (!q.kind || a.kind === q.kind)
+    && (!q.roots?.length || q.roots.some(r => a.path === r || a.path.startsWith(r.endsWith('/') ? r : r + '/'))) && (!q.kind || a.kind === q.kind)
     && (q.minBytes == null || a.bytes >= q.minBytes) && (q.maxBytes == null || a.bytes <= q.maxBytes)
     && (q.minCount == null || a.imageCount >= q.minCount) && (q.maxCount == null || a.imageCount <= q.maxCount)
     && (q.minMegapixels == null || mp >= q.minMegapixels) && (q.maxMegapixels == null || mp <= q.maxMegapixels)

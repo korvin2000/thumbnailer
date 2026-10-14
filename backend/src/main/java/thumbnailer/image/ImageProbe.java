@@ -5,8 +5,13 @@ import com.drew.imaging.ImageProcessingException;
 import com.drew.metadata.exif.ExifDirectoryBase;
 import com.drew.metadata.exif.ExifIFD0Directory;
 import com.drew.metadata.exif.ExifSubIFDDirectory;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.SequenceInputStream;
+import java.lang.foreign.MemorySegment;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -15,15 +20,24 @@ import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import thumbnailer.source.AlbumContainer;
 
-/** Image facts without a full decode: ImageIO reads the header, metadata-extractor stops before the pixel data. */
+/**
+ * Image facts without a decode, from the first {@link #HEAD} bytes of a file: JPEG by walking its markers
+ * ({@link JpegHeader}), WebP by its bitstream header. Other formats, and a JPEG whose frame header lies past the head,
+ * go through metadata-extractor and an ImageIO header read ({@link #read}).
+ */
 public final class ImageProbe {
+
+    /** Holds the EXIF block (at most 64 KiB) and the usual XMP/ICC segments before a JPEG's frame header. */
+    public static final int HEAD = 128 << 10;
 
     private static final DateTimeFormatter EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss");
 
     private ImageProbe() {}
 
     /** Display dimensions (EXIF orientation applied) and capture time. */
-    public record Probe(int width, int height, LocalDateTime shotAt) {}
+    public record Probe(int width, int height, LocalDateTime shotAt) {
+        static Probe of(int w, int h, Exif exif) { return exif.swapsAxes() ? new Probe(h, w, exif.shotAt()) : new Probe(w, h, exif.shotAt()); }
+    }
 
     /** The EXIF facts the application uses; {@link #NONE} when absent or unreadable. */
     public record Exif(int orientation, LocalDateTime shotAt, String artist) {
@@ -34,24 +48,91 @@ public final class ImageProbe {
     }
 
     public static Probe probe(AlbumContainer container, String name) throws IOException {
-        int w, h;
-        try (var raw = container.open(name); var in = ImageIO.createImageInputStream(raw)) {
+        return probe(container, name, container.head(name, HEAD));
+    }
+
+    /** Probes from an already read {@code head} of the file; only the fallback opens it again. */
+    public static Probe probe(AlbumContainer container, String name, byte[] head) throws IOException {
+        var p = probe(head);
+        return p != null ? p : read(container, name, (reader, exif) -> Probe.of(reader.getWidth(0), reader.getHeight(0), exif));
+    }
+
+    /** JPEG and WebP from their head alone, touching nothing else; null when the file needs {@link #probe(AlbumContainer, String)}. */
+    public static Probe probe(byte[] head) {
+        var jpeg = JpegHeader.parse(MemorySegment.ofArray(head));
+        if (jpeg != null) return Probe.of(jpeg.width(), jpeg.height(), jpeg.exif());
+        var f = WebP.isWebP(head) ? WebP.features(head) : null;
+        return f == null ? null : new Probe(f.width, f.height, null);
+    }
+
+    /** EXIF of a file from its head: the marker walk for JPEG, metadata-extractor for anything else. */
+    public static Exif exif(byte[] head) {
+        var jpeg = JpegHeader.parse(MemorySegment.ofArray(head));
+        return jpeg != null ? jpeg.exif() : exif(new ByteArrayInputStream(head));
+    }
+
+    interface Body<T> { T apply(ImageReader reader, Exif exif) throws IOException; }
+
+    /**
+     * Usually opens the entry once: metadata-extractor parses the EXIF, the bytes it consumed are kept, and the reader
+     * gets them followed by the rest of the stream. Only a parse that went past {@link #HEAD} (a PNG reads every chunk,
+     * a JPEG with a huge XMP segment) costs a second open, so memory never holds more than the head.
+     */
+    static <T> T read(AlbumContainer container, String name, Body<T> body) throws IOException {
+        Exif exif;
+        try (var raw = container.open(name)) {
+            var head = new Head(raw);
+            exif = exif(head);
+            if (head.whole) return decode(new SequenceInputStream(new ByteArrayInputStream(head.kept.toByteArray()), raw), name, exif, body);
+        }
+        try (var raw = container.open(name)) {
+            return decode(raw, name, exif, body);
+        }
+    }
+
+    /** Passes the stream through and keeps what was read while that stays within {@link #HEAD}. */
+    private static final class Head extends FilterInputStream {
+        final ByteArrayOutputStream kept = new ByteArrayOutputStream(16 << 10);
+        boolean whole = true; // kept holds every byte read so far
+
+        Head(InputStream in) { super(in); }
+
+        @Override
+        public int read() throws IOException {
+            int b = in.read();
+            if (b >= 0 && (whole &= kept.size() < HEAD)) kept.write(b);
+            return b;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            int n = in.read(b, off, len);
+            if (n > 0 && (whole &= kept.size() + n <= HEAD)) kept.write(b, off, n);
+            return n;
+        }
+
+        @Override
+        public long skip(long n) throws IOException {
+            whole = false;
+            return in.skip(n);
+        }
+
+        @Override public boolean markSupported() { return false; }
+    }
+
+    static <T> T decode(InputStream stream, String name, Exif exif, Body<T> body) throws IOException {
+        try (var in = ImageIO.createImageInputStream(stream)) {
+            if (in == null) throw new IOException("Cannot read " + name);
             var reader = reader(in, name);
             try {
-                w = reader.getWidth(0);
-                h = reader.getHeight(0);
+                return body.apply(reader, exif);
             } finally {
                 reader.dispose();
             }
         }
-        Exif exif;
-        try (var raw = container.open(name)) {
-            exif = exif(raw);
-        }
-        return exif.swapsAxes() ? new Probe(h, w, exif.shotAt()) : new Probe(w, h, exif.shotAt());
     }
 
-    public static Exif exif(InputStream in) {
+    static Exif exif(InputStream in) {
         try {
             var metadata = ImageMetadataReader.readMetadata(in);
             var ifd0 = metadata.getFirstDirectoryOfType(ExifIFD0Directory.class);
@@ -66,9 +147,9 @@ public final class ImageProbe {
         }
     }
 
-    static ImageReader reader(ImageInputStream in, String name) throws IOException {
-        var readers = in == null ? null : ImageIO.getImageReaders(in);
-        if (readers == null || !readers.hasNext()) throw new IOException("Unsupported image format: " + name);
+    private static ImageReader reader(ImageInputStream in, String name) throws IOException {
+        var readers = ImageIO.getImageReaders(in);
+        if (!readers.hasNext()) throw new IOException("Unsupported image format: " + name);
         var reader = readers.next();
         reader.setInput(in, true, true);
         return reader;
