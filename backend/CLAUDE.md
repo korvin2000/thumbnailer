@@ -15,7 +15,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Nullness by convention (null = not set / no filter / unchanged); `Optional` for lookups. No custom exceptions:
   `IllegalArgumentException` / `NoSuchElementException` / `IllegalStateException`; WS turns any exception into
   `Event.Error`. Per-item I/O failures: `catch (IOException | RuntimeException e)` → `log.warn` → skip.
-- Threads: platform daemon threads `scan`, `ws-broadcast`, `covers-compact`; the non-daemon `restart` thread; indexing runs one virtual thread per
+- Threads: platform daemon threads `scan`, `ws-broadcast`, `covers-compact`, `resampler-warmup` (once at start); the non-daemon `restart` thread; indexing runs one virtual thread per
   album (`index-N`), bounded by a semaphore (`index-threads` albums); renders are bounded by the two `Limiter`s in
   `AlbumService` (covers: indexing + cover misses; entry thumbnails), resized from `Settings.covers/thumbs` before
   each acquire; no `@Async`. HTTP requests and WS messages run on Undertow's `XNIO-n task-m` workers (never its I/O

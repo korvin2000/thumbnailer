@@ -31,6 +31,7 @@ public class Thumbnailer {
     public Thumbnailer() {
         WebP.features(new byte[16]); // loads both natives now: a missing one fails the start, not the first scan
         TurboJpeg.isJpeg(MemorySegment.ofArray(new byte[0]));
+        Thread.ofPlatform().daemon().name("resampler-warmup").priority(Thread.MIN_PRIORITY).start(Resampler::warmUp);
     }
 
     /** Encoded bytes with the format and {@link Render#epoch()} that made them. */

@@ -33,6 +33,21 @@ final class Resampler {
      */
     static Pixels resize(Pixels src, int w, int h, boolean boxed) { return resize(src, w, h, boxed, SIMD); }
 
+    /**
+     * Runs every SIMD kernel shape until C2 has compiled it. Interpreted, the Vector API boxes each vector: the first
+     * resize took 0.5 s instead of 4 ms, and the first album opened right after start rendered in 1 s instead of 0.25.
+     * About a second of one core, on a background thread at start.
+     */
+    static void warmUp() {
+        if (!SIMD) return;
+        int[][] shapes = { // source, target, boxed: cubic 2 groups, DCT-scaled Lanczos 3 and 4 groups, 4x box
+                {900, 600, 512, 341, 0}, {1500, 1000, 512, 341, 1}, {2000, 1500, 512, 384, 1}, {3072, 2048, 384, 256, 0}};
+        for (int[] s : shapes) {
+            var p = new Pixels(new int[s[0] * s[1]], s[0], s[1]);
+            for (int i = 0; i < 12; i++) resize(p, s[2], s[3], s[4] == 1, true);
+        }
+    }
+
     /** {@code simd} picks the path (tests compare both); the two compute the same bits. */
     static Pixels resize(Pixels src, int w, int h, boolean boxed, boolean simd) {
         int sw = src.width(), sh = src.height();

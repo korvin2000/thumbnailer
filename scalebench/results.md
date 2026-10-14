@@ -64,3 +64,14 @@ per render alone but raised the 12-thread rate to ~120: a critical decode holds 
 12 MP (4000x3000): 1/4 + Lanczos3 48.66 dB in 32 + 2.2 ms; 1/2 48.43 dB in 36 + 4.2 ms. Entropy decoding dominates,
 so smaller DCT scales save little; non-power-of-two scales (3/8 ...) have no SIMD IDCT and decode slower than 1/2.
 `Thumbnailer.GAP` = 1.5 (decode to ≥ 1.5× the target) picks 1/4 for both.
+
+## Cold start (an album opened right after start: 48 JPEG thumbs, 12 threads, ms per batch)
+
+| path | 1st batch | warm batches |
+|---|---|---|
+| SIMD, no warm-up | 960–1000 | 235–255 |
+| scalar | 436–726 | 245–268 |
+| SIMD after `Resampler.warmUp` (~1 s in the background at start) | 337–387 | 233–258 |
+
+Interpreted, the Vector API boxes every vector: a single first resize took 0.5 s instead of 4 ms. The warm-up runs
+each kernel shape until C2 has compiled it; compiled code is shared by all threads.
