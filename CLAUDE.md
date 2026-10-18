@@ -68,7 +68,9 @@ tests are plain unit tests. No linter is configured.
   Every album save must bump it; never reuse a revision for different bytes. Stored covers are keyed by album id and
   tagged with the album state they show (see `AlbumService`), so a stale value is a miss, never a hit.
 - All album mutation goes through `AlbumService` (backend) and `AlbumStore` (frontend); nothing else writes.
-- The library on disk is read-only to the app. Demo data goes only under `<library-dir>/demo`.
+- The library on disk changes only through explicit, confirmed, journaled operations (`ops/FileOps`), never while
+  scanning or browsing; a source is deleted only after its result was verified; safe-delete is the `hidden` flag in the
+  index. Demo data goes only under `<library-dir>/demo`.
 - Java: follow the project skills `compact-code` and `god-style` (small, dense, records, no god classes, no
   speculative abstraction). Match the existing dense style on both sides; comments state intent, sparingly.
 

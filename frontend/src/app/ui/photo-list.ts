@@ -32,7 +32,7 @@ const key = (p: PhotoListItem) => `${p.albumId}/${p.name}`;
     <app-tile-grid class="grid" [tiles]="tiles()" mode="grid" [columns]="prefs.columns()" [gap]="8" [padding]="10" [selectedId]="focus()" [hasMore]="items().length < total()" [empty]="emptyState"
                    (select)="focus.set($event)" (open)="openKey($event)" (reachedEnd)="loadMore()" (contextMenu)="onMenu($event)">
       <ng-template let-p>
-        <div class="photo" [class.gone]="p.index < 0" [class.selected]="key(p) === focus()" (dblclick)="view(p)">
+        <div class="photo" [class.gone]="p.index < 0" [class.selected]="key(p) === focus()" (click)="focus.set(key(p))" (dblclick)="view(p)">
           @if (p.index >= 0) { <img [src]="gw.thumbUrl(p.album, p.index)" [alt]="p.name" loading="lazy" decoding="async" draggable="false" /> }
           @else { <div class="missing"><app-icon name="alert" [size]="22" /><span>no longer in the album</span></div> }
           @if (p.rating) { <span class="badge">★ {{ p.rating }}</span> }
@@ -85,13 +85,15 @@ export class PhotoListView {
   protected readonly list = computed(() => this.catalog.entityOf(this.listId()) ?? null);
   protected readonly tiles = computed<Tile<PhotoListItem>[]>(() => this.items().map(p => ({ id: key(p), aspect: 1, data: p })));
   private gen = 0;
+  private reloadTimer?: ReturnType<typeof setTimeout>;
 
   constructor() {
-    effect(() => { const id = this.listId(); untracked(() => { this.catalog.ensureKnown([id]); void this.load(0); }); });
+    effect(() => { const id = this.listId(); untracked(() => { void this.catalog.ensureKnown([id]); void this.load(0); }); });
     this.gw.events.pipe(takeUntilDestroyed()).subscribe(e => {
       if (e.type === 'catalogChanged' && e.kinds.includes('LIST')) void this.load(this.items().length); // renamed, merged, deleted, or marks changed elsewhere
-      if (e.type === 'albumChanged') this.items.update(l => l.map(p => p.albumId === e.album.id ? { ...p, album: { id: e.album.id, name: e.album.name, revision: e.album.revision } } : p));
-      if (e.type === 'albumRemoved') this.items.update(l => l.filter(p => p.albumId !== e.albumId));
+      // a changed album may have been re-indexed (indices renumbered) or hidden (out of the list): the server recomputes both, so its photos are reloaded, not patched
+      if (e.type === 'albumChanged' && this.items().some(p => p.albumId === e.album.id)) { clearTimeout(this.reloadTimer); this.reloadTimer = setTimeout(() => void this.load(this.items().length), 600); }
+      if (e.type === 'albumRemoved') { const gone = this.items().filter(p => p.albumId === e.albumId).length; if (gone) { this.items.update(l => l.filter(p => p.albumId !== e.albumId)); this.total.update(t => Math.max(0, t - gone)); } }
     });
   }
 
@@ -139,19 +141,19 @@ export class PhotoListView {
     this.menu.open(e.x, e.y, items);
   }
 
-  private async mark(p: PhotoListItem, m: { rating?: number; lists?: number[] }) {
-    try { await this.gw.markPhoto(p.albumId, p.name, m); if (m.rating !== undefined) this.items.update(l => l.map(x => x === p ? { ...x, rating: m.rating! } : x)); }
-    catch (e) { this.toasts.error(e, 'Mark failed: '); }
+  /** True when the mark was saved (a failure is a toast, and the item stays as it was). */
+  private async mark(p: PhotoListItem, m: { rating?: number; lists?: number[] }): Promise<boolean> {
+    try { await this.gw.markPhoto(p.albumId, p.name, m); if (m.rating !== undefined) this.items.update(l => l.map(x => x === p ? { ...x, rating: m.rating! } : x)); return true; }
+    catch (e) { this.toasts.error(e, 'Mark failed: '); return false; }
   }
 
-  /** Drops this list from the photo's marks (the other lists and the rating stay). */
+  /** Drops this list from the photo's marks (the other lists and the rating stay); the item leaves only once the server agreed. */
   private async remove(p: PhotoListItem) {
-    try {
-      const lists = (await this.gw.album(p.albumId)).marks[p.name]?.lists ?? [];
-      await this.mark(p, { lists: lists.filter(x => x !== this.listId()) });
-      this.items.update(l => l.filter(x => x !== p)); this.total.update(t => Math.max(0, t - 1));
-      this.catalog.onChanged(['LIST']);
-    } catch (e) { this.toasts.error(e, 'Remove failed: '); }
+    let lists: number[];
+    try { lists = (await this.gw.album(p.albumId)).marks[p.name]?.lists ?? []; } catch (e) { return this.toasts.error(e, 'Remove failed: '); }
+    if (!await this.mark(p, { lists: lists.filter(x => x !== this.listId()) })) return;
+    this.items.update(l => l.filter(x => x !== p)); this.total.update(t => Math.max(0, t - 1));
+    this.catalog.onChanged(['LIST']);
   }
 
   protected onKey(e: KeyboardEvent) {

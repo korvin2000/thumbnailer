@@ -39,9 +39,18 @@ export function confirmFor(op: Op, pre: Preflight, label: string, key: KeyState 
   }
 }
 
-/** Encryption without a session key: the password, typed twice, before the preflight (which skips every item without it). */
+/**
+ * Whether the password must be typed (twice) before `op` runs (catalog_plan.md §4.5): encryption unless its preflight proved the session key
+ * against an existing `.cry` of the selection (`keyVerified`; a session key alone is no proof, it may be mistyped), decryption only when the server
+ * holds no key (a wrong one just skips the items as unreadable).
+ */
+export function needsPassword(op: Op, pre: Preflight | null, key: KeyState): boolean {
+  return op.encrypt !== false ? !pre?.keyVerified : !key.fingerprint;
+}
+
+/** The password, typed twice: for encryption it becomes the session key (`Actions.crypt` saves it as `cryPassword`), for decryption this operation's key. */
 export function passwordRequest(op: Op, label: string): ConfirmRequest {
-  return { title: `${opNoun(op)} ${label}`, message: op.encrypt ? 'The password becomes the .cry key of these files; it is kept in server memory for this session only.' : 'The password the files were encrypted with.', okLabel: 'Continue', options: [{ key: 'password', label: 'Password', kind: 'password2' }] };
+  return { title: `${opNoun(op)} ${label}`, message: op.encrypt ? 'The password becomes the session .cry key (kept in server memory only, never on disk) and encrypts these files; the next scans read them with it.' : 'The password the files were encrypted with.', okLabel: 'Continue', options: [{ key: 'password', label: 'Password', kind: 'password2' }] };
 }
 
 /** The operation to run after the dialog: the chosen conflict policy (and a typed password) applied to `op`. */

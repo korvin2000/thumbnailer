@@ -59,6 +59,7 @@ export class MockGateway extends Gateway {
   private readonly ops = new MockOps(this.albums, this.events, {
     scanning: () => this.scanning, roots: () => this.settings.roots.map(r => r.path), sync: ids => this.catalog.sync(ids), find: this.find,
     renameRoot: (from, to) => { this.settings = { ...this.settings, roots: this.settings.roots.map(r => r.path.replace(/\/+$/, '') === from ? { ...r, path: to } : r) }; },
+    key: () => this.settings.cryKey ?? null,
   });
   private readonly pics: MockPhotos;
 

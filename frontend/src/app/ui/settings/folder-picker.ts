@@ -9,7 +9,7 @@ import { Icon } from '../shared/icon';
   selector: 'app-folder-picker',
   imports: [Icon],
   template: `
-    <dialog #dlg (cancel)="$event.preventDefault(); picker.cancel()" (close)="picker.cancel()" (keydown.escape)="picker.cancel()">
+    <dialog #dlg tabindex="-1" (cancel)="$event.preventDefault(); picker.cancel()" (close)="picker.cancel()" (keydown.escape)="picker.cancel()">
       @if (picker.open(); as req) {
         <header>
           <app-icon name="folderOpen" [size]="16" /><h2>{{ req.title }}</h2>
@@ -140,7 +140,9 @@ export class FolderPickerDialog {
   /** Navigates; a typed path that does not exist stays the chosen one in `allowNew` mode, while the list shows its nearest reachable ancestor. */
   protected async go(path: string | null, typed = false) {
     const want = path?.trim().replace(/\\/g, '/') ?? null;
-    const gen = ++this.gen, stale = () => gen !== this.gen;
+    const gen = ++this.gen, stale = () => gen !== this.gen, dlg = this.dialog().nativeElement;
+    // the folder rows go while loading: a focused one would drop the focus to <body>, where library keys could reach the grid behind the modal
+    if (dlg.querySelector('ul')?.contains(document.activeElement)) dlg.focus();
     this.loading.set(true);
     try {
       const l = await this.gw.browse(want);

@@ -9,6 +9,7 @@ import { FoldersPage } from './folders-page';
 import { KeyboardPage } from './keyboard-page';
 import { LibraryPage } from './library-page';
 import { OperationsPage } from './operations-page';
+import { rebase } from './settings-draft';
 import { SettingsLink, SettingsPage as Page } from './settings-link';
 import { ThumbnailsPage } from './thumbnails-page';
 
@@ -123,7 +124,11 @@ export class SettingsDialog {
         if (!info) return;
         const prev = this.lib && this.lib.dir === this.seededDir ? this.lib.json : null;
         this.lib = { dir: info.dataDir, json: JSON.stringify(info.settings) };
-        if (!this.seeded || info.dataDir === this.seededDir) return;
+        if (!this.seeded) return;
+        if (info.dataDir === this.seededDir) { // the same library changed underneath (a renamed root, another client): the draft follows every field the user left alone
+          if (prev !== null && prev !== this.lib.json) this.draft.set(rebase(this.draft(), JSON.parse(prev), info.settings));
+          return;
+        }
         const wasDirty = prev !== null && JSON.stringify(this.draft()) !== prev;
         this.reseed();
         if (wasDirty) this.toasts.show('Unsaved settings of the previous library were discarded');

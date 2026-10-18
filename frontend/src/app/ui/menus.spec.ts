@@ -9,10 +9,10 @@ const entity = (id: number, name: string, kind: Entity['kind'] = 'MODEL', auto =
 const sel = (...albums: Album[]): Target => ({ albumIds: albums.map(a => a.id), albums, complete: true, label: `${albums.length} albums` });
 const query: Target = { query: { roots: ['D:/P'] }, label: 'albums below P', albums: [], complete: false };
 
-/** Every callback records its name and arguments. */
+/** Every callback records its name and arguments (`lists` and `packFormat` answer as the app's state would). */
 const spy = () => {
   const calls: unknown[][] = [];
-  const a = new Proxy({}, { get: (_, name) => name === 'lists' ? async () => [entity(9, 'Best', 'LIST')] : (...args: unknown[]) => { calls.push([name, ...args]); } }) as AlbumActions & FolderActions & EntityActions;
+  const a = new Proxy({}, { get: (_, name) => name === 'lists' ? async () => [entity(9, 'Best', 'LIST')] : name === 'packFormat' ? () => 'SEVEN_ZIP' : (...args: unknown[]) => { calls.push([name, ...args]); } }) as AlbumActions & FolderActions & EntityActions;
   return { a, calls };
 };
 const items = (m: MenuEntry[]) => m.filter((e): e is MenuItem => !('sep' in e));
@@ -42,7 +42,14 @@ describe('album menu (§7.4)', () => {
     expect(item(opsItems(zips, a), 'Pack')).toMatchObject({ label: 'Pack (1 of 1 already packed)', disabled: true });
     expect(item(opsItems(zips, a), 'Unpack').disabled).toBeUndefined();
     expect(item(opsItems(query, a), 'Pack').label).toBe('Pack'); // a query target: nothing known
-    expect(kids(item(opsItems(zips, a), 'Pack')).map(e => (e as MenuItem).label)).toEqual(['zip (auto)', 'zip', '7z']);
+    expect(labels(kids(item(opsItems(zips, a), 'Pack')))).toEqual(['Default (7z)', '—', 'zip (auto)', 'zip', '7z']);
+  });
+
+  it('Pack offers the saved default format first (no explicit format: the action reads the setting) and every format as an override', () => {
+    const { a, calls } = spy(), t = sel(album('a'));
+    const pack = kids(item(opsItems(t, a), 'Pack'));
+    (pack[0] as MenuItem).run!(); (pack[4] as MenuItem).run!();
+    expect(calls).toEqual([['pack', t], ['pack', t, 'SEVEN_ZIP']]);
   });
 
   it('offers Unhide when every known album is hidden, also for the Hidden view query', () => {
@@ -94,7 +101,7 @@ describe('folder menu (§7.2)', () => {
 });
 
 describe('entity menu (§7.2)', () => {
-  const ctx = (entity: Entity | null, selected: number[] = [], kind = entity?.kind ?? 'MODEL', missing = false): EntityTreeContext => ({ kind, entity, missing, selected, x: 0, y: 0 });
+  const ctx = (entity: Entity | null, selected: number[] = [], kind = entity?.kind ?? 'MODEL', missing = false, scope: number[] | null = entity ? [entity.id] : null): EntityTreeContext => ({ kind, entity, missing, scope, selected, x: 0, y: 0 });
 
   it('acts on the row, or on the batch when the row is one of the selected rows', () => {
     const { a, calls } = spy(), nika = entity(1, 'Nika', 'MODEL', true);
@@ -126,5 +133,14 @@ describe('entity menu (§7.2)', () => {
     expect(labels(all)).toEqual(['Show albums', '—', 'Albums']);
     item(all, 'Show albums').run!();
     expect(calls.at(-1)).toEqual(['showAlbums', expect.objectContaining({ kind: 'STUDIO', missing: false })]);
+  });
+
+  it('a child row (a studio under a model) is worded and acted on as its own kind, within its parent scope', () => {
+    const { a, calls } = spy(), studio = entity(5, 'EL-Studio', 'STUDIO');
+    const m = entityMenu(ctx(studio, [5], 'STUDIO', false, [1, 5]), 0, query, a);
+    expect(labels(m)).toContain('Delete studio…');
+    expect(labels(m)).not.toContain('Credited as…');
+    item(m, 'Merge into…').run!(); item(m, 'Show albums').run!();
+    expect(calls).toEqual([['mergeInto', 'STUDIO', [5]], ['showAlbums', expect.objectContaining({ kind: 'STUDIO', scope: [1, 5] })]]);
   });
 });

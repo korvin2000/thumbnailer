@@ -16,7 +16,8 @@ export interface AlbumActions {
   open(id: string): void; details(id: string): void; reveal(id: string): void; copyText(text: string): void;
   assign(t: Target, kind: EntityKind): void; removeTag(t: Target, entityId: number | null): void; rate(t: Target, rating: number): void; shotDate(t: Target): void;
   lists(): Promise<Entity[]>; favorite(t: Target, listId: number, on: boolean): void; newList(t: Target): void;
-  pack(t: Target, format: PackFormat): void; unpack(t: Target): void; repack(t: Target, format: PackFormat): void; crypt(t: Target, encrypt: boolean): void;
+  /** `pack` without a format uses the saved default (`settings.ops.packFormat`, which `packFormat()` reads for the label). */
+  pack(t: Target, format?: PackFormat): void; packFormat(): PackFormat; unpack(t: Target): void; repack(t: Target, format: PackFormat): void; crypt(t: Target, encrypt: boolean): void;
   moveTo(t: Target): void; copyTo(t: Target): void; hide(t: Target, hidden: boolean): void; delete(t: Target): void;
   selectAll(): void; selectFirst(): void; deselect(): void;
 }
@@ -40,10 +41,10 @@ function counted(label: string, t: Target, skips: (a: Album) => boolean, reason:
 /** True when every known album is hidden (the Hidden view's query counts too): the menu offers Unhide. */
 export function allHidden(t: Target): boolean { return !!t.query?.hidden || (t.albums.length > 0 && t.albums.every(a => a.hidden)); }
 
-/** Pack ▸ · Unpack · Repack ▸ · Encrypt · Decrypt. */
+/** Pack ▸ (the saved default first, then every format) · Unpack · Repack ▸ · Encrypt · Decrypt. */
 export function opsItems(t: Target, a: AlbumActions): MenuEntry[] {
   return [
-    { ...counted('Pack', t, x => x.kind !== 'DIRECTORY', 'already packed'), icon: 'archive', children: PACK_FORMATS.map(f => ({ label: FORMAT_LABEL[f], run: () => a.pack(t, f) })) },
+    { ...counted('Pack', t, x => x.kind !== 'DIRECTORY', 'already packed'), icon: 'archive', children: [{ label: `Default (${FORMAT_LABEL[a.packFormat()]})`, run: () => a.pack(t) }, SEP, ...PACK_FORMATS.map(f => ({ label: FORMAT_LABEL[f], run: () => a.pack(t, f) }))] },
     { ...counted('Unpack', t, x => x.kind === 'DIRECTORY', 'already unpacked'), icon: 'folderOpen', run: () => a.unpack(t) },
     { ...counted('Repack', t, x => x.kind === 'DIRECTORY', 'not packed'), icon: 'refresh', children: [{ label: 'zip', run: () => a.repack(t, 'ZIP') }, { label: '7z', run: () => a.repack(t, 'SEVEN_ZIP') }] },
     { label: 'Encrypt (.cry)', icon: 'lock', run: () => a.crypt(t, true) },

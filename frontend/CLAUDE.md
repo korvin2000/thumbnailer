@@ -43,7 +43,16 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   `filters.roots` (always one path, read via `store.folder()`, set via `store.goTo()`), so Refine's badge/Reset use
   `store.refining()`/`resetRefine()` and never count or clear the folder. `store.treeVersion` tells the tree to reload.
 - `TileGrid` needs exactly one projected `<ng-template>` for tiles; the empty state is an input `TemplateRef`.
-  Library tile ids are album ids; viewer tile ids are `String(entry.index)`.
+  Library tile ids are album ids; viewer tile ids are entry *names* (stable across a re-index, which renumbers
+  `index`), and the viewer hands the grid its `sel` so clicks and Shift/Ctrl+arrows apply the selection rules there —
+  a tile's own `(click)` only sets the focus, and a tile's `contextmenu` must `stopPropagation()` or the grid re-selects it.
+- Anything shown or acted on after a reload is kept by *name*, never by index or by the reply order: `AlbumViewer.load`
+  resolves focus, lightbox and selection by entry name and drops an older answer (`loadGen`) or revision; `AlbumStore`
+  and the copies popover never replace an album with an older `revision`, and a compare verdict is bound to the
+  revisions it compared.
+- Requests that race are serialized where the payload depends on the previous reply: `CatalogStore.trySaveCard`
+  (entity card edits) and `AlbumViewer.mark` (per-photo marks, `lists` replaces the set) queue; `CatalogStore.loadLists`
+  shares one request and lets the newest answer win. Follow those patterns rather than sending from a stale signal.
 - `layout.ts` is pure and spec-covered: landscape = `aspect >= 1`, a portrait tile has the landscape tile's area,
   `MAX_SCALE` 0.15. Keep it Angular-free.
 - `Icon` uses `bypassSecurityTrustHtml` on its static map only — never pass user input.
@@ -56,7 +65,19 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   match) or `filters.missing`; names for its chips come from `CatalogStore.known` (filled by every page and card), never
   from a second request per chip.
 - Modal `<dialog>`s must keep keyboard focus inside (focus the dialog itself after `showModal()` and after a clicked
-  button disappears): with focus on `body`, Esc reaches `App.onKey` and clears the album selection instead of closing.
+  button disappears or a focused row reloads): `App.onKey` yields while any `dialog[open]` exists, but a key landing on
+  `body` would otherwise reach it (the viewer and photo list check the same).
+- Tree key handlers that act (`EntityTree`: Ctrl+A, Delete, Esc) call `stopPropagation()`: `App.onKey` on `document`
+  has the same keys for albums.
+- Entity ids are per library: the entity picker keys its recents by `dataDir` and shows only the server's current copy
+  (`CatalogStore.known`), and `AlbumStore.applySettings` clears the entity scope and `CatalogStore.reset()`s on a
+  `dataDir` change. "Delete unused" relies on the server's `entities { unused }` filter (hidden albums still link) and
+  refuses to act on an answer that contains used entities.
+- The settings draft follows the saved settings field by field when the same library changes underneath it
+  (`settings-draft.ts` `rebase`): a draft must never resubmit a root an operation renamed.
+- Encryption asks for the password unless the preflight says `keyVerified` (`needsPassword` in `op-confirm.ts`): a
+  session key fingerprint alone proves nothing. The typed password becomes the session key through
+  `saveSettings({ cryPassword })`, never an `op.password` (the server would not re-index a result it cannot read).
 - Dialog-style services return promises: `FolderPicker.pick()`, `Confirm.ask()`, `EntityPicker.pick()`; the context
   menu is `ContextMenu.open(x, y, items)` with data-only `MenuEntry`s built per subject on every open. Their
   components are mounted once in `app.html` (the folder picker too: a `<dialog>` inside the closed settings dialog would
@@ -75,5 +96,4 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
 
 ## Tests
 
-Plain Vitest specs next to the code (`*.spec.ts`, explicit `import { describe, it, expect } from 'vitest'`), no
-TestBed so far; pure logic in `core/` (and the pure `ui/menus.ts`, `ui/op-confirm.ts`, `ui/viewer/photo-order.ts`) is the place to test. Covered: `layout.ts`, `search-syntax.ts`, `paths.ts`, `selection.ts`, the mock catalog (over a `MockGateway`), the menu builders (with a recording stub of the actions), the operation → dialog mapping; a root service is built with `Injector.create` and a fake `Gateway` (`catalog-store.spec.ts`).
+Plain Vitest specs next to the code (`*.spec.ts`, explicit `import { describe, it, expect } from 'vitest'`); pure logic in `core/` (and the pure `ui/menus.ts`, `ui/op-confirm.ts`, `ui/viewer/photo-order.ts`, `ui/settings/settings-draft.ts`) is the place to test. Covered: `layout.ts`, `search-syntax.ts`, `paths.ts`, `selection.ts`, the mock catalog (over a `MockGateway`), the menu builders (with a recording stub of the actions), the operation → dialog mapping, the settings draft rebase; a root service is built with `Injector.create` and a fake `Gateway` (`catalog-store.spec.ts`, `ops-store.spec.ts`); only `AlbumStore`, whose constructor has an `effect`, goes through `TestBed` (`store.spec.ts`: `TestBed.inject` + `TestBed.tick()`), the one TestBed use so far.

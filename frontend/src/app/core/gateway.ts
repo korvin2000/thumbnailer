@@ -18,7 +18,8 @@ export abstract class Gateway {
   abstract getSettings(): Promise<SettingsInfo>;
   abstract setSettings(settings: Settings): Promise<SettingsInfo>;
   abstract facets(filters?: Filters): Promise<Facets>;
-  abstract reveal(id: string): Promise<void>;
+  /** Opens the album's folder in the OS file manager; with `path` (a folder below a root) that folder, `albumId` standing in for a server that reveals albums only. */
+  abstract reveal(albumId: string | null, path?: string): Promise<void>;
   /** Child folders of a stored album path (the library tree, not the live disk). */
   abstract folders(path: string): Promise<Folder[]>;
   /** One level of the real file system; null = drives/home. */

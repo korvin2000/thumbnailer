@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Op, OpKind, Preflight } from '../core/model';
-import { CONFLICT_CHOICES, confirmFor, finalize, opNoun, opVerb, passwordRequest } from './op-confirm';
+import { CONFLICT_CHOICES, confirmFor, finalize, needsPassword, opNoun, opVerb, passwordRequest } from './op-confirm';
 
 const pre: Preflight = { items: [{ path: 'D:/P/a', skip: false }, { path: 'D:/P/b.zip', skip: true, reason: 'already packed' }, { path: 'D:/P/c', skip: false }], bytes: 10, free: 100, warnings: [], consequences: [] };
 const op = (kind: OpKind, extra: Partial<Op> = {}): Op => ({ kind, albumIds: ['a', 'b', 'c'], conflict: 'RENAME', ...extra });
@@ -24,11 +24,21 @@ describe('op → confirm dialog', () => {
     expect(confirmFor(op('FOLDER_DELETE', { paths: ['D:/P/2019'] }), pre, 'folder 2019')).toMatchObject({ danger: true, items: ['D:/P/a', 'D:/P/c'] });
   });
 
-  it('encryption names the session key when there is one, and asks for the password twice before the preflight without it', () => {
+  it('encryption names the session key when there is one, and asks for the password twice (§4.5)', () => {
     expect(confirmFor(op('CRYPT', { encrypt: true }), pre, 'x', { fingerprint: 'ab12cd34' })).toMatchObject({ title: 'Encrypt x', okLabel: 'Encrypt', message: 'Using the session key (fingerprint ab12cd34).' });
     expect(confirmFor(op('CRYPT', { encrypt: false }), pre, 'x').message).toBeUndefined();
     expect(confirmFor(op('CRYPT', { encrypt: false }), pre, 'x').title).toBe('Decrypt x');
     expect(passwordRequest(op('CRYPT', { encrypt: true }), 'x')).toMatchObject({ title: 'Encrypt x', okLabel: 'Continue', options: [{ key: 'password', kind: 'password2' }] });
+  });
+
+  it('a session key alone is no proof for encryption: only a preflight that verified it against an existing .cry skips the password; decryption needs one only without a key', () => {
+    const key = { fingerprint: 'ab12cd34' }, none = { fingerprint: null };
+    expect(needsPassword(op('CRYPT', { encrypt: true }), pre, key)).toBe(true);
+    expect(needsPassword(op('CRYPT', { encrypt: true }), { ...pre, keyVerified: false }, key)).toBe(true);
+    expect(needsPassword(op('CRYPT', { encrypt: true }), { ...pre, keyVerified: true }, key)).toBe(false);
+    expect(needsPassword(op('CRYPT', { encrypt: true }), null, none)).toBe(true);
+    expect(needsPassword(op('CRYPT', { encrypt: false }), null, key)).toBe(false);
+    expect(needsPassword(op('CRYPT', { encrypt: false }), null, none)).toBe(true);
   });
 
   it('finalize applies the chosen conflict policy and a typed password', () => {
@@ -39,10 +49,12 @@ describe('op → confirm dialog', () => {
     expect('password' in finalize(op('CRYPT'), { password: '' })).toBe(false);
   });
 
-  it('words every kind for the status bar and the result', () => {
+  it('words every kind for the status bar and the result; a CRYPT of unknown direction (another client started it) gets both words', () => {
     expect(opVerb({ kind: 'PACK' })).toBe('Packing');
     expect(opVerb({ kind: 'CRYPT', encrypt: false })).toBe('Decrypting');
-    expect(opVerb({ kind: 'CRYPT' })).toBe('Encrypting');
+    expect(opVerb({ kind: 'CRYPT', encrypt: true })).toBe('Encrypting');
+    expect(opVerb({ kind: 'CRYPT' })).toBe('Encrypting/decrypting');
+    expect(opNoun({ kind: 'CRYPT' })).toBe('Encrypt/decrypt');
     expect(opNoun({ kind: 'FOLDER_DELETE' })).toBe('Delete folder');
     expect(opNoun({ kind: 'COPY_PHOTOS' })).toBe('Copy photos');
   });

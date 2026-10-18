@@ -176,3 +176,20 @@ describe('mock catalog', () => {
     expect(await gw.unlink({ albumIds: albums }, tagged.id)).toBe(3);
   });
 });
+
+describe('mock catalog: unused entities', () => {
+  it('`unused` lists auto entities no album links to, a hidden album still counting as a link (the visible count alone would not say)', async () => {
+    const { gw, first } = setup();
+    const a = (await first(1))[0];
+    await gw.update(a.id, { model: 'Zed Only' });
+    const zed = (await gw.entities('MODEL', { text: 'Zed Only' })).items[0];
+    expect(zed.auto).toBe(true);
+    const unused = async () => (await gw.entities('MODEL', { unused: true, limit: 500 })).items.map(e => e.id);
+    expect(await unused()).not.toContain(zed.id);
+    await gw.update(a.id, { hidden: true });
+    expect((await gw.entities('MODEL', { text: 'Zed Only' })).items[0].albums).toBe(0);
+    expect(await unused()).not.toContain(zed.id);
+    await gw.update(a.id, { model: '' });
+    expect(await unused()).toContain(zed.id);
+  });
+});

@@ -72,12 +72,12 @@ const slot = (key: string) => /^[0-9]$/.test(key) ? (+key + 9) % 10 : -1;
 
     <div class="body">
       <app-tile-grid class="grid" [tiles]="tiles()" mode="grid" [columns]="prefs.columns()" [gap]="8" [padding]="10" [empty]="emptyState"
-                     [selectedId]="selected() === null ? null : '' + selected()" (select)="focus(+$event)" (open)="openLightbox(+$event)">
+                     [selectedId]="selectedName()" [selection]="sel" (select)="focus($event)" (open)="openByName($event)">
         <ng-template let-e>
           @let a = album()!;
           @let m = marks()[e.name];
           <div class="photo" [class.cover]="e.name === a.cover" [class.selected]="e.index === selected()" [class.checked]="sel.has(e.name)"
-               (click)="pick(e, $event)" (dblclick)="openLightbox(e.index)" (contextmenu)="photoMenu(e, $event)">
+               (click)="selected.set(e.index)" (dblclick)="openLightbox(e.index)" (contextmenu)="photoMenu(e, $event)">
             <img [src]="gw.thumbUrl(a, e.index)" [alt]="e.name" loading="lazy" decoding="async" draggable="false" />
             <div class="badges">
               @if (e.name === a.cover) { <span class="badge"><app-icon name="cover" [size]="11" /> Cover</span> }
@@ -195,9 +195,13 @@ export class AlbumViewer {
 
   protected readonly details = signal<AlbumDetails | null>(null);
   protected readonly error = signal<string | null>(null);
-  /** Focused entry index (keyboard target, outline); the multi-selection `sel` is keyed by entry name. */
+  /** Focused entry index (keyboard target, outline); the multi-selection `sel` is keyed by entry name, as the grid's tiles are (the grid applies the click and arrow rules to it). */
   protected readonly selected = signal<number | null>(null);
   protected readonly sel = new Selection();
+  /** Drops the answer of an older `load` (a `catalogChanged` and an `albumChanged` can each start one). */
+  private loadGen = 0;
+  /** Marks go one after the other: each `lists` replacement is computed from the marks the previous reply set. */
+  private marking: Promise<boolean> = Promise.resolve(false);
   /** Entry index shown in the lightbox (stable across re-sorts). */
   protected readonly lightbox = signal<number | null>(null);
   protected readonly desc = this.prefs.viewerSortDesc;
@@ -216,8 +220,9 @@ export class AlbumViewer {
   protected readonly marks = computed(() => this.details()?.marks ?? {});
   protected readonly shown = computed(() => order(filter(this.entries(), this.prefs.viewerMinSide(), this.minBytes()), this.prefs.viewerSort(), this.desc(), this.marks(), this.seed()));
   protected readonly hidden = computed(() => this.entries().length - this.shown().length);
-  protected readonly tiles = computed<Tile<Entry>[]>(() => this.shown().map(e => ({ id: String(e.index), aspect: e.width && e.height ? e.width / e.height : 1.5, data: e })));
+  protected readonly tiles = computed<Tile<Entry>[]>(() => this.shown().map(e => ({ id: e.name, aspect: e.width && e.height ? e.width / e.height : 1.5, data: e })));
   protected readonly names = computed(() => this.shown().map(e => e.name));
+  protected readonly selectedName = computed(() => { const i = this.selected(); return i === null ? null : this.entries()[i]?.name ?? null; });
   protected readonly current = computed(() => { const i = this.lightbox(); return i === null ? null : this.entries()[i] ?? null; });
   protected readonly position = computed(() => this.shown().findIndex(e => e.index === this.lightbox()));
   protected readonly preloadUrl = computed(() => { const s = this.shown(), p = this.position(), a = this.album(); return a && p >= 0 && s.length > 1 ? this.gw.originalUrl(a, s[(p + 1) % s.length].index) : null; });
@@ -241,36 +246,39 @@ export class AlbumViewer {
     });
   }
 
+  /** A reload keeps the focus, the lightbox and the selection by entry *name*: a re-index renumbers (an index is the position among the readable images), and a gone photo must not become its neighbour. */
   private async load(id: string) {
-    const stale = this.details()?.album.id !== id;
+    const gen = ++this.loadGen, stale = this.details()?.album.id !== id;
     if (stale) { this.details.set(null); this.selected.set(null); this.lightbox.set(null); this.sel.clear(); this.bioOpen.set(false); }
     this.error.set(null);
     try {
       const d = await this.gw.album(id);
-      if (this.id() !== id) return;
-      if (d.album.revision !== this.album()?.revision) this.bioText.set(null);
+      if (gen !== this.loadGen || this.id() !== id) return;
+      const cur = this.album();
+      if (cur && d.album.revision < cur.revision) return; // an older snapshot, overtaken by a newer one
+      if (d.album.revision !== cur?.revision) this.bioText.set(null);
+      const focusName = this.selectedName(), lightboxName = this.current()?.name ?? null;
       this.details.set(d);
       this.store.selectedId.set(id);
-      const n = d.entries.length, names = new Set(d.entries.map(e => e.name));
-      this.selected.update(i => i === null || i < n ? i : null);
-      this.lightbox.update(i => i === null || i < n ? i : null);
+      const at = (name: string | null) => name === null ? null : d.entries.find(e => e.name === name)?.index ?? null;
+      this.selected.set(at(focusName));
+      if (lightboxName !== null) { const i = at(lightboxName); if (i === null) this.closeLightbox(); else this.lightbox.set(i); }
+      const names = new Set(d.entries.map(e => e.name));
       if ([...this.sel.ids()].some(x => !names.has(x))) this.sel.set([...this.sel.ids()].filter(x => names.has(x)));
       if (this.bioOpen()) void this.loadBio();
-      const at = stale && this.photo() !== undefined ? +this.photo()! : NaN;
-      if (d.entries[at]) this.openLightbox(at);
-    } catch (e) { if (this.id() === id) this.error.set(e instanceof Error ? e.message : 'Album not found'); }
+      const first = stale && this.photo() !== undefined ? +this.photo()! : NaN;
+      if (d.entries[first]) this.openLightbox(first);
+    } catch (e) { if (gen === this.loadGen && this.id() === id) this.error.set(e instanceof Error ? e.message : 'Album not found'); }
   }
 
   protected close() { this.router.navigate(['/']); }
 
   // ---- selection and targets ----
 
-  protected focus(index: number) { this.selected.set(index); const e = this.entries()[index]; if (e) this.sel.set([e.name]); }
+  /** The grid's focus (a click or an arrow key) by tile id = entry name; the grid applies the modifiers to `sel` itself. */
+  protected focus(name: string) { const e = this.entries().find(x => x.name === name); this.selected.set(e ? e.index : null); }
 
-  protected pick(e: Entry, ev: MouseEvent) {
-    this.selected.set(e.index);
-    this.sel.click(e.name, this.names(), { ctrl: ev.ctrlKey || ev.metaKey, shift: ev.shiftKey });
-  }
+  protected openByName(name: string) { const e = this.entries().find(x => x.name === name); if (e) this.openLightbox(e.index); }
 
   /** The focused photo: the lightbox one, else the outlined tile. */
   private focused(): Entry | null { return this.current() ?? (this.selected() !== null ? this.entries()[this.selected()!] ?? null : null); }
@@ -321,6 +329,7 @@ export class AlbumViewer {
 
   protected photoMenu(e: Entry, ev: MouseEvent) {
     ev.preventDefault();
+    ev.stopPropagation(); // the grid's own contextmenu handler would re-select this one tile, dropping a multi-selection the menu was built for
     if (!this.sel.has(e.name)) { this.selected.set(e.index); this.sel.set([e.name]); }
     const names = this.namesFor(e), many = names.length > 1, a = this.album()!;
     const items: MenuEntry[] = [
@@ -363,23 +372,30 @@ export class AlbumViewer {
 
   protected metaOk(e: Entry) { return !((e.flags & ENTRY_META_KNOWN) && !(e.flags & ENTRY_META)); }
 
-  /** One `markPhoto` per name; the album's marks come back with each. */
-  private async mark(names: string[], patch: (cur: PhotoMark) => { rating?: number; lists?: number[] }) {
-    const a = this.album();
-    if (!a || !names.length) return;
-    try {
-      for (const n of names) {
-        const marks = await this.gw.markPhoto(a.id, n, patch(this.marks()[n] ?? { rating: 0, lists: [] }));
-        if (this.album()?.id === a.id) this.details.update(d => d && { ...d, marks });
-      }
-    } catch (e) { this.toasts.error(e, 'Mark failed: '); }
+  /** One `markPhoto` per name, after the marks before it (`marking`): `patch` sees the marks the previous reply set, so two toggles keep both. True when every name was marked. */
+  private mark(names: string[], patch: (cur: PhotoMark) => { rating?: number; lists?: number[] }): Promise<boolean> {
+    return this.marking = this.marking.then(async () => {
+      const a = this.album();
+      if (!a || !names.length) return false;
+      try {
+        for (const n of names) {
+          const marks = await this.gw.markPhoto(a.id, n, patch(this.marks()[n] ?? { rating: 0, lists: [] }));
+          if (this.album()?.id === a.id) this.details.update(d => d && { ...d, marks });
+        }
+        return true;
+      } catch (e) { this.toasts.error(e, 'Mark failed: '); return false; }
+    });
   }
 
   protected rate(names: string[], rating: number) { void this.mark(names, () => ({ rating })); }
 
+  /** A list membership changes the list's photo count, which no `catalogChanged` announces: the catalog pages are dropped here. */
   private toggleList(names: string[], id: number, on: boolean) {
-    void this.mark(names, cur => ({ lists: on ? [...cur.lists, id] : cur.lists.filter(x => x !== id) }))
-      .then(() => this.toasts.show(`${names.length === 1 ? names[0] : names.length + ' photos'} ${on ? 'added to' : 'removed from'} ${this.catalog.lists().find(l => l.id === id)?.name ?? 'the list'}`, 'success'));
+    void this.mark(names, cur => ({ lists: on ? [...cur.lists, id] : cur.lists.filter(x => x !== id) })).then(ok => {
+      if (!ok) return;
+      this.catalog.onChanged(['LIST']);
+      this.toasts.show(`${names.length === 1 ? names[0] : names.length + ' photos'} ${on ? 'added to' : 'removed from'} ${this.catalog.lists().find(l => l.id === id)?.name ?? 'the list'}`, 'success');
+    });
   }
 
   private async newList(names: string[]) {
@@ -494,7 +510,7 @@ export class AlbumViewer {
 
   /** A synthetic anchor for a key-opened menu: the focused tile, else the lightbox caption area. */
   private anchorFor(f: Entry): MouseEvent {
-    const r = this.current() ? null : document.querySelector(`[data-id="${f.index}"]`)?.getBoundingClientRect();
+    const r = this.current() ? null : document.querySelector(`[data-id="${CSS.escape(f.name)}"]`)?.getBoundingClientRect();
     return new MouseEvent('keyboard', { clientX: r ? r.left + 12 : innerWidth / 2 - 100, clientY: r ? r.top + 12 : innerHeight - 160 });
   }
 }

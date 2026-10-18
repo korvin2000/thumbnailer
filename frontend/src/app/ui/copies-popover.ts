@@ -1,5 +1,6 @@
 import { DatePipe } from '@angular/common';
 import { afterRenderEffect, ChangeDetectionStrategy, Component, computed, ElementRef, inject, output, signal, untracked, viewChild } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Router } from '@angular/router';
 import { CatalogStore } from '../core/catalog-store';
 import { BasenamePipe, BytesPipe } from '../core/format';
@@ -23,7 +24,7 @@ import { Icon } from './shared/icon';
         <p class="hint">Same photo names and sizes at different paths. Compare reads both copies byte for byte.</p>
         <ul>
           @for (a of rows(); track a.id) {
-            @let r = result()[a.id];
+            @let r = verdict(a);
             <li [class.this]="a.id === id">
               <div class="top">
                 <span class="path" [title]="a.path">{{ a.path }}</span>
@@ -91,8 +92,8 @@ export class CopiesPopover {
   protected readonly rows = signal<Album[]>([]);
   protected readonly loading = signal(false);
   protected readonly comparing = signal<string | null>(null);
-  /** Compare results by the copy's id, for this opening only. */
-  protected readonly result = signal<Record<string, Comparison>>({});
+  /** Compare results by the copy's id, for this opening only, each with the revisions of both albums it was computed for. */
+  protected readonly result = signal<Record<string, Comparison & { source: number; copy: number }>>({});
   protected readonly source = computed(() => { const id = this.catalog.copiesOf(); return this.rows().find(a => a.id === id) ?? this.store.byId().get(id ?? '') ?? null; });
   private gen = 0;
 
@@ -107,6 +108,17 @@ export class CopiesPopover {
         dlg.focus(); // keyboard focus stays in the dialog (a clicked Hide button disappears), so Esc reaches it and not the grid
       });
     });
+    // the rows follow the albums (a verdict is tied to the revisions it compared: a changed copy reads "not compared" again)
+    this.gw.events.pipe(takeUntilDestroyed()).subscribe(e => {
+      if (e.type === 'albumChanged') this.rows.update(l => l.map(a => a.id === e.album.id && e.album.revision >= a.revision ? e.album : a));
+      if (e.type === 'albumRemoved') this.rows.update(l => l.filter(a => a.id !== e.albumId));
+    });
+  }
+
+  /** The comparison shown for a copy: only while both albums still are what it compared (the source's and the copy's revision). */
+  protected verdict(a: Album): Comparison | null {
+    const r = this.result()[a.id], s = this.source();
+    return r && s && r.source === s.revision && r.copy === a.revision ? r : null;
   }
 
   private async load(id: string) {
@@ -122,16 +134,18 @@ export class CopiesPopover {
   protected open(a: Album) { this.close(); void this.router.navigate(['/album', a.id]); }
 
   protected async hide(a: Album) {
-    if (await this.store.patch(a.id, { hidden: true })) { this.rows.update(l => l.map(x => x.id === a.id ? { ...x, hidden: true } : x)); this.toasts.show(`Hidden: ${a.name}`); this.dialog().nativeElement.focus(); }
+    const saved = await this.store.patch(a.id, { hidden: true });
+    if (saved) { this.rows.update(l => l.map(x => x.id === a.id ? saved : x)); this.toasts.show(`Hidden: ${a.name}`); this.dialog().nativeElement.focus(); }
   }
 
+  /** A late answer is kept only for the opening (and source) that asked, with the revisions it compared. */
   protected async compare(a: Album) {
-    const id = this.catalog.copiesOf();
-    if (!id) return;
+    const id = this.catalog.copiesOf(), gen = this.gen, src = this.source();
+    if (!id || !src) return;
     this.comparing.set(a.id);
-    try { const r = await this.gw.compareCopies(id, a.id); this.result.update(m => ({ ...m, [a.id]: r })); }
-    catch (e) { this.toasts.error(e, 'Compare failed: '); }
-    finally { this.comparing.set(null); }
+    try { const r = await this.gw.compareCopies(id, a.id); if (gen === this.gen && this.catalog.copiesOf() === id) this.result.update(m => ({ ...m, [a.id]: { ...r, source: src.revision, copy: a.revision } })); }
+    catch (e) { if (gen === this.gen) this.toasts.error(e, 'Compare failed: '); }
+    finally { if (gen === this.gen) this.comparing.set(null); }
   }
 
   protected remove(a: Album) { this.deleteRequested.emit(a); }

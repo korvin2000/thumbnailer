@@ -51,9 +51,9 @@ const SHOWN = 10;
             @if (q.summary; as s) {
               <div class="summary">
                 <div class="totals" [class.none]="!todo()"><b>{{ todo() }}</b> of {{ s.items.length }} to do · {{ s.bytes | bytes }}@if (s.free >= 0) { · {{ s.free | bytes }} free@if (s.bytes > s.free) { <span class="warn"> — not enough space</span> } }</div>
-                @for (x of noted().slice(0, SHOWN); track $index) { <div class="dim"><span class="mono">{{ x.path }}</span> — {{ x.note }}</div> }
-                @for (x of skipped().slice(0, SHOWN); track $index) { <div class="dim skip"><span class="mono">{{ x.path }}</span> — skipped: {{ x.reason ?? 'no reason given' }}</div> }
-                @if (noted().length + skipped().length > 2 * SHOWN) { <div class="dim">and {{ noted().length + skipped().length - 2 * SHOWN }} more</div> }
+                @for (x of notedShown(); track $index) { <div class="dim"><span class="mono">{{ x.path }}</span> — {{ x.note }}</div> }
+                @for (x of skippedShown(); track $index) { <div class="dim skip"><span class="mono">{{ x.path }}</span> — skipped: {{ x.reason ?? 'no reason given' }}</div> }
+                @if (omitted()) { <div class="dim">and {{ omitted() }} more</div> }
                 @for (c of s.consequences; track $index) { <div class="cons"><app-icon name="arrowRight" [size]="13" /> {{ c }}</div> }
                 @for (w of s.warnings; track $index) { <div class="warn"><app-icon name="alert" [size]="13" /> {{ w }}</div> }
               </div>
@@ -124,6 +124,10 @@ export class ConfirmDialog {
   protected readonly more = computed(() => (this.confirm.open()?.items?.length ?? 0) - this.shown().length);
   protected readonly skipped = computed(() => this.confirm.open()?.summary?.items.filter(i => i.skip) ?? []);
   protected readonly noted = computed(() => this.confirm.open()?.summary?.items.filter(i => !i.skip && i.note) ?? []);
+  /** Notes and skips: `SHOWN` of each, every one when `showAll` (a deletion must say all it touches); `omitted` counts what the cut hid. */
+  protected readonly notedShown = computed(() => this.confirm.open()?.showAll ? this.noted() : this.noted().slice(0, SHOWN));
+  protected readonly skippedShown = computed(() => this.confirm.open()?.showAll ? this.skipped() : this.skipped().slice(0, SHOWN));
+  protected readonly omitted = computed(() => this.noted().length - this.notedShown().length + this.skipped().length - this.skippedShown().length);
   protected readonly todo = computed(() => { const s = this.confirm.open()?.summary; return s ? s.items.length - this.skipped().length : 1; });
   /** Why OK is unavailable: a password typed once or twice differently, a required value missing or out of range, or a preflight that leaves nothing to do. */
   protected readonly hint = computed(() => {
@@ -138,7 +142,6 @@ export class ConfirmDialog {
     return this.todo() ? null : 'Nothing to do';
   });
   protected readonly blocked = computed(() => this.hint() !== null);
-  protected readonly SHOWN = SHOWN;
 
   constructor() {
     afterRenderEffect(() => {

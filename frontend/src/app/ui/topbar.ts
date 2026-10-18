@@ -11,6 +11,8 @@ interface Chip { key: string; label: string; icon?: IconName; remove: () => void
 /** Scope chip prefix and icon per entity kind (`entities` filter); tags read `#name`. */
 const SCOPE: Record<EntityKind, [string, IconName]> = { MODEL: ['model:', 'user'], STUDIO: ['studio:', 'building'], PHOTOGRAPHER: ['by:', 'camera'], GENRE: ['genre:', 'sparkles'], TAG: ['#', 'hash'], LIST: ['list:', 'heart'] };
 const NOUN: Record<EntityKind, string> = { MODEL: 'model', STUDIO: 'studio', PHOTOGRAPHER: 'photographer', GENRE: 'genre', TAG: 'tag', LIST: 'list' };
+/** A tag as a regex literal: tags may hold `+` or `.` (the server only strips `#` and whitespace), and a token ends where `search-syntax.ts`'s `[\w-]+` ends. */
+const tagPattern = (t: string) => `#${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`;
 
 @Component({
   selector: 'app-topbar',
@@ -92,7 +94,7 @@ export class Topbar {
     const q = this.store.query(), f = this.store.filters(), s = this.store;
     const out: Chip[] = [];
     const strip = (re: RegExp) => s.text.update(t => t.replace(re, ' ').replace(/\s+/g, ' ').trim());
-    for (const t of q.tags ?? []) out.push({ key: 't:' + t, label: '#' + t, remove: () => { if (f.tags?.includes(t)) s.toggleTag(t); strip(new RegExp(`#${t}\\b`, 'ig')); } });
+    for (const t of q.tags ?? []) out.push({ key: 't:' + t, label: '#' + t, remove: () => { if (f.tags?.includes(t)) s.toggleTag(t); strip(new RegExp(tagPattern(t), 'ig')); } });
     const facet = (key: 'model' | 'studio' | 'photographer', prefix: string, keys: string) => {
       if (q[key]) out.push({ key, label: `${prefix} ${q[key]}`, remove: () => { s.setFilter(key, null); strip(new RegExp(`\\b(${keys}):("[^"]*"|\\S+)`, 'ig')); } });
     };
@@ -117,8 +119,11 @@ export class Topbar {
   });
 
   constructor() {
-    // a scope set by id alone (after a reload of the tree in another mode) still gets its name
-    effect(() => { const ids = this.store.filters().entities ?? []; untracked(() => this.catalog.ensureKnown(ids)); });
+    // a scope set by id alone (after a reload of the tree in another mode) still gets its name, refreshed on every catalog change (a rename elsewhere); a deleted or merged-away id leaves the scope
+    effect(() => {
+      const ids = this.store.filters().entities ?? [], v = this.catalog.version();
+      untracked(() => void this.catalog.ensureKnown(ids, v > 0).then(gone => { if (gone.length) this.store.setFilter('entities', (this.store.filters().entities ?? []).filter(id => !gone.includes(id))); }));
+    });
   }
 
   focusSearch() { this.input().nativeElement.focus(); this.input().nativeElement.select(); }

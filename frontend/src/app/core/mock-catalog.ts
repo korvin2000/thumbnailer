@@ -62,13 +62,13 @@ export class MockCatalog {
     this.created.clear();
   }
 
-  /** Under another entity, the items are those linked to its visible albums and `albums` is the count shared with it (sort COUNT by that number). */
+  /** Under another entity, the items are those linked to its visible albums and `albums` is the count shared with it (sort COUNT by that number); `unused` = auto entities no album links to, hidden ones included. */
   async entities(kind: EntityKind, o: EntityQuery = {}): Promise<EntityList> {
     await delay(40);
     const t = o.text ? norm(kind, o.text) : '', scope = o.under != null ? this.albumsOf(o.under) : null, offset = o.offset ?? 0;
     const limit = o.limit! > 0 ? Math.min(o.limit!, LIMIT) : 100;
     const count = (r: Row) => scope ? scope.filter(a => a.links.some(l => l.entity === r.id)).length : r.albums;
-    const all = [...this.rows.values()].filter(r => r.kind === kind && (!t || [r.name, ...r.aliases].some(n => norm(kind, n).startsWith(t))))
+    const all = [...this.rows.values()].filter(r => r.kind === kind && (!o.unused || r.auto && !this.albumsOf(r.id, true).length) && (!t || [r.name, ...r.aliases].some(n => norm(kind, n).startsWith(t))))
       .map(r => ({ ...this.view(r), albums: count(r) })).filter(e => !scope || e.albums > 0)
       .sort((x, y) => (o.byCount ? y.albums - x.albums : 0) || x.name.localeCompare(y.name));
     return { items: all.slice(offset, offset + limit), total: all.length };

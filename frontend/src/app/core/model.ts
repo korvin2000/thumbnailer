@@ -49,7 +49,8 @@ export const ENTITY_KINDS: EntityKind[] = ['MODEL', 'STUDIO', 'PHOTOGRAPHER', 'G
 export interface Entity { id: number; kind: EntityKind; name: string; rating: number; auto: boolean; albums: number; profile?: string; photos?: number }
 /** One album → entity link; `alias` = the token as written when it is not the primary name. */
 export interface Link { entity: number; role: EntityKind; name: string; alias?: string }
-export interface EntityQuery { text?: string; under?: number; byCount?: boolean; offset?: number; limit?: number }
+/** `unused`: only `auto` entities no album links to, hidden albums included (the server's filter; the UI never derives it from the visible count). */
+export interface EntityQuery { text?: string; under?: number; byCount?: boolean; unused?: boolean; offset?: number; limit?: number }
 export interface EntityList { items: Entity[]; total: number }
 /** Curated entity → entity fact as read (`roles` = genre names, model → studio only). */
 export interface EntityLinkOut { to: Entity; alias?: string; roles?: string }
@@ -214,7 +215,8 @@ export type Conflict = 'SKIP' | 'RENAME';
 /** Album ops name albums (`albumIds`/`query`), COPY_PHOTOS one album and its entry `names`, FOLDER_* the folder in `paths[0]`; `target` = destination folder (FOLDER_RENAME: the new name). */
 export interface Op extends AlbumTarget { kind: OpKind; paths?: string[]; target?: string; format?: PackFormat; encrypt?: boolean; names?: string[]; conflict: Conflict; password?: string }
 export interface PreflightItem { path: string; skip: boolean; reason?: string; note?: string }
-export interface Preflight { items: PreflightItem[]; bytes: number; free: number; warnings: string[]; consequences: string[] }
+/** `keyVerified` (CRYPT encrypt): the session key decrypted an existing `.cry` of the selection, so no password is asked again; absent or false = the password is typed twice first (§4.5). */
+export interface Preflight { items: PreflightItem[]; bytes: number; free: number; warnings: string[]; consequences: string[]; keyVerified?: boolean }
 export interface OpProgress { id: string; kind: OpKind; running: boolean; total: number; done: number; current: string | null; skipped: number; failed: number; message: string | null; startedAt: string | null; finishedAt: string | null }
 export interface OpIssue { item: string; reason: string }
 export interface OpResult { id: string; done: number; skipped: OpIssue[]; failed: OpIssue[] }

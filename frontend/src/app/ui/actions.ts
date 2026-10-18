@@ -3,7 +3,7 @@ import { Router } from '@angular/router';
 import { CatalogStore } from '../core/catalog-store';
 import { FolderPicker } from '../core/folder-picker';
 import { Gateway } from '../core/gateway';
-import { Album, AlbumTarget, Entity, EntityKind, Filters, Op, PackFormat } from '../core/model';
+import { Album, AlbumTarget, Entity, EntityKind, Filters, Op, PackFormat, Preflight } from '../core/model';
 import { OpsStore } from '../core/ops-store';
 import { dir, lastSegment } from '../core/paths';
 import { Prefs } from '../core/prefs';
@@ -14,7 +14,7 @@ import type { EntityTreeContext } from './entity-tree';
 import type { FolderMenuEvent } from './folder-tree';
 import { NOUN } from './kinds';
 import { AlbumActions, albumMenu, allHidden, canvasMenu, EntityActions, entityMenu, FolderActions, folderMenu, plural, Target } from './menus';
-import { confirmFor, finalize, KeyState, passwordRequest } from './op-confirm';
+import { confirmFor, finalize, KeyState, needsPassword, passwordRequest } from './op-confirm';
 import { Confirm } from './shared/confirm';
 import { ContextMenu, MenuEntry } from './shared/context-menu';
 import { EntityPicker } from './shared/entity-picker';
@@ -71,9 +71,10 @@ export class Actions implements AlbumActions, FolderActions, EntityActions {
     this.menu.open(e.x, e.y, folderMenu(path, root, t, this));
   }
 
+  /** A child row's albums are its scope (parent ∧ child), not every album of the child. */
   openEntityMenu(c: EntityTreeContext) {
     const e = c.entity, noun = NOUN[c.kind];
-    const t = e ? this.queryTarget({ entities: [e.id] }, `albums of ${e.name}`) : c.missing ? this.queryTarget({ missing: c.kind }, `albums without a ${noun}`) : this.queryTarget({}, 'all albums');
+    const t = e ? this.queryTarget({ entities: c.scope ?? [e.id] }, `albums of ${e.name}`) : c.missing ? this.queryTarget({ missing: c.kind }, `albums without a ${noun}`) : this.queryTarget({}, 'all albums');
     this.menu.open(c.x, c.y, entityMenu(c, this.store.selection.size(), t, this));
   }
 
@@ -134,19 +135,29 @@ export class Actions implements AlbumActions, FolderActions, EntityActions {
     if (l) await this.favorite(t, l.id, true);
   }
 
-  pack(t: Target, format: PackFormat) { return this.operate({ kind: 'PACK', ...this.sel(t), format, conflict: 'RENAME' }, t.label); }
+  /** The format is sent explicitly even for the default, so the dialog's title names it. */
+  pack(t: Target, format = this.packFormat()) { return this.operate({ kind: 'PACK', ...this.sel(t), format, conflict: 'RENAME' }, t.label); }
+  packFormat(): PackFormat { return this.store.settings()?.settings.ops?.packFormat ?? 'AUTO'; }
   unpack(t: Target) { return this.operate({ kind: 'UNPACK', ...this.sel(t), conflict: 'RENAME' }, t.label); }
   repack(t: Target, format: PackFormat) { return this.operate({ kind: 'REPACK', ...this.sel(t), format, conflict: 'RENAME' }, t.label); }
 
-  /** Encrypt / decrypt need a key: the session key when the server holds one, else a password typed twice before the preflight (which skips every item without it). */
+  /**
+   * Encrypt / decrypt (`needsPassword`, §4.5): encryption runs with the session key once the preflight proved it against an existing `.cry` of
+   * the selection; otherwise the password typed twice becomes the session key (saved as `cryPassword`, so the result is readable and re-indexed)
+   * and the preflight runs again with it. Decryption without a session key takes the typed password for this operation alone.
+   */
   async crypt(t: Target, encrypt: boolean) {
     const op: Op = { kind: 'CRYPT', ...this.sel(t), encrypt, conflict: 'RENAME' };
-    if (!this.key().fingerprint) {
+    let pre: Preflight | null = encrypt ? await this.ops.preflight(op) : null;
+    if (encrypt && !pre) return;
+    if (needsPassword(op, pre, this.key())) {
       const r = await this.confirm.ask(passwordRequest(op, t.label));
       if (!r) return;
-      op.password = String(r['password']);
+      const password = String(r['password']);
+      if (!encrypt) op.password = password;
+      else { const s = this.store.settings()?.settings; if (!s || !await this.store.saveSettings({ ...s, cryPassword: password }, 'Session key set')) return; pre = null; }
     }
-    await this.operate(op, t.label);
+    await this.operate(op, t.label, pre);
   }
 
   async moveTo(t: Target) {
@@ -170,10 +181,10 @@ export class Actions implements AlbumActions, FolderActions, EntityActions {
 
   delete(t: Target) { return this.operate({ kind: 'DELETE', ...this.sel(t), conflict: 'SKIP' }, t.label); }
 
-  /** `Ctrl+A` / Select all: every loaded album, loading further pages until `cap` or the end (each page joins the selection as it lands). */
+  /** `Ctrl+A` / Select all: every loaded album, loading further pages until `cap` or the end (each page joins the selection as it lands); a query change ends it. */
   async selectAll(cap = SELECT_CAP) {
-    const s = this.store;
-    for (let n = -1; n < s.albums().length;) {
+    const s = this.store, q = s.query();
+    for (let n = -1; n < s.albums().length && s.query() === q;) {
       n = s.albums().length;
       s.selection.selectAll(s.albums().map(a => a.id), cap);
       if (n >= cap || n >= s.total()) break;
@@ -193,11 +204,11 @@ export class Actions implements AlbumActions, FolderActions, EntityActions {
 
   rescan(path: string | null) { void this.store.startScan(path ? [path] : undefined); }
 
-  /** The server reveals albums, not folders: the first album below the folder stands in (Explorer opens its parent, the folder itself for a direct child). */
+  /** `reveal` with the folder's path; the first album below it goes along for a server that reveals albums only (it then opens that album's parent). */
   async revealFolder(path: string) {
     try {
       const r = await this.gw.search({ roots: [path], sort: 'NAME', offset: 0, limit: 1 });
-      if (r.albums[0]) await this.store.reveal(r.albums[0].id); else this.toasts.show('No album below this folder to show');
+      await this.store.reveal(r.albums[0]?.id ?? null, path);
     } catch (e) { this.toasts.error(e, 'Cannot open: '); }
   }
 
@@ -223,7 +234,7 @@ export class Actions implements AlbumActions, FolderActions, EntityActions {
   // ---- entities ----
 
   openCard(id: number) { this.catalog.openCard(id); this.prefs.detailsOpen.set(true); }
-  showAlbums(c: EntityTreeContext) { this.store.setFilter('missing', c.missing ? c.kind : null); this.store.setFilter('entities', c.entity ? [c.entity.id] : null); }
+  showAlbums(c: EntityTreeContext) { this.store.setFilter('missing', c.missing ? c.kind : null); this.store.setFilter('entities', c.entity ? c.scope ?? [c.entity.id] : null); }
   showPhotos(e: Entity) { void this.router.navigate(['/list', e.id]); }
 
   async renameEntity(e: Entity) {
@@ -278,9 +289,9 @@ export class Actions implements AlbumActions, FolderActions, EntityActions {
 
   private key(): KeyState { return { fingerprint: this.store.settings()?.settings.cryKey ?? null }; }
 
-  /** Every file operation: preflight → Confirm with its summary and options → run; a move or delete ends the selection (the albums leave). */
-  private async operate(op: Op, label: string): Promise<boolean> {
-    const pre = await this.ops.preflight(op);
+  /** Every file operation: preflight (`pre` when the caller already has it) → Confirm with its summary and options → run; a move or delete ends the selection (the albums leave). */
+  private async operate(op: Op, label: string, pre: Preflight | null = null): Promise<boolean> {
+    pre ??= await this.ops.preflight(op);
     if (!pre) return false;
     const r = await this.confirm.ask(confirmFor(op, pre, label, this.key()));
     if (!r) return false;

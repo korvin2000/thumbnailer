@@ -76,7 +76,7 @@ export class App {
 
   private async showResult(r: OpResult) {
     this.ops.issues.set(null);
-    const what = opNoun(this.ops.opOf({ kind: this.ops.progress()?.kind ?? this.ops.current()?.kind ?? 'MOVE' }));
+    const k = this.ops.kindOf(r.id), what = k ? opNoun(k) : 'Operation';
     await this.confirm.ask({
       title: `${what}: ${r.done} done, ${r.skipped.length} skipped, ${r.failed.length} failed`, showAll: true, okLabel: 'Close', cancelLabel: null,
       items: [...r.skipped.map(s => `${s.item} — skipped: ${s.reason}`), ...r.failed.map(f => `${f.item} — failed: ${f.reason}`)],
@@ -84,7 +84,8 @@ export class App {
   }
 
   protected onKey(e: KeyboardEvent) {
-    if (e.altKey || (e.target as HTMLElement)?.closest('input, textarea, select, dialog[open]')) return;
+    // any open modal owns the keyboard, even when its focus fell back to <body> (a focused row it removed): the target alone would not tell
+    if (e.altKey || (e.target as HTMLElement)?.closest('input, textarea, select') || document.querySelector('dialog[open]')) return;
     const overlay = OVERLAY.test(this.router.url);
     if (e.ctrlKey || e.metaKey) {
       if (overlay || e.shiftKey || e.key.toLowerCase() !== 'a') return;

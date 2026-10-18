@@ -1,6 +1,8 @@
 import { afterRenderEffect, ChangeDetectionStrategy, Component, computed, ElementRef, inject, Injectable, signal, untracked, viewChild } from '@angular/core';
+import { CatalogStore } from '../../core/catalog-store';
 import { Gateway } from '../../core/gateway';
 import { Entity, EntityKind } from '../../core/model';
+import { AlbumStore } from '../../core/store';
 import { Icon } from './icon';
 
 export interface EntityPickRequest { kind: EntityKind; title?: string; allowCreate?: boolean }
@@ -31,12 +33,12 @@ export class EntityPicker {
 
 const NOUN: Record<EntityKind, string> = { MODEL: 'model', STUDIO: 'studio', PHOTOGRAPHER: 'photographer', GENRE: 'genre', TAG: 'tag', LIST: 'list' };
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
-const RECENT = 8, recentKey = (kind: EntityKind) => `thumbnailer.recent.${kind}`;
-/** The last picks of a kind (localStorage snapshots, refreshed from the search when the entity shows up in it). */
-const readRecent = (kind: EntityKind): Entity[] => { try { return JSON.parse(localStorage.getItem(recentKey(kind)) ?? '[]'); } catch { return []; } };
-const writeRecent = (kind: EntityKind, list: Entity[]) => { try { localStorage.setItem(recentKey(kind), JSON.stringify(list)); } catch { /* storage unavailable */ } };
+/** The last picks of a kind, per library (`dataDir`: entity ids are that library's): localStorage snapshots, only ever shown as the server's current copy. */
+const RECENT = 8, recentKey = (lib: string, kind: EntityKind) => `thumbnailer.recent.${lib}.${kind}`;
+const readRecent = (lib: string, kind: EntityKind): Entity[] => { try { return JSON.parse(localStorage.getItem(recentKey(lib, kind)) ?? '[]'); } catch { return []; } };
+const writeRecent = (lib: string, kind: EntityKind, list: Entity[]) => { try { localStorage.setItem(recentKey(lib, kind), JSON.stringify(list)); } catch { /* storage unavailable */ } };
 
-/** Search box over `Gateway.entities` (debounced, newest answer wins), recent picks first while the box is empty, ↑ ↓ ⏎ Esc, "Create …" when allowed and nothing matches exactly. */
+/** Search box over `Gateway.entities` (debounced, newest answer wins), recent picks first while the box is empty (as the server knows them now), ↑ ↓ ⏎ Esc, "Create …" when allowed and nothing matches exactly. */
 @Component({
   selector: 'app-entity-picker',
   imports: [Icon],
@@ -101,6 +103,8 @@ const writeRecent = (kind: EntityKind, list: Entity[]) => { try { localStorage.s
 export class EntityPickerDialog {
   protected readonly picker = inject(EntityPicker);
   private readonly gw = inject(Gateway);
+  private readonly store = inject(AlbumStore);
+  private readonly catalog = inject(CatalogStore);
   private readonly dialog = viewChild.required<ElementRef<HTMLDialogElement>>('dlg');
   private readonly box = viewChild<ElementRef<HTMLInputElement>>('box');
   protected readonly noun = NOUN;
@@ -113,8 +117,13 @@ export class EntityPickerDialog {
   protected readonly error = signal<string | null>(null);
   /** Keyboard row over `rows()`; `rows().length` = the Create row. */
   protected readonly active = signal(0);
-  /** Recent picks lead while the box is empty, with the search's fresher copy of each where it has one. */
-  protected readonly recentShown = computed(() => this.text().trim() ? [] : this.recent().map(r => this.items().find(e => e.id === r.id) ?? r));
+  /** The library the recents belong to ('' until the settings are in: no recents then). */
+  private readonly lib = computed(() => this.store.settings()?.dataDir ?? '');
+  /** Recent picks lead while the box is empty: the server's current copy of each (the search's, else `CatalogStore.known`, fetched on open), so a renamed one shows its new name and a deleted or merged-away one is gone. */
+  protected readonly recentShown = computed(() => {
+    const kind = this.picker.open()?.kind, known = this.catalog.known();
+    return this.text().trim() || !kind ? [] : this.recent().map(r => this.items().find(e => e.id === r.id) ?? known.get(r.id)).filter((e): e is Entity => !!e && e.kind === kind);
+  });
   protected readonly rest = computed(() => { const seen = new Set(this.recentShown().map(e => e.id)); return this.items().filter(e => !seen.has(e.id)); });
   protected readonly rows = computed(() => [...this.recentShown(), ...this.rest()]);
   protected readonly canCreate = computed(() => { const t = norm(this.text()); return !!this.picker.open()?.allowCreate && !!t && !this.items().some(e => norm(e.name) === t); });
@@ -127,7 +136,9 @@ export class EntityPickerDialog {
       const req = this.picker.open(), dlg = this.dialog().nativeElement;
       untracked(() => {
         if (!req) { this.gen++; clearTimeout(this.timer); if (dlg.open) dlg.close(); return; }
-        this.items.set([]); this.total.set(0); this.error.set(null); this.recent.set(readRecent(req.kind)); // a new request (even one replacing an open one) starts over
+        const recent = this.lib() ? readRecent(this.lib(), req.kind) : [];
+        this.items.set([]); this.total.set(0); this.error.set(null); this.recent.set(recent); // a new request (even one replacing an open one) starts over
+        void this.catalog.ensureKnown(recent.map(r => r.id), true);
         this.search('', 0);
         if (!dlg.open) dlg.showModal();
         this.box()?.nativeElement.focus();
@@ -163,10 +174,9 @@ export class EntityPickerDialog {
     e.preventDefault();
   }
 
-  /** Chooses `e` and remembers it as the kind's newest recent pick. */
+  /** Chooses `e` (a server copy: a row shown) and remembers it as the kind's newest recent pick of this library. */
   protected pick(e: Entity) {
-    const list = [e, ...this.recent().filter(r => r.id !== e.id)].slice(0, RECENT);
-    writeRecent(e.kind, list);
+    if (this.lib()) writeRecent(this.lib(), e.kind, [e, ...this.recent().filter(r => r.id !== e.id)].slice(0, RECENT));
     this.picker.choose(e);
   }
 

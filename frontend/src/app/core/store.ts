@@ -70,7 +70,8 @@ export class AlbumStore {
   private facetsTimer?: ReturnType<typeof setTimeout>;
 
   constructor() {
-    effect(() => { const q = this.query(); untracked(() => this.runSearch(q, 120)); });
+    // another query shows other albums: a selection made over the old ones would act on albums no longer shown (a refresh keeps it: same query)
+    effect(() => { const q = this.query(); untracked(() => { this.selection.clear(); this.runSearch(q, 120); }); });
     this.gw.events.subscribe(e => this.onEvent(e));
     this.loadSettings();
     this.loadFacets(0);
@@ -136,14 +137,15 @@ export class AlbumStore {
   async patch(id: string, patch: AlbumPatch): Promise<Album | null> {
     try {
       const a = await this.gw.update(id, patch);
-      this.albums.update(l => l.map(x => x.id === a.id ? a : x));
+      this.replace(a);
       this.loadFacets();
       return a;
     } catch (e) { this.toasts.error(e, 'Save failed: '); return null; }
   }
 
-  async reveal(id: string) {
-    try { await this.gw.reveal(id); if (this.gw.mock) this.toasts.show('Would open the folder in your file manager'); }
+  /** The album's folder, or `path` itself (a folder of the tree; see `Gateway.reveal`). */
+  async reveal(id: string | null, path?: string) {
+    try { await this.gw.reveal(id, path); if (this.gw.mock) this.toasts.show('Would open the folder in your file manager'); }
     catch (e) { this.toasts.error(e, 'Cannot open folder: '); }
   }
 
@@ -157,8 +159,8 @@ export class AlbumStore {
     try { await this.gw.cancelScan(); } catch (e) { this.toasts.error(e); }
   }
 
-  async saveSettings(s: Settings) {
-    try { this.applySettings(await this.gw.setSettings(s)); this.treeVersion.update(v => v + 1); this.toasts.show('Settings saved', 'success'); return true; }
+  async saveSettings(s: Settings, done = 'Settings saved') {
+    try { this.applySettings(await this.gw.setSettings(s)); this.treeVersion.update(v => v + 1); this.toasts.show(done, 'success'); return true; }
     catch (e) { this.toasts.error(e, 'Saving settings failed: '); return false; }
   }
 
@@ -167,9 +169,13 @@ export class AlbumStore {
   }
 
   private applySettings(info: SettingsInfo) {
+    const was = this.settings()?.dataDir;
     this.settings.set(info);
     const f = this.folder(); // a folder of another library (after a switch) or of a removed root is no longer a valid scope
     if (f && !this.rootOf(f)) this.goTo(null);
+    if (was !== undefined && was !== info.dataDir) { // another library: its entity ids are other entities here
+      this.setFilter('entities', null); this.setFilter('missing', null); this.catalog.reset();
+    }
   }
 
   // ---- library ----
@@ -202,6 +208,9 @@ export class AlbumStore {
 
   // ---- internals ----
 
+  /** Shows `a` in place of the album it updates, unless the one shown is already newer (a reply or event overtaken by a later one). */
+  private replace(a: Album) { this.albums.update(l => l.map(x => x.id === a.id && a.revision >= x.revision ? a : x)); }
+
   private runSearch(q: AlbumQuery, delay: number) {
     clearTimeout(this.searchTimer);
     this.generation++;
@@ -225,7 +234,7 @@ export class AlbumStore {
   private onEvent(e: GatewayEvent) {
     switch (e.type) {
       case 'albumChanged':
-        if (this.byId().has(e.album.id)) this.albums.update(l => l.map(a => a.id === e.album.id ? e.album : a));
+        if (this.byId().has(e.album.id)) this.replace(e.album);
         this.refresh(600);
         this.loadFacets(2000);
         break;
@@ -255,9 +264,9 @@ export class AlbumStore {
       case 'opProgress':
         this.ops.onProgress(e);
         break;
-      case 'opResult': // paths, roots and folders may have moved
+      case 'opResult': // paths, roots and folders may have moved, and deleted albums leave the entity counts (no `catalogChanged` says so)
         this.ops.onResult(e);
-        this.loadSettings(); this.treeVersion.update(v => v + 1); this.refresh(600);
+        this.loadSettings(); this.treeVersion.update(v => v + 1); this.refresh(600); this.catalog.onChanged(ENTITY_KINDS);
         break;
     }
   }

@@ -49,12 +49,12 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
 
       @if (e.kind !== 'TAG') {
         <div class="chips">
-          @for (a of c.aliases; track a) { <span class="chip"><span>{{ a }}</span><button title="Remove alias" (click)="setAliases(c.aliases.filter(x => x !== a))"><app-icon name="x" [size]="11" /></button></span> }
+          @for (a of c.aliases; track a) { <span class="chip"><span>{{ a }}</span><button title="Remove alias" (click)="removeAlias(a)"><app-icon name="x" [size]="11" /></button></span> }
           <input class="input sm chip-input" placeholder="Add alias ⏎" (keydown.enter)="addAlias($any($event.target)); $event.preventDefault()" />
         </div>
       }
 
-      @if (e.kind === 'MODEL') { <section><h3>Rating</h3><app-rating [value]="e.rating" (valueChange)="save({ rating: $event })" /></section> }
+      @if (e.kind === 'MODEL') { <section><h3>Rating</h3><app-rating [value]="e.rating" (valueChange)="rate($event)" /></section> }
 
       @let albums = c.derived?.albums ?? e.albums;
       <div class="counts">
@@ -103,7 +103,7 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
                     </td>
                     <td><input class="input sm roles" [value]="s.roles" placeholder="roles" [title]="s.curated ? 'Roles there (comma-separated genres)' : 'Set roles to curate this link'" (change)="setRoles(s, $any($event.target).value)" /></td>
                     <td class="r">{{ s.albums || '—' }}</td>
-                    <td>@if (s.curated) { <button class="x" title="Remove the curated link" (click)="setLinks(linksWithout(s.entity.id))"><app-icon name="x" [size]="11" /></button> }</td>
+                    <td>@if (s.curated) { <button class="x" title="Remove the curated link" (click)="removeLink(s.entity.id)"><app-icon name="x" [size]="11" /></button> }</td>
                   </tr>
                 }
               </tbody>
@@ -121,7 +121,7 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
           <h3><app-icon [name]="icon[s.kind]" [size]="13" /> {{ s.label }}</h3>
           <div class="chips">
             @for (l of curated; track l.to.id) {
-              <span class="chip active" [title]="(s.curated ?? 'curated') + (l.roles ? ' · ' + l.roles : '')"><button class="t" (click)="open.emit(l.to.id)">{{ l.to.name }}</button>@if (s.curated) { <em>{{ s.curated }}</em> }<button title="Remove" (click)="setLinks(linksWithout(l.to.id))"><app-icon name="x" [size]="11" /></button></span>
+              <span class="chip active" [title]="(s.curated ?? 'curated') + (l.roles ? ' · ' + l.roles : '')"><button class="t" (click)="open.emit(l.to.id)">{{ l.to.name }}</button>@if (s.curated) { <em>{{ s.curated }}</em> }<button title="Remove" (click)="removeLink(l.to.id)"><app-icon name="x" [size]="11" /></button></span>
             }
             @for (d of derived; track d.id) { <button class="chip derived" title="From albums" (click)="open.emit(d.id)">{{ d.name }}<span class="n">{{ d.albums }}</span></button> }
             <button class="btn sm ghost add" (click)="addLink(s.kind)"><app-icon name="plus" [size]="13" /> Add {{ noun[s.kind] }}…</button>
@@ -134,7 +134,7 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
         <section>
           <h3><app-icon name="hash" [size]="13" /> Hashtags</h3>
           <div class="chips">
-            @for (l of tags; track l.to.id) { <span class="chip active"><button class="t" (click)="store.toggleTag(l.to.name)" title="Filter by this tag">#{{ l.to.name }}</button><button title="Remove" (click)="setLinks(linksWithout(l.to.id))"><app-icon name="x" [size]="11" /></button></span> }
+            @for (l of tags; track l.to.id) { <span class="chip active"><button class="t" (click)="store.toggleTag(l.to.name)" title="Filter by this tag">#{{ l.to.name }}</button><button title="Remove" (click)="removeLink(l.to.id)"><app-icon name="x" [size]="11" /></button></span> }
             @for (t of derivedTags(c); track t) { <button class="chip derived" title="From albums" (click)="store.toggleTag(t)">#{{ t }}</button> }
             <input class="input sm chip-input" placeholder="Add tag ⏎" (keydown.enter)="addTag($any($event.target)); $event.preventDefault()" />
           </div>
@@ -249,27 +249,27 @@ export class EntityCardView {
   protected linksOf(c: EntityCard, kind: EntityKind) { return c.links.filter(l => l.to.kind === kind); }
   protected derivedOf(c: EntityCard, s: Section) { const curated = new Set(this.linksOf(c, s.kind).map(l => l.to.id)); return (c.derived ? s.derived(c.derived) ?? [] : []).filter(d => !curated.has(d.id)); }
   protected derivedTags(c: EntityCard) { const own = new Set(this.linksOf(c, 'TAG').map(l => l.to.name)); return (c.derived?.tags ?? []).filter(t => !own.has(t)); }
-  protected linksWithout(id: number): EntityLinkIn[] { return this.links().filter(l => l.to !== id); }
-  private links(): EntityLinkIn[] { return (this.catalog.card()?.links ?? []).map(l => ({ to: l.to.id, ...(l.alias ? { alias: l.alias } : {}), ...(l.roles ? { roles: l.roles } : {}) })); }
+  private links(c: EntityCard): EntityLinkIn[] { return c.links.map(l => ({ to: l.to.id, ...(l.alias ? { alias: l.alias } : {}), ...(l.roles ? { roles: l.roles } : {}) })); }
 
-  // ---- edits (each one save; null `aliases`/`links` keep the current set) ----
+  // ---- edits (each one queued save, built from the card as it is when sent; null `aliases`/`links` keep the current set) ----
 
-  protected rename(name: string) { if (name.trim() && name.trim() !== this.catalog.card()?.entity.name) void this.save({ name: name.trim() }); }
-  protected setAliases(aliases: string[]) { void this.save({ aliases }); }
+  protected rename(name: string) { const n = name.trim(); if (n) void this.save(c => n !== c.entity.name ? { name: n } : null); }
+  protected rate(rating: number) { void this.save(() => ({ rating })); }
+  protected removeAlias(a: string) { void this.save(c => ({ aliases: c.aliases.filter(x => x !== a) })); }
   protected addAlias(input: HTMLInputElement) {
-    const a = input.value.trim(), c = this.catalog.card();
+    const a = input.value.trim();
     input.value = '';
-    if (a && c && !c.aliases.includes(a.toLowerCase())) void this.save({ aliases: [...c.aliases, a] });
+    if (a) void this.save(c => c.aliases.includes(a.toLowerCase()) ? null : { aliases: [...c.aliases, a] });
   }
   protected setField(f: Field, raw: string) {
     const value = f.type === 'number' ? (raw === '' ? '' : Number(raw)) : f.type === 'chips' ? parseChips(raw) : raw.trim();
-    void this.save({ profile: withField(this.profile(), f.key, value) });
+    void this.save(c => ({ profile: withField(parseProfile(c.entity.profile), f.key, value) }));
   }
-  protected setLinks(links: EntityLinkIn[]) { void this.save({ links }); }
+  protected removeLink(id: number) { void this.save(c => ({ links: this.links(c).filter(l => l.to !== id) })); }
   protected setRoles(s: StudioLine, roles: string) {
     const r = roles.trim();
     if (r === s.roles) return;
-    void this.setLinks([...this.linksWithout(s.entity.id), { to: s.entity.id, ...(s.alias ? { alias: s.alias } : {}), ...(r ? { roles: r } : {}) }]);
+    void this.save(c => ({ links: [...this.links(c).filter(l => l.to !== s.entity.id), { to: s.entity.id, ...(s.alias ? { alias: s.alias } : {}), ...(r ? { roles: r } : {}) }] }));
   }
 
   protected edit(s: StudioLine) { this.editing.set(s.entity.id); setTimeout(() => this.host.querySelector<HTMLInputElement>('input.alias')?.focus()); }
@@ -285,7 +285,7 @@ export class EntityCardView {
     const c = this.catalog.card();
     if (!c) return;
     const e = await this.picker.pick({ kind, title: `Add ${NOUN[kind]} to ${c.entity.name}`, allowCreate: true });
-    if (e && e.id !== c.entity.id && !c.links.some(l => l.to.id === e.id)) void this.setLinks([...this.links(), { to: e.id }]);
+    if (e && e.id !== c.entity.id) void this.save(x => x.links.some(l => l.to.id === e.id) ? null : { links: [...this.links(x), { to: e.id }] });
   }
 
   /** A hashtag is a TAG entity: found by name, else created, then linked. */
@@ -296,7 +296,7 @@ export class EntityCardView {
     try {
       const found = (await this.gw.entities('TAG', { text: name, limit: 20 })).items.find(t => t.name === name.toLowerCase().replace(/\s+/g, '-'));
       const id = found?.id ?? (await this.catalog.trySave({ kind: 'TAG', name, rating: 0, profile: null, aliases: [], links: [] })).entity.id;
-      if (!c.links.some(l => l.to.id === id)) void this.setLinks([...this.links(), { to: id }]);
+      void this.save(x => x.links.some(l => l.to.id === id) ? null : { links: [...this.links(x), { to: id }] });
     } catch (e) { this.toasts.error(e, 'Tag failed: '); }
   }
 
@@ -305,16 +305,13 @@ export class EntityCardView {
   protected showAlbums() { const c = this.catalog.card(); if (c) { this.store.setFilter('missing', null); this.store.setFilter('entities', [c.entity.id]); } }
   protected showPhotos() { const c = this.catalog.card(); if (c) void this.router.navigate(['/list', c.entity.id]); }
 
-  /** One `saveEntity` with the card's current values under `patch`. */
-  protected save(patch: Partial<EntitySave>) {
-    const c = this.catalog.card();
-    return c ? this.attempt(this.catalog.trySave({ id: c.entity.id, kind: c.entity.kind, name: c.entity.name, rating: c.entity.rating, profile: c.entity.profile ?? null, ...patch })) : Promise.resolve();
-  }
+  /** One `saveEntity` through `CatalogStore.trySaveCard`: queued behind the card's earlier saves, `patch` over the card as it is when sent. */
+  protected save(patch: (c: EntityCard) => Partial<EntitySave> | null) { return this.attempt(this.catalog.trySaveCard(patch)); }
 
-  /** Runs one mutation with the saving state; a name collision becomes a merge offer, any other failure a toast. */
+  /** Runs one mutation with the saving state; a name collision becomes a merge offer, any other failure a toast (null = nothing was sent). */
   private async attempt(p: Promise<unknown>) {
     this.saving.set(true);
-    try { await p; this.flash(); }
+    try { if (await p !== null) this.flash(); }
     catch (e) { const taken = CatalogStore.takenBy(e); if (taken) await this.offerMerge(taken); else this.toasts.error(e, 'Save failed: '); }
     finally { this.saving.set(false); }
   }
