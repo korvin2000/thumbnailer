@@ -213,8 +213,10 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
             case Request.GetSettings g -> settingsInfo();
             case Request.SetSettings(var s) -> setSettings(Objects.requireNonNull(s, "settings are required"));
             case Request.FacetsOf(var query) -> new Event.FacetCounts(repo.facets(query == null ? AlbumQuery.ALL : query));
-            case Request.Reveal(var albumId) -> {
-                reveal(settings.get().locate(find(albumId).path()));
+            case Request.Reveal(var albumId, var path) -> {
+                var s = settings.get();
+                if (path == null) reveal(s.locate(find(albumId).path()), true);
+                else reveal(folder(s, Containers.normalize(Path.of(path))), false);
                 yield OK;
             }
             case Request.Folders(var path) -> {
@@ -272,10 +274,19 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
         }).toList(), Long.toHexString(Hashing.wyhashFinal4().hashLongLongToLong(current.covers().epoch(), current.thumbs().epoch())));
     }
 
-    /** Opens the containing folder in the OS file manager; Explorer also selects the album. */
-    private static void reveal(Path album) throws IOException {
-        if (System.getProperty("os.name").startsWith("Windows")) new ProcessBuilder("explorer.exe", "/select,", album.toString()).start();
-        else java.awt.Desktop.getDesktop().open(album.getParent().toFile());
+    /** Opens a folder in the OS file manager: {@code path} itself, or ({@code select}) the one holding it, which Explorer selects. */
+    private static void reveal(Path path, boolean select) throws IOException {
+        if (System.getProperty("os.name").startsWith("Windows"))
+            new ProcessBuilder(select ? List.of("explorer.exe", "/select,", path.toString()) : List.of("explorer.exe", path.toString())).start();
+        else java.awt.Desktop.getDesktop().open((select ? path.getParent() : path).toFile());
+    }
+
+    /** Where canonical {@code folder} is on disk; only a folder at or below a configured root is shown. */
+    private static Path folder(Settings s, String folder) {
+        if (s.root(folder).isEmpty()) throw new IllegalArgumentException("Not inside an indexed folder: " + folder);
+        var at = s.locate(folder);
+        if (!Files.isDirectory(at)) throw new NoSuchElementException("No folder " + folder);
+        return at;
     }
 
     private String text(Event event, JsonNode id) {

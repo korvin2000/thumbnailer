@@ -117,6 +117,12 @@ public final class SevenZipContainer implements AlbumContainer {
                         kept.put(list.getLast().name(), head);
                         keptBytes += head.length;
                     }
+
+                    @Override public void link(String entry, long size, long mtime) { // listed, as in the native branch, never extracted
+                        if (exclusions.excludes(prefix + entry)) return;
+                        refused.put(entry, refs.put(entry, new Ref(list.size(), size)) != null ? "Duplicate entry name" : "Link entry");
+                        list.add(new Item(entry, size, mtime));
+                    }
                 }, null);
             } else {
                 boolean backslashes = File.separatorChar == '\\'; // 7-Zip reports native separators

@@ -7,9 +7,11 @@ import java.util.List;
 
 /**
  * What an operation would do, for its confirm dialog: each item (done or skipped, and why), the bytes it moves, the free
- * space at the target ({@code -1}: no target), warnings and the consequences in words.
+ * space at the target ({@code -1}: no target), warnings and the consequences in words; {@code keyVerified} (an
+ * encryption only, else absent): the key decrypted an existing {@code .cry} member of the selection.
  */
-public record Preflight(List<Item> items, long bytes, long free, List<String> warnings, List<String> consequences) {
+public record Preflight(List<Item> items, long bytes, long free, List<String> warnings, List<String> consequences,
+                        @JsonInclude(NON_NULL) Boolean keyVerified) {
 
     public record Item(String path, boolean skip, @JsonInclude(NON_NULL) String reason, @JsonInclude(NON_NULL) String note) {}
 }

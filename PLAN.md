@@ -19,6 +19,19 @@ undo. Reference SPEC IDs.
   skips a photo copied before under a numbered name (B3's naming rule, which `Planner` lacked; `FileOpsTest`, live). Checks: `:backend:test` 139
   (1 skipped), three full runs in a row green; `./gradlew build`; live smoke on `backend-demo` (fresh library) of
   catalog_plan §8 phase 2 end to end, every step green (SPEC O2, O3).
+- 2026-10-18 **catalog phase 3: Codex reviews and fixes on main**: five Codex reviews of the merged code (B1/B2
+  `gpt-6-astra` high, B3/B4/UI `gpt-6.1-sol` xhigh; 88 findings, each verified against the code by an Opus reader before
+  fixing) and the fixes per track (four backend branches merged, UI fixed in place): recovery replays no longer delete
+  photo marks (Reindexer detects an already indexed result), recovery never deletes a source whose verified result is
+  missing, staging files (`.part`, `.spill`) are never written over or deleted, duplicate archive member names fail
+  closed (containers) / are refused (ops) / compare as differing, ancestor symlinks and drive-relative `.cry` names are
+  refused, a cross-volume move refuses a source that changed after the copy, `Catalog.mark` and entity deletion are
+  race-free, entity count updates are ordered (no deadlock), non-zip archives are no longer folders, plugin `order()`
+  failures no longer abort start-up, `albumText`/`photoMeta` reads are contained and bounded, 7z relay lifecycle and
+  tar corruption results are handled; UI: revision-bound compare verdicts, encrypt installs the session key, settings
+  draft rebased on root renames, "Delete unused" via a server filter, serialized card saves and marks, stale-update
+  guards everywhere, viewer state by entry name, entity-tree keys isolated, operation wording by id. Checks:
+  `:backend:test` 171 (1 skipped), `ng test` 92, `ng build` 553 kB.
 - 2026-10-18 **catalog phase 2 merged on main** (B5 integration `c16326d`, F4 actions `08f001a`): real packers inside
   FileOps, one crypt path, phase-0 requests closed, every menu and operation flow wired in the UI. Checks on the merge:
   `:backend:test` 139 (1 skipped), `ng build` 549 kB initial (under budget), `ng test` 76, full `./gradlew build`, live

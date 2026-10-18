@@ -2,6 +2,9 @@ package thumbnailer.web.ws;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -16,6 +19,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumPatch;
@@ -27,6 +31,7 @@ import thumbnailer.catalog.EntityKind;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Kind;
 
 /**
  * Answers the catalog messages: entities, their cards and curation, bulk album edits, links and copies. A curation that
@@ -56,9 +61,11 @@ class CatalogApi {
 
     Event handle(Request.CatalogRequest request) {
         return switch (request) {
-            case Request.Entities(var kind, var text, var under, var sort, var offset, var limit) ->
-                    new Event.EntityList(catalog.entities(kind, text, under, sort == Request.Entities.Sort.COUNT, offset, limit),
-                            catalog.count(kind, text, under));
+            case Request.Entities(var kind, var text, var under, var unused, var sort, var offset, var limit) -> {
+                boolean only = Boolean.TRUE.equals(unused);
+                yield new Event.EntityList(catalog.entities(kind, text, under, only, sort == Request.Entities.Sort.COUNT, offset, limit),
+                        catalog.count(kind, text, under, only));
+            }
             case Request.GetEntity(var entityId) -> new Event.EntityCard(catalog.get(entityId));
             case Request.SaveEntity(var entity) -> new Event.EntityCard(catalog.save(entity));
             case Request.DeleteEntities(var ids) -> {
@@ -105,15 +112,30 @@ class CatalogApi {
         return (int) ids.stream().filter(id -> albums.patch(id, edit).isPresent()).count();
     }
 
-    /** Both albums' files as they are on disk (raw: ciphertext as is), counted as reads so an operation waits for them. */
+    /**
+     * Both albums' files as they are on disk (raw: ciphertext as is), counted as reads so an operation waits for them;
+     * what deleting a directory album would remove beyond them (its sub-folders, a file the listing leaves out) differs too.
+     */
     private Event compare(Album a, Album b) {
         var s = settings.get();
+        Path pa = s.locate(a.path()), pb = s.locate(b.path());
         try (var ra = albums.read(a.id()); var rb = albums.read(b.id());
-             var ca = containers.openRaw(a.kind(), s.locate(a.path())); var cb = containers.openRaw(b.kind(), s.locate(b.path()))) {
-            var differing = differing(ca, cb);
-            return new Event.Comparison(differing.isEmpty(), differing);
+             var ca = containers.openRaw(a.kind(), pa); var cb = containers.openRaw(b.kind(), pb)) {
+            var differing = new TreeSet<>(differing(ca, cb));
+            if (a.kind() == Kind.DIRECTORY) differing.addAll(uncompared(pa, ca));
+            if (b.kind() == Kind.DIRECTORY) differing.addAll(uncompared(pb, cb));
+            return new Event.Comparison(differing.isEmpty(), List.copyOf(differing));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
+        }
+    }
+
+    /** What a directory holds beside the files {@code c} lists (a delete takes the whole directory): sub-folders as {@code name/}. */
+    private static List<String> uncompared(Path dir, AlbumContainer c) throws IOException {
+        var listed = c.items().stream().map(AlbumContainer.Item::name).collect(Collectors.toSet());
+        try (var children = Files.list(dir)) {
+            return children.map(p -> p.getFileName() + (Files.isDirectory(p, LinkOption.NOFOLLOW_LINKS) ? "/" : ""))
+                    .filter(n -> !listed.contains(n)).toList();
         }
     }
 

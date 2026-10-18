@@ -40,6 +40,24 @@ class AlbumServiceTest {
         assertThat(calls).containsExactlyInAnyOrder("delete", "blob.remove", "catalog.recount").first().isEqualTo("delete");
     }
 
+    /** A metadata read stores what it learned only on the entry it read: a re-index in between may have stored another file. */
+    @Test
+    void setFlagsRewritesOnlyTheStoredEntryThatIsStillTheFileRead() {
+        var stored = new Entry(0, "a.jpg", 10, 100, 4, 3, null, 0);
+        var saved = new ArrayList<List<Entry>>();
+        var repo = (AlbumRepository) Proxy.newProxyInstance(AlbumRepository.class.getClassLoader(), new Class<?>[]{AlbumRepository.class},
+                (p, m, a) -> {
+                    if (m.getName().equals("saveEntries")) saved.add(List.copyOf((List<Entry>) a[1]));
+                    return m.getName().equals("entries") ? List.of(stored) : null;
+                });
+        var albums = new AlbumService(repo, null, null, null, null, null, e -> {}, null, null, null);
+
+        albums.setFlags("x", new Entry(0, "a.jpg", 10, 99, 4, 3, null, 0), Entry.META_KNOWN);
+        assertThat(saved).as("another mtime: another file").isEmpty();
+        albums.setFlags("x", stored, Entry.META_KNOWN | Entry.META);
+        assertThat(saved).containsExactly(List.of(new Entry(0, "a.jpg", 10, 100, 4, 3, null, Entry.META_KNOWN | Entry.META)));
+    }
+
     /** A stub of a port: every call is reported by name and answers null (only void methods are used). */
     private static <T> T stub(Class<T> port, Consumer<String> calls) {
         return port.cast(Proxy.newProxyInstance(port.getClassLoader(), new Class<?>[]{port}, (p, m, a) -> {

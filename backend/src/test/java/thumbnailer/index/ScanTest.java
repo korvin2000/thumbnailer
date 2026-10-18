@@ -433,6 +433,11 @@ class ScanTest {
         socket.sendText("{\"type\":\"library\",\"id\":12}", true).join();
         assertThat(await(received, m -> m.contains("\"id\":12"))).startsWith("{\"type\":\"libraryInfo\"")
                 .contains("\"pinned\":false", "\"albums\":1,", "\"coversCount\":1,", "\"about\":{\"version\":\"dev\"");
+        var outside = Containers.normalize(root.getParent()); // a folder is revealed only at or below a root (none opened here)
+        socket.sendText("{\"type\":\"reveal\",\"id\":13,\"albumId\":null,\"path\":\"" + outside + "\"}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":13"))).isEqualTo("{\"type\":\"error\",\"message\":\"Not inside an indexed folder: " + outside + "\",\"id\":13}");
+        socket.sendText("{\"type\":\"reveal\",\"id\":14,\"path\":\"" + normalizedRoot() + "/gone\"}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":14"))).isEqualTo("{\"type\":\"error\",\"message\":\"No folder " + normalizedRoot() + "/gone\",\"id\":14}");
 
         socket.sendText("{\"type\":\"setSettings\",\"id\":9,\"settings\":{\"roots\":[],\"exclusions\":[],\"scanOnStart\":false}}", true).join();
         assertThat(await(received, m -> m.contains("\"id\":9"))).startsWith("{\"type\":\"settings\"");
@@ -512,9 +517,9 @@ class ScanTest {
         var z = byName("Z");
         assertThat(z.links()).extracting(Link::role, Link::name).containsExactly(tuple(EntityKind.MODEL, model),
                 tuple(EntityKind.STUDIO, "Studio " + salt), tuple(EntityKind.TAG, "tag" + salt));
-        var zoe = catalog.entities(EntityKind.MODEL, model, null, false, 0, 10).getFirst();
+        var zoe = catalog.entities(EntityKind.MODEL, model, null, false, false, 0, 10).getFirst();
         assertThat(zoe).extracting(Entity::name, Entity::auto, Entity::albums).containsExactly(model, true, 1);
-        assertThat(catalog.entities(EntityKind.TAG, "tag" + salt, null, false, 0, 10)).extracting(Entity::auto).containsExactly(false);
+        assertThat(catalog.entities(EntityKind.TAG, "tag" + salt, null, false, false, 0, 10)).extracting(Entity::auto).containsExactly(false);
         albums.patch(z.id(), new AlbumPatch(null, null, null, null, null, null, null, null, null, null, true, null, null));
         assertThat(catalog.entity(zoe.id()).albums()).as("hidden").isZero();
         albums.patch(z.id(), new AlbumPatch(null, null, null, null, null, null, null, null, null, null, false, null, null));
@@ -564,7 +569,7 @@ class ScanTest {
         socket.sendText("{\"type\":\"deleteEntities\",\"id\":5,\"ids\":[" + m + "]}", true).join();
         assertThat(await(received, x -> x.endsWith("\"id\":5}"))).isEqualTo("{\"type\":\"ok\",\"id\":5}");
         assertThat(repo.find(c2.id()).orElseThrow().model()).isEqualTo(other);
-        assertThat(catalog.entities(EntityKind.MODEL, model, null, false, 0, 10)).isEmpty();
+        assertThat(catalog.entities(EntityKind.MODEL, model, null, false, false, 0, 10)).isEmpty();
 
         Files.createDirectories(root.resolve("C3"));
         for (var f : List.of("a.jpg", "b.jpg", "album.txt")) Files.copy(root.resolve("C2").resolve(f), root.resolve("C3").resolve(f));
@@ -575,8 +580,9 @@ class ScanTest {
         var b = Files.readAllBytes(root.resolve("C3/b.jpg"));
         b[b.length / 2] ^= 1; // same size, other bytes
         Files.write(root.resolve("C3/b.jpg"), b);
+        Files.createDirectories(root.resolve("C2/sub")); // deleting C2 would take it too: never identical
         socket.sendText("{\"type\":\"compareCopies\",\"id\":7,\"a\":\"" + c2.id() + "\",\"b\":\"" + c3.id() + "\"}", true).join();
-        assertThat(await(received, x -> x.endsWith("\"id\":7}"))).isEqualTo("{\"type\":\"comparison\",\"identical\":false,\"differing\":[\"b.jpg\"],\"id\":7}");
+        assertThat(await(received, x -> x.endsWith("\"id\":7}"))).isEqualTo("{\"type\":\"comparison\",\"identical\":false,\"differing\":[\"b.jpg\",\"sub/\"],\"id\":7}");
         socket.abort();
     }
 
@@ -662,7 +668,7 @@ class ScanTest {
         Files.move(root.resolve("R"), root.resolve("S"));
         Files.move(root.resolve("S/a.jpg"), root.resolve("S/x.jpg"));
 
-        var s = reindexer.reindex(r.id(), normalizedRoot() + "/S", Kind.DIRECTORY, Map.of("a.jpg", "x.jpg"));
+        var s = reindexer.reindex(r.id(), normalizedRoot() + "/S", Kind.DIRECTORY, Map.of("a.jpg", "x.jpg"), null);
         assertThat(s).extracting(Album::id, Album::path, Album::rating, Album::revision, Album::cover, Album::coverPinned, Album::shotDate)
                 .containsExactly(r.id(), normalizedRoot() + "/S", 6, r.revision() + 1, "x.jpg", true, LocalDate.of(2001, 5, 1));
         assertThat(catalog.marks(s.internal().seq())).containsOnlyKeys("x.jpg");

@@ -8,7 +8,8 @@ import net.sf.sevenzipjbinding.SevenZipException;
 /**
  * A push parser for the tar stream 7-Zip decompresses out of a .tar.gz/.bz2/.xz/.Z (7-Zip-JBinding cannot open the
  * nested tar itself): regular files reach the {@link Visitor} with their data, in archive order, without buffering
- * the archive. Understands ustar prefixes, GNU long names ('L') and pax paths ('x'); links and directories are skipped.
+ * the archive; hard and symbolic links only by name. Understands ustar prefixes, GNU long names ('L') and pax paths
+ * ('x'); directories are skipped.
  */
 final class TarStream implements ISequentialOutStream {
 
@@ -20,6 +21,9 @@ final class TarStream implements ISequentialOutStream {
 
         /** The current wanted file ended. */
         void end() throws SevenZipException;
+
+        /** A hard ('1') or symbolic ('2') link: no bytes of its own to read (a listing still has to show it). */
+        default void link(String name, long size, long mtime) throws SevenZipException {}
     }
 
     private final Visitor visitor;
@@ -77,6 +81,7 @@ final class TarStream implements ISequentialOutStream {
         else {
             nextName = null;
             if (type == '0' || type == 0 || type == '7') wanted = visitor.entry(name, size, octal(136, 12) * 1000);
+            else if (type == '1' || type == '2') visitor.link(name, size, octal(136, 12) * 1000);
         }
         if (size == 0) finish();
     }

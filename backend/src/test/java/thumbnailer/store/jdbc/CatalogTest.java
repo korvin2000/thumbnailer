@@ -73,9 +73,9 @@ class CatalogTest {
         assertThat(links("c")).extracting(Link::role, Link::name, Link::alias).containsExactly(tuple(EntityKind.MODEL, "Aurora", null),
                 tuple(EntityKind.MODEL, "Ellena", null), tuple(EntityKind.STUDIO, "EL-Studio", null), tuple(EntityKind.GENRE, "Art", null),
                 tuple(EntityKind.GENRE, "Glamour", null), tuple(EntityKind.TAG, "wedding-day", null));
-        assertThat(catalog.entities(EntityKind.MODEL, "ell", null, false, 0, 10)).extracting(Entity::name, Entity::auto, Entity::albums)
+        assertThat(catalog.entities(EntityKind.MODEL, "ell", null, false, false, 0, 10)).extracting(Entity::name, Entity::auto, Entity::albums)
                 .containsExactly(tuple("Ellena", true, 1));
-        assertThat(catalog.entities(EntityKind.TAG, null, null, false, 0, 10)).extracting(Entity::name, Entity::auto)
+        assertThat(catalog.entities(EntityKind.TAG, null, null, false, false, 0, 10)).extracting(Entity::name, Entity::auto)
                 .as("tags are named by their norm and never auto").containsExactly(tuple("wedding-day", false));
         assertThat(events).as("new entities are announced after the save").containsExactly(
                 new CatalogEvent(List.of(EntityKind.MODEL, EntityKind.STUDIO, EntityKind.GENRE, EntityKind.TAG)));
@@ -122,7 +122,7 @@ class CatalogTest {
             for (var s : saves) s.get(20, TimeUnit.SECONDS);
         }
         int ellena = repo.resolve(EntityKind.MODEL, "ellena").orElseThrow();
-        assertThat(repo.count(EntityKind.MODEL, null, null)).isEqualTo(1);
+        assertThat(repo.count(EntityKind.MODEL, null, null, false)).isEqualTo(1);
         assertThat(links("a")).isEqualTo(links("b")).extracting(Link::entity).containsExactly(ellena);
         assertThat(repo.find(ellena).orElseThrow().albums()).isEqualTo(2);
         assertThat(events).as("created, and announced, once").containsExactly(new CatalogEvent(List.of(EntityKind.MODEL)));
@@ -284,11 +284,11 @@ class CatalogTest {
         save(album("h", meta("Mia", "S3", null, null), AlbumMeta.EMPTY, true));
         int s1 = repo.resolve(EntityKind.STUDIO, "s1").orElseThrow(), genre = repo.resolve(EntityKind.GENRE, "glamour").orElseThrow();
 
-        assertThat(catalog.entities(EntityKind.STUDIO, null, m1, true, 0, 10)).as("hidden albums do not count")
+        assertThat(catalog.entities(EntityKind.STUDIO, null, m1, false, true, 0, 10)).as("hidden albums do not count")
                 .extracting(Entity::name, Entity::albums).containsExactly(tuple("S1", 2), tuple("S2", 1));
-        assertThat(catalog.count(EntityKind.STUDIO, null, m1)).isEqualTo(2);
-        assertThat(catalog.entities(EntityKind.MODEL, "z", s1, false, 0, 10)).extracting(Entity::name).containsExactly("Zoe");
-        assertThat(catalog.entities(EntityKind.MODEL, null, genre, true, 0, 10)).extracting(Entity::name, Entity::albums).containsExactly(tuple("Mia", 1));
+        assertThat(catalog.count(EntityKind.STUDIO, null, m1, false)).isEqualTo(2);
+        assertThat(catalog.entities(EntityKind.MODEL, "z", s1, false, false, 0, 10)).extracting(Entity::name).containsExactly("Zoe");
+        assertThat(catalog.entities(EntityKind.MODEL, null, genre, false, true, 0, 10)).extracting(Entity::name, Entity::albums).containsExactly(tuple("Mia", 1));
 
         var mia = catalog.get(m1).derived();
         assertThat(mia.albums()).isEqualTo(3);
@@ -301,6 +301,21 @@ class CatalogTest {
         var studio = catalog.get(s1).derived();
         assertThat(studio.models()).extracting(Entity::name, Entity::albums).containsExactly(tuple("Mia", 2), tuple("Zoe", 1));
         assertThat(studio.studios()).isNull();
+    }
+
+    @Test
+    void unusedEntitiesAreAutoOnesNoAlbumLinksToAHiddenAlbumsLinkIncluded() {
+        save("a", meta("Ann", null, null, null), AlbumMeta.EMPTY);
+        save(album("h", meta("Hid", null, null, null), AlbumMeta.EMPTY, true));
+        save("x", meta("Gone, Left", null, null, null), AlbumMeta.EMPTY);
+        save("x", meta("Ann", null, null, null), AlbumMeta.EMPTY); // Gone and Left stay, linked nowhere
+        entity(EntityKind.MODEL, "Curated");
+        assertThat(catalog.entities(EntityKind.MODEL, null, null, true, false, 0, 10)).as("not Hid: its album is only hidden; not Curated")
+                .extracting(Entity::name, Entity::auto, Entity::albums).containsExactly(tuple("Gone", true, 0), tuple("Left", true, 0));
+        assertThat(catalog.entities(EntityKind.MODEL, "l", null, true, true, 0, 10)).extracting(Entity::name).containsExactly("Left");
+        assertThat(catalog.entities(EntityKind.MODEL, null, null, true, false, 1, 10)).extracting(Entity::name).containsExactly("Left");
+        assertThat(catalog.count(EntityKind.MODEL, null, null, true)).isEqualTo(2);
+        assertThat(catalog.count(EntityKind.MODEL, null, null, false)).isEqualTo(5);
     }
 
     @Test

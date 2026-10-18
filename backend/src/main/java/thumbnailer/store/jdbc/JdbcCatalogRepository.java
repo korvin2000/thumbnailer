@@ -67,18 +67,18 @@ class JdbcCatalogRepository implements CatalogRepository {
     }
 
     @Override
-    public List<Entity> list(EntityKind kind, String prefix, Integer under, boolean byCount, int offset, int limit) {
-        var sql = under == null ? ENTITY + where(prefix) + " ORDER BY " + (byCount ? "albums DESC, " : "") + "sort_name, id"
+    public List<Entity> list(EntityKind kind, String prefix, Integer under, boolean unused, boolean byCount, int offset, int limit) {
+        var sql = under == null ? ENTITY + where(prefix, unused) + " ORDER BY " + (byCount ? "albums DESC, " : "") + "sort_name, id"
                 : "SELECT e.id, e.kind, e.name, e.rating, e.auto, s.shared, e.profile, NULL FROM entity e JOIN (" + SHARED
-                + ") s ON s.entity_id = e.id" + named(prefix, " WHERE") + " ORDER BY " + (byCount ? "s.shared DESC, " : "") + "e.sort_name, e.id";
+                + ") s ON s.entity_id = e.id" + named(prefix, unused, " WHERE") + " ORDER BY " + (byCount ? "s.shared DESC, " : "") + "e.sort_name, e.id";
         return jdbc.sql(sql + " LIMIT :limit OFFSET :offset").param("kind", kind.code()).param("prefix", like(prefix))
                 .param("under", under).param("limit", limit).param("offset", offset).query(JdbcCatalogRepository::entity).list();
     }
 
     @Override
-    public int count(EntityKind kind, String prefix, Integer under) {
-        var sql = under == null ? "SELECT COUNT(*) FROM entity e" + where(prefix)
-                : "SELECT COUNT(*) FROM entity e JOIN (" + SHARED + ") s ON s.entity_id = e.id" + named(prefix, " WHERE");
+    public int count(EntityKind kind, String prefix, Integer under, boolean unused) {
+        var sql = under == null ? "SELECT COUNT(*) FROM entity e" + where(prefix, unused)
+                : "SELECT COUNT(*) FROM entity e JOIN (" + SHARED + ") s ON s.entity_id = e.id" + named(prefix, unused, " WHERE");
         return jdbc.sql(sql).param("kind", kind.code()).param("prefix", like(prefix)).param("under", under).query(Integer.class).single();
     }
 
@@ -416,10 +416,12 @@ class JdbcCatalogRepository implements CatalogRepository {
                 rs.getInt(6), rs.getString(7), rs.getObject(8, Integer.class));
     }
 
-    private static String where(String prefix) { return " WHERE kind = :kind" + named(prefix, " AND"); }
+    private static String where(String prefix, boolean unused) { return " WHERE kind = :kind" + named(prefix, unused, " AND"); }
 
-    private static String named(String prefix, String join) {
-        return prefix == null ? "" : join + " e.id IN (SELECT entity_id FROM alias WHERE kind = :kind AND norm LIKE :prefix ESCAPE '!')";
+    /** The name prefix, then {@code unused} (auto, and no album links to it: a hidden one's link counts); {@code join} first. */
+    private static String named(String prefix, boolean unused, String join) {
+        var named = prefix == null ? "" : join + " e.id IN (SELECT entity_id FROM alias WHERE kind = :kind AND norm LIKE :prefix ESCAPE '!')";
+        return !unused ? named : named + (named.isEmpty() ? join : " AND") + " e.auto AND NOT EXISTS (SELECT 1 FROM album_link x WHERE x.entity_id = e.id)";
     }
 
     private static String like(String prefix) { return prefix == null ? null : JdbcAlbumRepository.Where.escape(prefix) + "%"; }

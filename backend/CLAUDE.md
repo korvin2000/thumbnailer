@@ -109,7 +109,8 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   deletes a staging file (`.part`, `.spill`) it did not create (the `Planner` refuses items where one exists); a
   journal it cannot read is never rewritten (`Journal` refuses every write until a read succeeds); containment is
   checked on real paths too (links resolved); `Reindexer.reindex` is idempotent (a replay maps no names twice) and
-  never indexes `.cry` entries with a key that does not open them.
+  never indexes `.cry` entries with a key that does not open them (an operation's result is read with the operation's
+  key, a recovery's with the session's).
 - The `root` column is informational: scans, pruning, folders and the root filter select by path prefix
   (`path = dir OR path LIKE 'dir/%' ESCAPE '!'`, index `album_path`); `retainRoots` (on `setSettings` and at every scan
   start) re-roots the albums of a removed root that lie under a configured one and removes the rest.

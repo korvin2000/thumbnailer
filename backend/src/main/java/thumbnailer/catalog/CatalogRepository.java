@@ -17,11 +17,12 @@ public interface CatalogRepository {
 
     /**
      * One page of a kind, by name or by album count; {@code prefix}: over any alias norm, null = all; {@code under}: only
-     * entities linked to visible albums that entity is linked to, {@code albums} = those shared albums; null = all.
+     * entities linked to visible albums that entity is linked to, {@code albums} = those shared albums; null = all;
+     * {@code unused}: only auto entities no album links to, hidden ones included.
      */
-    List<Entity> list(EntityKind kind, String prefix, Integer under, boolean byCount, int offset, int limit);
+    List<Entity> list(EntityKind kind, String prefix, Integer under, boolean unused, boolean byCount, int offset, int limit);
 
-    int count(EntityKind kind, String prefix, Integer under);
+    int count(EntityKind kind, String prefix, Integer under, boolean unused);
 
     Optional<Entity> find(int id);
 

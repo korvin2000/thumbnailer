@@ -50,18 +50,19 @@ public class Reindexer {
      * Indexes the album now at canonical {@code newPath} as album {@code albumId}: its user state, pinned cover and photo
      * marks carry over, entries renamed by the operation ({@code nameMap}: old → new name) included. Reads in a turn on
      * the disk's {@code SCAN} lane, like a scan. Idempotent: an album stored at {@code newPath} with exactly these files
-     * was indexed by this call before (a recovery replaying it), so its names are not mapped twice. When the album holds
-     * {@code .cry} entries (or gets them) that the session's key does not open, they would drop out with their pin and
-     * marks: that waits for the password ({@code IllegalStateException}).
+     * was indexed by this call before (a recovery replaying it), so its names are not mapped twice. {@code .cry} entries
+     * read with {@code key} (an operation's own; null = the session's); when the album holds them (or gets them) and that
+     * key does not open them, they would drop out with their pin and marks: that waits for the password
+     * ({@code IllegalStateException}).
      */
-    public Album reindex(String albumId, String newPath, Kind kind, Map<String, String> nameMap) throws IOException {
+    public Album reindex(String albumId, String newPath, Kind kind, Map<String, String> nameMap, byte[] key) throws IOException {
         var stored = repo.find(albumId).orElseThrow(() -> new NoSuchElementException("No album " + albumId));
         var s = settings.get();
         var root = s.root(newPath).orElseThrow(() -> new IllegalArgumentException("Not inside an indexed folder: " + newPath));
         var exclusions = Exclusions.of(Stream.concat(s.exclusions().stream(), root.exclusions().stream()).toList())
                 .rebased(Containers.normalize(s.locate(root.path())), root.path());
         var lane = disks.lane(disks.disk(s.locate(root.path()), root.storage()), Disks.Use.SCAN);
-        try (var turn = lane.enter(); var container = containers.open(kind, s.locate(newPath), exclusions)) {
+        try (var turn = lane.enter(); var container = containers.open(kind, s.locate(newPath), exclusions, key)) {
             var cry = container.items().stream().filter(i -> Cry.is(i.name())).findFirst();
             if (cry.isPresent() && Stream.concat(repo.entries(albumId).stream().map(Entry::name), nameMap.values().stream()).anyMatch(Cry::is))
                 try {

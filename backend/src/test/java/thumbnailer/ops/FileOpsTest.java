@@ -359,21 +359,23 @@ class FileOpsTest {
     }
 
     @Test
-    void anEncryptionTheSessionCannotReadIsLeftToTheNextScanWithItsPassword() throws Exception {
+    void anEncryptionWithAnotherPasswordIsIndexedWithItsOwnKey() throws Exception {
         dir("lib/G", "a.jpg", "b.jpg");
         Files.createDirectories(root.resolve("lib/G/empty"));
         scan("pw");
-        var g = albums.patch(at("lib/G").id(), patch(4, null));
+        var g = albums.patch(at("lib/G").id(), patch(4, "b.jpg"));
+        catalog.mark(g.internal().seq(), "a.jpg", 8, null);
         var other = new Op(Op.Kind.CRYPT, List.of(g.id()), null, null, null, null, true, null, null, "other");
         assertThat(ops.preflight(other).consequences().getFirst()).endsWith("(key " + Cry.fingerprint(Cry.key("other")) + ")");
         assertThat(run(other).done()).isEqualTo(1);
         assertThat(root.resolve("lib/G/a.jpg.cry")).exists();
-        assertThat(repo.entries(g.id())).as("not re-indexed with a key the session lacks").extracting(thumbnailer.album.Entry::name)
-                .containsExactly("a.jpg", "b.jpg");
+        var encrypted = repo.find(g.id()).orElseThrow();
+        assertThat(repo.entries(g.id())).as("read with the operation's key, not the session's").extracting(thumbnailer.album.Entry::name)
+                .containsExactly("a.jpg.cry", "b.jpg.cry");
+        assertThat(encrypted).extracting(Album::path, Album::rating, Album::cover, Album::coverPinned).containsExactly(g.path(), 4, "b.jpg.cry", true);
+        assertThat(catalog.marks(g.internal().seq())).containsOnlyKeys("a.jpg.cry");
         scan("other");
-        assertThat(repo.find(g.id()).orElseThrow()).extracting(Album::path, Album::rating, Album::imageCount)
-                .containsExactly(g.path(), 4, 2);
-        assertThat(repo.entries(g.id())).extracting(thumbnailer.album.Entry::name).containsExactly("a.jpg.cry", "b.jpg.cry");
+        assertThat(repo.find(g.id()).orElseThrow().revision()).as("stored with that key's state: unchanged").isEqualTo(encrypted.revision());
 
         planner.sameVolume = (x, y) -> false;
         assertThat(run(op(Op.Kind.MOVE, List.of(g.id()), null, "other", Op.Conflict.SKIP)).done()).isEqualTo(1);
@@ -452,6 +454,38 @@ class FileOpsTest {
     }
 
     @Test
+    void aPartThatAppearsAfterThePlanIsNeitherWrittenOverNorDeleted() throws Exception {
+        dir("lib/Q", "a.jpg", "b.jpg");
+        scan(null);
+        var q = at("lib/Q");
+        var part = root.resolve("lib/Q.zip.part");
+        steps.crash = p -> { // another program creates the staging file between the planner's look and the packer's
+            if (p == Phase.COPYING) try {
+                Files.write(part, new byte[] {4});
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        };
+        var result = run(op(Op.Kind.PACK, List.of(q.id()), null, null, Op.Conflict.SKIP));
+        assertThat(result.failed()).containsExactly(new OpResult.Issue(q.path(), "exists"));
+        assertThat(part).hasBinaryContent(new byte[] {4});
+        assertThat(root.resolve("lib/Q/a.jpg")).exists();
+        assertThat(journal()).as("the line goes, nothing to recover").doesNotContain(result.id());
+    }
+
+    @Test
+    void anEncryptionsPreflightSaysWhetherItsKeyOpensACryTheSelectionHolds() throws Exception {
+        dir("lib/K", "a.jpg", "b.jpg");
+        Files.write(root.resolve("lib/K/c.jpg.cry"), Cry.encrypt(jpeg(2), "c.jpg", Cry.key("pw")));
+        dir("lib/N", "a.jpg", "b.jpg");
+        scan("pw");
+        String k = at("lib/K").id(), n = at("lib/N").id();
+        assertThat(ops.preflight(crypt(List.of(n, k), null)).keyVerified()).as("the session's key").isTrue();
+        assertThat(ops.preflight(crypt(List.of(n), null)).keyVerified()).as("no .cry to try").isNull();
+        assertThat(ops.preflight(crypt(List.of(k), "other")).keyVerified()).as("another key").isNull();
+    }
+
+    @Test
     void aSourceOrTargetReachedThroughALinkIsRefused() throws Exception {
         dir("outside/victim", "a.jpg", "b.jpg");
         dir("lib/Src", "a.jpg", "b.jpg");
@@ -520,14 +554,14 @@ class FileOpsTest {
         var r = albums.patch(at("lib/R").id(), patch(null, "b.jpg"));
         catalog.mark(r.internal().seq(), "a.jpg", 8, null);
         assertThat(run(new Op(Op.Kind.CRYPT, List.of(r.id()), null, null, null, null, true, null, null, null)).done()).isEqualTo(1);
-        reindexer.reindex(r.id(), r.path(), Kind.DIRECTORY, Map.of("a.jpg", "a.jpg.cry", "b.jpg", "b.jpg.cry")); // a recovery replays it
+        reindexer.reindex(r.id(), r.path(), Kind.DIRECTORY, Map.of("a.jpg", "a.jpg.cry", "b.jpg", "b.jpg.cry"), null); // a recovery replays it
         assertThat(catalog.marks(r.internal().seq())).containsOnlyKeys("a.jpg.cry").extractingByKey("a.jpg.cry")
                 .extracting(PhotoMark::rating).isEqualTo(8);
         assertThat(repo.find(r.id()).orElseThrow()).extracting(Album::cover, Album::coverPinned).containsExactly("b.jpg.cry", true);
 
         Files.write(root.resolve("lib/R/c.jpg"), jpeg(2)); // without the key only this one would be indexed, the pin lost
         settings.forgetKey();
-        assertThatThrownBy(() -> reindexer.reindex(r.id(), r.path(), Kind.DIRECTORY, Map.of())).hasMessage("waits for the password");
+        assertThatThrownBy(() -> reindexer.reindex(r.id(), r.path(), Kind.DIRECTORY, Map.of(), null)).hasMessage("waits for the password");
         assertThat(repo.find(r.id()).orElseThrow()).extracting(Album::cover, Album::coverPinned, Album::imageCount)
                 .containsExactly("b.jpg.cry", true, 2);
     }
@@ -590,6 +624,10 @@ class FileOpsTest {
     private Op op(Op.Kind kind, List<String> ids, String format, String target, Op.Conflict conflict) {
         return new Op(kind, ids, null, null, target == null ? null : path(target), format == null ? null : Op.Format.valueOf(format),
                 null, null, conflict, null);
+    }
+
+    private static Op crypt(List<String> ids, String password) {
+        return new Op(Op.Kind.CRYPT, ids, null, null, null, null, true, null, null, password);
     }
 
     private static AlbumPatch patch(Integer rating, String cover) {

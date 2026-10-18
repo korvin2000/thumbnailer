@@ -53,9 +53,12 @@ final class Trees {
     /** Copies file or directory {@code src} to {@code dst} (which must not exist) with its mtimes; returns what it read. */
     static Map<String, Long> copy(Path src, Path dst) throws IOException {
         var hashes = new TreeMap<String, Long>();
-        if (Files.isDirectory(src, NOFOLLOW_LINKS)) try (var dirs = Files.walk(src)) { // empty folders too
-            for (var d : (Iterable<Path>) dirs.filter(d -> Files.isDirectory(d, NOFOLLOW_LINKS))::iterator)
-                Files.createDirectories(dst.resolve(src.relativize(d).toString()));
+        if (Files.isDirectory(src, NOFOLLOW_LINKS)) {
+            Files.createDirectory(dst); // an existing directory .part is someone else's: never adopted
+            try (var dirs = Files.walk(src)) { // empty folders too
+                for (var d : (Iterable<Path>) dirs.filter(d -> Files.isDirectory(d, NOFOLLOW_LINKS))::iterator)
+                    Files.createDirectories(dst.resolve(src.relativize(d).toString()));
+            }
         }
         walk(src, (name, f, a) -> {
             var to = dst.resolve(name);

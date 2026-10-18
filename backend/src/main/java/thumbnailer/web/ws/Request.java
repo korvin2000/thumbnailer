@@ -34,7 +34,8 @@ sealed interface Request {
 
     @JsonTypeName("facets") record FacetsOf(AlbumQuery query) implements Request {}
 
-    @JsonTypeName("reveal") record Reveal(String albumId) implements Request {}
+    /** The album's folder, the album selected; with {@code path} (a folder at or below a root) that folder itself. */
+    @JsonTypeName("reveal") record Reveal(String albumId, String path) implements Request {}
 
     /** The child folders of a stored album path (the library tree). */
     @JsonTypeName("folders") record Folders(String path) implements Request {}
@@ -52,8 +53,8 @@ sealed interface Request {
 
     sealed interface CatalogRequest extends Request {}
 
-    /** {@code text}: a prefix of any name; {@code under}: entities linked to that one (not yet); at most 500. */
-    @JsonTypeName("entities") record Entities(EntityKind kind, String text, Integer under, Sort sort, int offset, int limit)
+    /** {@code text}: a prefix of any name; {@code under}: entities sharing albums with that one; {@code unused}: auto ones in no album; at most 500. */
+    @JsonTypeName("entities") record Entities(EntityKind kind, String text, Integer under, Boolean unused, Sort sort, int offset, int limit)
             implements CatalogRequest {
         enum Sort { NAME, COUNT }
     }

@@ -72,8 +72,15 @@ class Planner {
     /** A source: canonical path (an entry name for COPY_PHOTOS), its album, and why it is left out. */
     record Source(String path, Album album, String reason) {}
 
-    /** {@code manifest} null = skipped for {@code reason}; {@code need}: extra bytes the item takes on {@code volume}. */
-    record Item(String path, Manifest manifest, String reason, String note, long bytes, long need, FileStore volume) {}
+    /**
+     * {@code manifest} null = skipped for {@code reason}; {@code need}: extra bytes the item takes on {@code volume};
+     * {@code keyVerified}: an encryption's key opened a {@code .cry} member the album already has.
+     */
+    record Item(String path, Manifest manifest, String reason, String note, long bytes, long need, FileStore volume, boolean keyVerified) {
+        Item(String path, Manifest manifest, String reason, String note, long bytes, long need, FileStore volume) {
+            this(path, manifest, reason, note, bytes, need, volume, false);
+        }
+    }
 
     List<Source> sources(Op op) {
         if (op.kind() == COPY_PHOTOS) {
@@ -196,14 +203,16 @@ class Planner {
                 if (key == null) yield skip(src, "needs the password");
                 var listed = a.kind() == Kind.DIRECTORY ? own(p) : entries(a.kind(), p);
                 Map<String, String> names;
+                boolean verified;
                 try (var raw = containers.openRaw(a.kind(), p)) {
                     names = Crypt.names(raw, key, encrypt);
+                    verified = encrypt && opens(raw, key);
                 }
-                if (names.isEmpty()) yield skip(src, encrypt ? "already encrypted" : "not encrypted");
+                if (names.isEmpty()) yield new Item(src, null, encrypt ? "already encrypted" : "not encrypted", null, 0, 0, null, verified);
                 if (a.kind() == Kind.DIRECTORY) {
                     long largest = names.keySet().stream().mapToLong(n -> p.resolve(n).toFile().length()).max().orElse(0);
                     yield new Item(src, new Manifest(kind, a.id(), a.kind(), src, src, null, null, encrypt, names), null, null,
-                            largest, largest, store(p));
+                            largest, largest, store(p), verified);
                 }
                 var lower = name.toLowerCase(Locale.ROOT);
                 var format = lower.endsWith(".7z") ? Op.Format.SEVEN_ZIP : Op.Format.ZIP;
@@ -216,7 +225,7 @@ class Planner {
                 long bytes = listed.values().stream() // the output: the members as they are, an encrypted one with its .cry header
                         .mapToLong(i -> encrypt && names.containsKey(i.name()) ? Crypt.encryptedSize(i.bytes(), i.name()) : i.bytes()).sum();
                 yield new Item(src, new Manifest(kind, a.id(), a.kind(), src, dst, Trees.part(dst), format, encrypt, all), null,
-                        dst.equals(src) ? null : "the result is a zip", bytes, bytes, store(p));
+                        dst.equals(src) ? null : "the result is a zip", bytes, bytes, store(p), verified);
             }
             default -> throw new IllegalStateException("Unexpected " + kind);
         };
@@ -264,8 +273,10 @@ class Planner {
         var items = new ArrayList<Preflight.Item>();
         long bytes = 0;
         int done = 0;
+        boolean verified = false;
         for (var src : sources(op)) {
             var it = item(op, s, key, src, taken);
+            verified |= it.keyVerified();
             var reason = it.reason();
             if (reason == null && it.need() > 0 && usable(it.volume()) < needs.merge(it.volume(), it.need(), Long::sum) + Trees.MARGIN) {
                 needs.merge(it.volume(), -it.need(), Long::sum);
@@ -279,7 +290,7 @@ class Planner {
             items.add(new Preflight.Item(it.path(), reason != null, reason, it.note()));
         }
         var warnings = items.stream().anyMatch(i -> "No space".equals(i.reason())) ? List.of("Not enough free space for every item") : List.<String>of();
-        return new Preflight(items, bytes, free(s, op, items), warnings, consequences(op, s, key, done));
+        return new Preflight(items, bytes, free(s, op, items), warnings, consequences(op, s, key, done), verified ? Boolean.TRUE : null);
     }
 
     static boolean fits(Item it) { return it.need() == 0 || usable(it.volume()) >= it.need() + Trees.MARGIN; }
@@ -353,6 +364,18 @@ class Planner {
             var entries = new LinkedHashMap<String, AlbumContainer.Item>();
             for (var i : raw.items()) if (entries.putIfAbsent(i.name(), i) != null) throw new IOException("duplicate names in archive");
             return entries;
+        }
+    }
+
+    /** Whether {@code key} opens the first {@code .cry} member of {@code raw}: the header check refuses another key. */
+    private static boolean opens(AlbumContainer raw, byte[] key) {
+        var cry = raw.items().stream().filter(i -> Cry.is(i.name())).findFirst();
+        if (cry.isEmpty()) return false;
+        try {
+            Cry.plainName(raw.head(cry.get().name(), Crypt.HEAD), cry.get().bytes(), key);
+            return true;
+        } catch (IOException e) {
+            return false;
         }
     }
 

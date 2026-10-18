@@ -28,6 +28,11 @@ public class Containers {
         return cry.wrap(openRaw(kind, path, exclusions));
     }
 
+    /** {@link #open}, the {@code .cry} members decrypted with {@code key} (an operation's own); null = the key configured now. */
+    public AlbumContainer open(Kind kind, Path path, Exclusions exclusions, byte[] key) throws IOException {
+        return key == null ? open(kind, path, exclusions) : Cry.wrap(openRaw(kind, path, exclusions), key);
+    }
+
     /**
      * Every file as it is on disk, {@code .cry} members as ciphertext: what a lossless move, pack or compare copies.
      * The one exception to wrapped containers, for file operations only.

@@ -207,14 +207,16 @@ public class AlbumService {
     }
 
     /**
-     * Stores the {@link Entry#flags} learned for entry {@code name} after indexing (a metadata read): one rewrite of
-     * the album's entry list under its lock. Not an album save: the files and what they show are unchanged, so no revision.
+     * Stores the {@link Entry#flags} learned from entry {@code read} after indexing (a metadata read): one rewrite of
+     * the album's entry list under its lock, only while the stored entry is still that file (name, bytes and mtime; a
+     * re-index in between may have stored another). Not an album save: the files and what they show are unchanged, so
+     * no revision.
      */
-    public void setFlags(String albumId, String name, int flags) {
+    public void setFlags(String albumId, Entry read, int flags) {
         synchronized (lock(albumId)) {
             var entries = repo.entries(albumId);
-            var learned = entries.stream().map(e -> !e.name().equals(name) || e.flags() == flags ? e
-                    : new Entry(e.index(), e.name(), e.bytes(), e.mtime(), e.width(), e.height(), e.shotAt(), flags)).toList();
+            var learned = entries.stream().map(e -> e.flags() == flags || !e.name().equals(read.name()) || e.bytes() != read.bytes()
+                    || e.mtime() != read.mtime() ? e : new Entry(e.index(), e.name(), e.bytes(), e.mtime(), e.width(), e.height(), e.shotAt(), flags)).toList();
             if (!learned.equals(entries)) repo.saveEntries(albumId, learned);
         }
     }

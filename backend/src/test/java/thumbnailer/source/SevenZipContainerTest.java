@@ -131,20 +131,19 @@ class SevenZipContainerTest {
                 new TarEntry("d.jpg", "2222".getBytes(StandardCharsets.UTF_8), '0', ""),
                 new TarEntry("l.jpg", new byte[0], '2', "a.jpg"), new TarEntry("h.jpg", new byte[0], '1', "a.jpg")));
         Files.write(dir.resolve("t.tar"), tar);
-        Files.write(dir.resolve("t.tar.gz"), Archives.gzip(tar)); // links in a wrapped tar are not listed (TarStream)
+        Files.write(dir.resolve("t.tar.gz"), Archives.gzip(tar)); // a wrapped tar lists its links too (TarStream), so a repack refuses them
         for (var name : List.of("t.tar", "t.tar.gz")) {
             try (var c = new SevenZipContainer(dir.resolve(name), Exclusions.NONE)) {
-                assertThat(c.items()).as(name).extracting(AlbumContainer.Item::name).containsSubsequence("d.jpg", "d.jpg");
+                assertThat(c.items()).as(name).extracting(AlbumContainer.Item::name).containsSubsequence("d.jpg", "d.jpg").contains("l.jpg", "h.jpg");
                 assertThatThrownBy(() -> c.extract(List.of("a.jpg", "d.jpg"), (i, in) -> {})).as(name)
                         .isInstanceOf(IOException.class).hasMessageContaining("Duplicate entry name d.jpg");
                 var read = new LinkedHashMap<String, byte[]>();
                 c.extract(List.of("a.jpg"), (i, in) -> read.put(i.name(), in.readAllBytes()));
                 assertThat(read).as(name).containsOnlyKeys("a.jpg");
+                for (var link : List.of("l.jpg", "h.jpg"))
+                    assertThatThrownBy(() -> c.extract(List.of("a.jpg", link), (i, in) -> {})).as(name)
+                            .isInstanceOf(IOException.class).hasMessageContaining("Link entry " + link);
             }
-        }
-        try (var c = new SevenZipContainer(dir.resolve("t.tar"), Exclusions.NONE)) {
-            for (var link : List.of("l.jpg", "h.jpg"))
-                assertThatThrownBy(() -> c.extract(List.of(link), (i, in) -> {})).isInstanceOf(IOException.class).hasMessageContaining("Link entry " + link);
         }
     }
 

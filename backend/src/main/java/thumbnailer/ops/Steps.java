@@ -21,13 +21,12 @@ import static thumbnailer.ops.Op.Kind.REPACK;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumSet;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -199,7 +198,9 @@ class Steps {
             m = journal.save(write(m.withStamp(applies(DISPOSING, m) ? stamp(m) : null), key));
             verify(m);
         } catch (IOException | RuntimeException e) {
-            rollback(m);
+            if (e instanceof FileAlreadyExistsException x && path(m.tmp()).toString().equals(x.getFile()))
+                journal.remove(m.op(), m.item()); // the writer met someone else's .part (it creates its target new): never ours to delete
+            else rollback(m);
             throw e;
         }
         return finish(m, VERIFIED, key, turn);
@@ -367,15 +368,10 @@ class Steps {
         var s = settings.get();
         try {
             switch (m.kind()) {
-                case PACK, REPACK, CRYPT -> {
-                    if (m.kind() == CRYPT && m.encrypt() && !keyed(s, key)) { // the session cannot read the result yet
-                        if (m.dst().equals(m.src())) log.info("{} is re-indexed by the next scan with its password", m.src());
-                        else throw new IllegalStateException("waits for the password");
-                    } else reindexer.reindex(m.albumId(), m.dst(), kind(m.dst()), renamed(m));
-                }
+                case PACK, REPACK, CRYPT -> reindexer.reindex(m.albumId(), m.dst(), kind(m.dst()), renamed(m), key);
                 case UNPACK -> {
                     if (m.names().values().stream().filter(n -> !n.contains("/") && AlbumContainer.isImage(n)).count() >= minImages)
-                        reindexer.reindex(m.albumId(), m.dst(), Kind.DIRECTORY, renamed(m));
+                        reindexer.reindex(m.albumId(), m.dst(), Kind.DIRECTORY, renamed(m), key);
                     else albums.remove(m.albumId());
                     if (m.names().values().stream().anyMatch(n -> n.contains("/"))) reindexer.scan(List.of(m.dst()), () -> false);
                 }
@@ -386,7 +382,7 @@ class Steps {
                 case DELETE, FOLDER_DELETE -> albums.removeBelow(m.src());
                 case MOVE, FOLDER_MOVE, FOLDER_RENAME -> { // a new last segment: the file-name extractor sees it
                     if (!last(m.src()).equals(last(m.dst())))
-                        for (var a : repo.byRoot(m.dst())) if (a.path().equals(m.dst())) reindexer.reindex(a.id(), a.path(), a.kind(), Map.of());
+                        for (var a : repo.byRoot(m.dst())) if (a.path().equals(m.dst())) reindexer.reindex(a.id(), a.path(), a.kind(), Map.of(), key);
                 }
                 default -> {}
             }
@@ -456,12 +452,6 @@ class Steps {
         return m.names().entrySet().stream().filter(e -> !e.getKey().equals(e.getValue()))
                 .filter(e -> dir == null || Files.exists(dir.resolve(e.getValue())) && !Files.exists(dir.resolve(e.getKey())))
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-    }
-
-    /** Whether the session's key reads what the operation wrote (after a restart: whether any key is set). */
-    private static boolean keyed(Settings s, byte[] key) {
-        var session = s.cryKey() == null ? null : HexFormat.of().parseHex(s.cryKey());
-        return key == null ? session != null : Arrays.equals(key, session);
     }
 
     private Collection<String> quiesce(Manifest m) {

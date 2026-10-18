@@ -71,7 +71,7 @@ class PhotosApi {
                 var album = album(albumId);
                 var entry = repo.entry(albumId, index).orElseThrow(() -> new NoSuchElementException("No image " + index + " in " + albumId));
                 var meta = read(album, c -> metadata(c, entry));
-                if (flags(meta) != entry.flags()) albums.setFlags(albumId, entry.name(), flags(meta));
+                if (flags(meta) != entry.flags()) albums.setFlags(albumId, entry, flags(meta));
                 if (meta == null) throw new IllegalArgumentException("No metadata in " + entry.name());
                 yield new Event.PhotoMetaRows(rows(meta));
             }

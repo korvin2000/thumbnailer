@@ -78,14 +78,17 @@ public class Catalog {
 
     /**
      * A page of a kind, {@code text} a prefix of any of their names, {@code under} (null = all) the entity whose visible
-     * albums they share ({@code albums} = how many); at most 500.
+     * albums they share ({@code albums} = how many), {@code unused}: only auto ones no album links to (hidden albums
+     * count); at most 500.
      */
-    public List<Entity> entities(EntityKind kind, String text, Integer under, boolean byCount, int offset, int limit) {
-        return read(() -> repo.list(Objects.requireNonNull(kind, "kind is required"), prefix(kind, text), under, byCount,
+    public List<Entity> entities(EntityKind kind, String text, Integer under, boolean unused, boolean byCount, int offset, int limit) {
+        return read(() -> repo.list(Objects.requireNonNull(kind, "kind is required"), prefix(kind, text), under, unused, byCount,
                 Math.max(0, offset), limit <= 0 ? 100 : Math.min(limit, LIMIT)));
     }
 
-    public int count(EntityKind kind, String text, Integer under) { return read(() -> repo.count(kind, prefix(kind, text), under)); }
+    public int count(EntityKind kind, String text, Integer under, boolean unused) {
+        return read(() -> repo.count(kind, prefix(kind, text), under, unused));
+    }
 
     public Entity entity(int id) { return read(() -> find(id)); }
 
@@ -525,7 +528,7 @@ public class Catalog {
         };
     }
 
-    private List<Entity> related(Entity e, EntityKind kind) { return repo.list(kind, null, e.id(), true, 0, RELATED); }
+    private List<Entity> related(Entity e, EntityKind kind) { return repo.list(kind, null, e.id(), false, true, 0, RELATED); }
 
     /** Profile JSON of a merge: the surviving entity's fields win, the merged one's fill its missing, null or blank ones. */
     static String fill(String into, String from) {

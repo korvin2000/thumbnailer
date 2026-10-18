@@ -480,7 +480,7 @@ Recovery at start (`FileOps` constructor, before any scan), per journal line:
 | `verified` | `tmp` complete and verified | continue at `disposing` |
 | `disposing` | source partly or wholly deleted | if `src` exists: re-verify `tmp` against the manifest, then delete it; continue |
 | `installing` | `tmp` renamed or not | if `tmp` exists rename it to `dst`; for an atomic move (`tmp = src`): `src` exists → not moved, redo; `dst` exists → moved; continue |
-| `indexing` | files final, index unknown | run the re-index (idempotent: `commit` asserting the stored identity); checkpoint; remove the line. **Encrypted results without a key** (the session key is gone after a restart): a result at the album's own path keeps its line removed and is re-indexed by the next keyed scan (same path, `Cry.matches` fails → re-index with identity); a result at a new path keeps its line until a key is set, then re-indexes |
+| `indexing` | files final, index unknown | run the re-index (idempotent: `commit` asserting the stored identity) with the operation's own key (`Containers.open(…, key)`), so a result encrypted with another password than the session's is indexed at once; checkpoint; remove the line. **Encrypted results without a key** (recovery has no operation key, and the session key is gone after a restart): the re-index reads with the session's key and refuses `.cry` entries it does not open (`waits for the password`), so the line stays, wherever the result is, until a key that opens them is set, then re-indexes |
 | `rebasing` | database or settings half-done | re-run the `rebase` (idempotent `WHERE` on the old prefix), then the settings write |
 
 So a crash leaves either the source, or the verified result, or both — never neither, never a half-written file
