@@ -6,6 +6,7 @@ import { BasenamePipe } from './core/format';
 import { Tile } from './core/layout';
 import { Album } from './core/model';
 import { Prefs, SidebarTab } from './core/prefs';
+import { SELECT_CAP } from './core/selection';
 import { AlbumStore } from './core/store';
 import { Toasts } from './core/toasts';
 import { AlbumCard } from './ui/album-card';
@@ -50,9 +51,42 @@ export class App {
   protected showInfo(id: string) { this.store.selectedId.set(id); this.prefs.detailsOpen.set(true); }
   protected toggleTab(tab: SidebarTab) { this.prefs.sidebar.update(v => v === tab ? 'none' : tab); }
 
+  /** Albums an action applies to: the selection, else the focused album. */
+  private targets(): string[] { const s = this.store.selection, id = this.store.selectedId(); return s.size() ? [...s.ids()] : id ? [id] : []; }
+
+  /** `Ctrl+A`: every loaded album, loading further pages until the cap or the end (each page joins the selection as it lands). */
+  private async selectAll() {
+    const s = this.store;
+    for (let n = -1; n < s.albums().length;) {
+      n = s.albums().length;
+      s.selection.selectAll(s.albums().map(a => a.id));
+      if (n >= SELECT_CAP || n >= s.total()) break;
+      await s.loadMore();
+    }
+    if (s.selection.size() >= SELECT_CAP && s.total() > SELECT_CAP) this.toasts.show(`Selected the first ${SELECT_CAP} albums`);
+  }
+
+  /** `H`: hides the targets, or unhides them when every one is hidden already; the selection ends with them (hidden albums leave the list). */
+  private async hide(ids: string[]) {
+    const set = new Set(ids), albums = this.store.albums().filter(a => set.has(a.id)), unhide = albums.length > 0 && albums.every(a => a.hidden);
+    const n = await this.catalog.bulkUpdate({ albumIds: ids }, { hidden: !unhide });
+    if (n === null) return;
+    this.store.selection.clear();
+    this.toasts.show(`${n} album${n === 1 ? '' : 's'} ${unhide ? 'unhidden' : 'hidden'}`);
+  }
+
+  /** `Delete`: F4 wires preflight → `Confirm` → `runOp` here; until then the key reaches only this hook. */
+  private deleteAlbums(ids: string[]) { void ids; }
+
   protected onKey(e: KeyboardEvent) {
-    if (e.ctrlKey || e.metaKey || e.altKey || (e.target as HTMLElement)?.closest('input, textarea, select, dialog[open]')) return;
+    if (e.altKey || (e.target as HTMLElement)?.closest('input, textarea, select, dialog[open]')) return;
     const viewer = this.router.url.startsWith('/album');
+    if (e.ctrlKey || e.metaKey) {
+      if (viewer || e.shiftKey || e.key.toLowerCase() !== 'a') return;
+      void this.selectAll();
+      e.preventDefault();
+      return;
+    }
     switch (e.key) {
       case '/': if (viewer) return; this.topbar().focusSearch(); break;
       case 'e': case 'E': if (viewer) return; this.toggleTab('folders'); break;
@@ -61,11 +95,17 @@ export class App {
       case 't': case 'T': this.prefs.toggleTheme(); break;
       case '[': this.prefs.setColumns(this.prefs.columns() - 1); break;
       case ']': this.prefs.setColumns(this.prefs.columns() + 1); break;
-      case 'Escape':
+      case 'h': case 'H': if (viewer || !this.targets().length) return; void this.hide(this.targets()); break;
+      case 'Delete': if (viewer || !this.targets().length) return; this.deleteAlbums(this.targets()); break;
+      case 'Escape': {
         if (viewer) return;
-        // the sidebar only closes on Esc while it overlays the grid; docked, Esc clears the selection
+        // a multi-selection goes first; then the sidebar while it overlays the grid; docked, Esc drops the focused album
+        const s = this.store.selection, lone = s.size() === 0 || (s.size() === 1 && s.has(this.store.selectedId() ?? ''));
+        s.clear();
+        if (!lone) break;
         if (this.prefs.sidebar() !== 'none' && matchMedia('(max-width: 1100px)').matches) this.prefs.sidebar.set('none'); else this.store.selectedId.set(null);
         break;
+      }
       default: return;
     }
     e.preventDefault();

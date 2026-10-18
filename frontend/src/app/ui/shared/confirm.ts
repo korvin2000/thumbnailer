@@ -49,11 +49,12 @@ const SHOWN = 10;
             }
             @if (q.summary; as s) {
               <div class="summary">
-                <div>{{ s.items.length - skipped().length }} of {{ s.items.length }} to do · {{ s.bytes | bytes }} · {{ s.free | bytes }} free</div>
-                @for (x of skipped().slice(0, 10); track $index) { <div class="dim"><span class="mono">{{ x.path }}</span> — {{ x.reason }}</div> }
-                @if (skipped().length > 10) { <div class="dim">and {{ skipped().length - 10 }} more skipped</div> }
+                <div class="totals" [class.none]="!todo()"><b>{{ todo() }}</b> of {{ s.items.length }} to do · {{ s.bytes | bytes }} · {{ s.free | bytes }} free@if (s.bytes > s.free) { <span class="warn"> — not enough space</span> }</div>
+                @for (x of noted().slice(0, SHOWN); track $index) { <div class="dim"><span class="mono">{{ x.path }}</span> — {{ x.note }}</div> }
+                @for (x of skipped().slice(0, SHOWN); track $index) { <div class="dim skip"><span class="mono">{{ x.path }}</span> — skipped: {{ x.reason ?? 'no reason given' }}</div> }
+                @if (noted().length + skipped().length > 2 * SHOWN) { <div class="dim">and {{ noted().length + skipped().length - 2 * SHOWN }} more</div> }
+                @for (c of s.consequences; track $index) { <div class="cons"><app-icon name="arrowRight" [size]="13" /> {{ c }}</div> }
                 @for (w of s.warnings; track $index) { <div class="warn"><app-icon name="alert" [size]="13" /> {{ w }}</div> }
-                @for (c of s.consequences; track $index) { <div>{{ c }}</div> }
               </div>
             }
             @for (o of q.options ?? []; track o.key) {
@@ -71,7 +72,7 @@ const SHOWN = 10;
             }
           </div>
           <footer>
-            @if (blocked()) { <span class="hint muted">Enter the password twice</span> }
+            @if (hint(); as hint) { <span class="hint muted">{{ hint }}</span> }
             <button type="button" class="btn sm" [attr.autofocus]="q.danger ? '' : null" (click)="confirm.finish(null)">Cancel</button>
             <button type="submit" class="btn sm" [class.primary]="!q.danger" [class.danger]="q.danger" [attr.autofocus]="q.danger ? null : ''" [disabled]="blocked()">{{ q.okLabel ?? 'OK' }}</button>
           </footer>
@@ -93,9 +94,13 @@ const SHOWN = 10;
     .items.all { max-height: 40vh; overflow: auto; }
     .items li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.7; }
     .items .more { color: var(--text-3); }
-    .summary { display: flex; flex-direction: column; gap: 3px; }
+    .summary { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: var(--radius-s); background: var(--surface); border: 1px solid var(--border); }
+    .totals b { color: var(--text); font-weight: 600; }
+    .totals.none b { color: var(--danger); }
     .dim { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .warn { display: flex; align-items: center; gap: 6px; color: var(--danger); }
+    .dim.skip .mono { text-decoration: line-through; }
+    .cons { display: flex; align-items: center; gap: 6px; color: var(--text); }
+    .warn { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); }
     footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); }
     footer .hint { flex: 1; }
     .btn.danger { background: var(--danger); border-color: var(--danger); color: var(--on-accent); }
@@ -110,10 +115,20 @@ export class ConfirmDialog {
   protected readonly values = linkedSignal<ConfirmResult>(() => Object.fromEntries((this.confirm.open()?.options ?? [])
     .map(o => [o.key, o.value ?? (o.kind === 'select' ? o.choices?.[0] : o.kind === 'check' ? false : '')])));
   protected readonly repeat = linkedSignal({ source: this.confirm.open, computation: (): ConfirmResult => ({}) });
-  protected readonly blocked = computed(() => (this.confirm.open()?.options ?? []).some(o => o.kind === 'password2' && (!this.values()[o.key] || this.values()[o.key] !== this.repeat()[o.key])));
   protected readonly shown = computed(() => { const q = this.confirm.open(), items = q?.items ?? []; return q?.showAll ? items : items.slice(0, SHOWN); });
   protected readonly more = computed(() => (this.confirm.open()?.items?.length ?? 0) - this.shown().length);
   protected readonly skipped = computed(() => this.confirm.open()?.summary?.items.filter(i => i.skip) ?? []);
+  protected readonly noted = computed(() => this.confirm.open()?.summary?.items.filter(i => !i.skip && i.note) ?? []);
+  protected readonly todo = computed(() => { const s = this.confirm.open()?.summary; return s ? s.items.length - this.skipped().length : 1; });
+  /** Why OK is unavailable: a password typed once or twice differently, or a preflight that leaves nothing to do. */
+  protected readonly hint = computed(() => {
+    const pw = (this.confirm.open()?.options ?? []).find(o => o.kind === 'password2');
+    if (pw && !this.values()[pw.key]) return 'Enter the password twice';
+    if (pw && this.values()[pw.key] !== this.repeat()[pw.key]) return 'The passwords differ';
+    return this.todo() ? null : 'Nothing to do';
+  });
+  protected readonly blocked = computed(() => this.hint() !== null);
+  protected readonly SHOWN = SHOWN;
 
   constructor() {
     afterRenderEffect(() => {

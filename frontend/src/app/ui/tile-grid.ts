@@ -4,16 +4,21 @@ import {
   TemplateRef, untracked,
 } from '@angular/core';
 import { layout, LayoutMode, Placement, responsiveColumns, Tile } from '../core/layout';
+import { Selection } from '../core/selection';
+
+/** A context menu was asked for: on a tile (`id`), or on the empty canvas (null); `x, y` = viewport point to open it at. */
+export interface TileMenuEvent { id: string | null; x: number; y: number }
 
 /**
  * Virtualized grid: lays tiles out with the layout engine and renders only the placements near the viewport.
  * The projected `<ng-template let-item let-placement="placement">` draws one tile; the host is the scroll container.
+ * `select` is the focused tile (one), kept apart from the multi-`selection` the grid drives when it is given one.
  */
 @Component({
   selector: 'app-tile-grid',
   imports: [NgTemplateOutlet],
   template: `
-    <div class="canvas" [style.height.px]="layout().height + 2 * padding()">
+    <div class="canvas" [style.height.px]="layout().height + 2 * padding()" (click)="onClick($event)" (contextmenu)="onMenu($event)">
       @for (p of visible(); track p.tile.id) {
         <div class="tile" [class.selected]="p.tile.id === selectedId()" [attr.data-id]="p.tile.id"
              [style.transform]="'translate(' + (p.x + padding()) + 'px,' + (p.y + padding()) + 'px)'" [style.width.px]="p.w" [style.height.px]="p.h">
@@ -28,7 +33,7 @@ import { layout, LayoutMode, Placement, responsiveColumns, Tile } from '../core/
   styles: `
     :host { display: block; position: relative; overflow: auto; height: 100%; outline: none; overscroll-behavior: contain; }
     .canvas { position: relative; }
-    .tile { position: absolute; top: 0; left: 0; contain: layout paint style; transition: transform 0.3s var(--ease), width 0.3s var(--ease), height 0.3s var(--ease); }
+    .tile { position: absolute; top: 0; left: 0; contain: layout paint style; user-select: none; transition: transform 0.3s var(--ease), width 0.3s var(--ease), height 0.3s var(--ease); }
     .empty { position: absolute; inset: 0; display: grid; place-items: center; }
   `,
   host: { tabindex: '0', '(scroll)': 'onScroll()', '(keydown)': 'onKey($event)' },
@@ -43,10 +48,14 @@ export class TileGrid<T> {
   readonly selectedId = input<string | null>(null);
   readonly hasMore = input(false);
   readonly empty = input<TemplateRef<unknown> | null>(null);
+  /** When given, clicks and arrows apply the selection rules over the tile order: plain = only this, Ctrl toggles (Ctrl+Space too), Shift ranges. */
+  readonly selection = input<Selection | null>(null);
 
   readonly select = output<string>();
   readonly open = output<string>();
   readonly reachedEnd = output<void>();
+  /** Right-click on a tile or the canvas, Shift+F10 / the menu key on the focused tile. */
+  readonly contextMenu = output<TileMenuEvent>();
 
   protected readonly tileTemplate = contentChild.required(TemplateRef);
 
@@ -108,10 +117,23 @@ export class TileGrid<T> {
     });
   }
 
+  /** A click that reached the canvas through a tile applies the selection rules (the tile's own `select` sets the focus). */
+  protected onClick(e: MouseEvent) {
+    const id = this.tileAt(e);
+    if (id !== null && !(e.target as HTMLElement).closest('button, a')) this.pick(id, e);
+  }
+
+  protected onMenu(e: MouseEvent) {
+    e.preventDefault();
+    const id = this.tileAt(e);
+    if (id !== null) this.select.emit(id);
+    this.contextMenu.emit({ id, x: e.clientX, y: e.clientY });
+  }
+
   protected onKey(e: KeyboardEvent) {
     const all = this.layout().placements;
     if (!all.length || (e.target as HTMLElement).closest('button, a, input, select, textarea')) return;
-    const i = all.findIndex(p => p.tile.id === this.selectedId());
+    const i = all.findIndex(p => p.tile.id === this.selectedId()), cur = i >= 0 ? all[i] : undefined;
     let next: Placement<T> | undefined;
     switch (e.key) {
       case 'ArrowRight': next = all[Math.min(all.length - 1, i + 1)]; break;
@@ -120,11 +142,23 @@ export class TileGrid<T> {
       case 'ArrowUp': next = this.vertical(all, i, -1); break;
       case 'Home': next = all[0]; break;
       case 'End': next = all[all.length - 1]; break;
-      case 'Enter': if (i >= 0) { this.open.emit(all[i].tile.id); e.preventDefault(); } return;
+      case 'Enter': if (cur) this.open.emit(cur.tile.id); break;
+      case ' ': if (cur && (e.ctrlKey || e.metaKey)) this.pick(cur.tile.id, e); else return; break;
+      case 'F10': case 'ContextMenu': // Shift+F10 = the menu key: the menu hangs below the focused tile
+        if (!cur || (e.key === 'F10' && !e.shiftKey)) return;
+        { const r = this.host.querySelector(`[data-id="${cur.tile.id}"]`)?.getBoundingClientRect(); this.contextMenu.emit({ id: cur.tile.id, x: r?.left ?? 0, y: r?.bottom ?? 0 }); }
+        break;
       default: return;
     }
     e.preventDefault();
-    if (next) { this.select.emit(next.tile.id); this.scrollTo(next.tile.id); }
+    if (next) { this.select.emit(next.tile.id); this.scrollTo(next.tile.id); if (!e.ctrlKey && !e.metaKey) this.pick(next.tile.id, e); }
+  }
+
+  private tileAt(e: Event): string | null { return (e.target as HTMLElement).closest<HTMLElement>('.tile')?.dataset['id'] ?? null; }
+
+  /** Ranges follow the visual order (bricks mode reorders tiles), not the input order. */
+  private pick(id: string, mods: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
+    this.selection()?.click(id, this.layout().placements.map(p => p.tile.id), { ctrl: mods.ctrlKey || mods.metaKey, shift: mods.shiftKey });
   }
 
   /** Tile in the adjacent row whose centre is closest horizontally. */

@@ -103,6 +103,8 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | K7 | Hidden = safe-delete: index only, excluded from default views and counts, visible in the Hidden view, reconciliation unaffected | ◐ | `JdbcAlbumRepositoryTest` hidden rules (phase 0), Views strip (F3) |
 | K8 | Copies by content stamp: `copies` per page, copy list with Compare, Duplicates view | ◐ | `copies` (phase 0), `compareCopies` (raw files, SHA-256 per entry; `ScanTest`), UI (F3) |
 | K9 | Multi-selection (≤ 500), context menus on albums, folders, entities, photos; confirm dialogs for every operation | ◐ | `core/selection.spec.ts` (phase 0), F1/F4 |
+| K8 | Copies by content stamp: `copies` per page, copy list with Compare, Duplicates view | ◐ | `copies` (phase 0), `compareCopies` (B1), UI (F3) |
+| K9 | Multi-selection (≤ 500), context menus on albums, folders, entities, photos; confirm dialogs for every operation | ◐ | `core/selection.spec.ts` (click rules, keyboard sequence), `ui/shared/context-menu.spec.ts` (placement); F1 landed the grid selection (Ctrl/Shift click and arrows, Ctrl+A with paging, Esc, H), the chip, `ContextMenu` (nested, lazy, keyboard), `Confirm` (preflight, options, password2) and `EntityPicker` (recent, create) against the mock; menus and operations are wired by F4 |
 
 ## O — Operations ([catalog_plan.md](catalog_plan.md) §4)
 

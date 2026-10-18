@@ -1,17 +1,18 @@
 import { DecimalPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, signal, untracked, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, input, signal, untracked, viewChild } from '@angular/core';
 import { Gateway } from '../core/gateway';
 import { Folder } from '../core/model';
 import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
 import { lastSegment, normPath } from '../core/paths';
+import { ContextMenu, MenuEntry } from './shared/context-menu';
 import { Icon } from './shared/icon';
 
 interface Crumb { path: string; label: string; title: string }
 
 const POP_W = 240;
 
-/** Slim bar above the grid: ↑ · Library › crumbs (each with a children popover) · editable path · count · Rescan. */
+/** Slim bar above the grid: ↑ · Library › crumbs (each with a children popover) · editable path · selection chip · count · Rescan. */
 @Component({
   selector: 'app-location-bar',
   imports: [Icon, DecimalPipe],
@@ -38,6 +39,13 @@ const POP_W = 240;
         </div>
       </div>
       <span class="grow" (click)="edit()"></span>
+    }
+    @if (store.selection.size() >= 2) {
+      <span class="chip active sel" title="Albums in the selection">
+        <span>{{ store.selection.size() | number }} selected</span>
+        @if (selectionMenu()) { <button class="dd-sel" title="Actions for the selection" (click)="openSelectionMenu($event)"><app-icon name="chevronDown" [size]="12" /></button> }
+        <button title="Deselect all (Esc)" (click)="store.selection.clear()"><app-icon name="x" [size]="12" /></button>
+      </span>
     }
     <span class="count">@if (store.loading()) { <span class="spinner"></span> }{{ store.total() | number }} albums</span>
     <button class="btn icon-btn sm ghost" [class.active]="editing()" title="Edit the path" (click)="edit()"><app-icon name="edit" [size]="14" /></button>
@@ -73,6 +81,7 @@ const POP_W = 240;
     .grow { flex: 1; align-self: stretch; cursor: text; }
     input.input { flex: 1; min-width: 120px; }
     .count { display: inline-flex; align-items: center; gap: 6px; margin: 0 4px; color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .sel { flex: none; gap: 2px; margin-left: 4px; padding-right: 4px; font-variant-numeric: tabular-nums; animation: fade-up 0.15s var(--ease); > span { padding-right: 4px; } button { height: 18px; padding: 0 2px; border-radius: 4px; &:hover { background: var(--accent-soft); } } }
     .pop { position: absolute; top: calc(100% - 2px); z-index: 40; min-width: 240px; max-width: 340px; max-height: 320px; overflow: auto; padding: 4px; border-radius: var(--radius); outline: none; animation: fade-up 0.15s var(--ease); }
     .item { display: flex; align-items: center; gap: 7px; width: 100%; height: 26px; padding: 0 8px; border-radius: var(--radius-s); color: var(--text-2); text-align: left; }
     .item:hover { background: var(--surface-2); color: var(--text); }
@@ -86,9 +95,13 @@ const POP_W = 240;
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class LocationBar {
+  /** Builds the selection chip's ▾ menu on every open (the chip has no ▾ without it). */
+  readonly selectionMenu = input<(() => MenuEntry[]) | null>(null);
+
   protected readonly store = inject(AlbumStore);
   private readonly gw = inject(Gateway);
   private readonly toasts = inject(Toasts);
+  private readonly contextMenu = inject(ContextMenu);
   private readonly host: HTMLElement = inject(ElementRef).nativeElement;
   private readonly pathInput = viewChild<ElementRef<HTMLInputElement>>('path');
   private readonly crumbsEl = viewChild<ElementRef<HTMLElement>>('crumbsEl');
@@ -145,6 +158,12 @@ export class LocationBar {
   }
 
   protected rescan() { const f = this.store.folder(); void this.store.startScan(f ? [f] : undefined); }
+
+  /** The selection menu hangs below the chip. */
+  protected openSelectionMenu(e: Event) {
+    const r = (e.currentTarget as HTMLElement).closest('.chip')!.getBoundingClientRect();
+    this.contextMenu.open(r.left, r.bottom + 4, this.selectionMenu()?.() ?? []);
+  }
 
   protected async openMenu(path: string | null, e: Event) {
     if (this.menu() === path) { this.menu.set(undefined); return; }

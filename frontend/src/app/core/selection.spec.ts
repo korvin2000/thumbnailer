@@ -51,6 +51,20 @@ describe('Selection', () => {
     s.selectFirst(Array.from({ length: 900 }, (_, i) => String(i)), 800);
     expect(s.size()).toBe(SELECT_CAP);
   });
+  it('keyboard: an arrow move is a plain click, Shift+arrows range from it either way, Ctrl+Space toggles without moving the anchor', () => {
+    const s = new Selection();
+    s.click('b', order); // → lands on b
+    s.click('c', order, { shift: true }); s.click('d', order, { shift: true }); // Shift+→ twice
+    expect(ids(s)).toEqual(['b', 'c', 'd']);
+    s.click('c', order, { shift: true }); // Shift+← shrinks back towards the anchor
+    expect(ids(s)).toEqual(['b', 'c']);
+    s.click('a', order, { shift: true }); // Shift+Home-like jump past the anchor
+    expect(ids(s)).toEqual(['a', 'b']);
+    s.click('e', order, { ctrl: true }); // Ctrl+Space on e
+    expect(ids(s)).toEqual(['a', 'b', 'e']);
+    s.click('d', order, { shift: true }); // the anchor is now e
+    expect(ids(s)).toEqual(['d', 'e']);
+  });
   it('clear empties the selection and drops the anchor', () => {
     const s = new Selection();
     s.click('b', order); s.clear();

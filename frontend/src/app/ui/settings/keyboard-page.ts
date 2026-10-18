@@ -2,8 +2,11 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
 
 const LIBRARY: [string[], string][] = [
   [['/'], 'Focus the search box'], [['E'], 'Folders tab (sidebar)'], [['F'], 'Refine tab (sidebar)'], [['I'], 'Details panel'], [['T'], 'Light / dark theme'],
-  [['[', ']'], 'Fewer / more albums per row'], [['↑', '↓', '←', '→'], 'Move the selection'], [['Home', 'End'], 'First / last album'],
-  [['Enter'], 'Open the selected album'], [['Esc'], 'Close the overlaying sidebar (narrow windows), else clear the selection'],
+  [['[', ']'], 'Fewer / more albums per row'], [['↑', '↓', '←', '→'], 'Move the focus (selects that album)'], [['Home', 'End'], 'First / last album'],
+  [['Shift', '↑↓←→'], 'Extend the selection'], [['Ctrl', 'click'], 'Add to / remove from the selection'], [['Shift', 'click'], 'Select the range'],
+  [['Ctrl', 'Space'], 'Toggle the focused album'], [['Ctrl', 'A'], 'Select all loaded albums (up to 500)'], [['Shift', 'F10'], 'Menu for the focused album'],
+  [['H'], 'Hide the selected albums (unhide when all are hidden)'], [['Delete'], 'Delete the selected albums…'],
+  [['Enter'], 'Open the focused album'], [['Esc'], 'Clear the selection; then close the overlaying sidebar (narrow windows), else drop the focus'],
 ];
 const VIEWER: [string[], string][] = [
   [['↑', '↓', '←', '→'], 'Move between photos'], [['Enter'], 'Open the photo full size'], [['C'], 'Use the selected photo as cover'],
