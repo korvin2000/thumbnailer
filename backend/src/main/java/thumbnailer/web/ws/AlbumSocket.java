@@ -13,6 +13,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.ContextClosedEvent;
@@ -54,6 +57,10 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     private volatile boolean closing; // the context is closing: sessions that arrive now are sent away at once
     private final ExecutorService outbox =
             Executors.newSingleThreadExecutor(Thread.ofPlatform().name("ws-broadcast").daemon(true).factory());
+    // the .cry key is session-only: forgotten 10 s after the last client left (a reload reconnects well within that)
+    private final ScheduledExecutorService idle =
+            Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("ws-idle").daemon(true).factory());
+    private volatile Future<?> forget;
     private final JsonMapper json;
     private final AlbumRepository repo;
     private final AlbumService albums;
@@ -85,17 +92,26 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     }
 
     @Override
-    public void close() { outbox.shutdown(); }
+    public void close() {
+        outbox.shutdown();
+        idle.shutdownNow();
+    }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         // Buffers sends so that a slow client never blocks a scan; overflowing the buffer closes that session.
         sessions.put(session.getId(), new ConcurrentWebSocketSessionDecorator(session, 10_000, 32 << 20));
+        if (forget != null) forget.cancel(false);
         if (closing) goingAway(); // put, then read; goingAway sets, then sweeps: one of them sees the other
     }
 
     @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) { sessions.remove(session.getId()); }
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) { drop(session); }
+
+    private void drop(WebSocketSession session) {
+        if (sessions.remove(session.getId()) != null && sessions.isEmpty() && !closing)
+            forget = idle.schedule(() -> { if (sessions.isEmpty()) settings.forgetKey(); }, 10, TimeUnit.SECONDS);
+    }
 
     /** Clients see 1001 (going away) before the server stops: Undertow drops sockets that Spring upgraded. */
     @EventListener(ContextClosedEvent.class)
@@ -200,7 +216,7 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
 
     private Event settingsInfo() {
         var stats = repo.rootStats();
-        var current = settings.get();
+        var current = settings.masked(); // the .cry key only as its fingerprint
         return new Event.SettingsInfo(current, Containers.normalize(settings.dataDir()), current.roots().stream().map(r -> {
             var stat = stats.get(r.path());
             var location = current.locate(r.path());
@@ -228,7 +244,7 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
             session.sendMessage(new TextMessage(text));
         } catch (IOException | RuntimeException e) {
             log.debug("Closing session {} after a failed send: {}", session.getId(), e.toString());
-            sessions.remove(session.getId());
+            drop(session);
             try {
                 session.close(CloseStatus.SESSION_NOT_RELIABLE);
             } catch (IOException | RuntimeException ignored) {

@@ -11,6 +11,7 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 |---|---|---|---|
 | L1 | The unit is an album: a directory holding ≥ `min-images` (2) images directly, or an archive holding images — zip (JDK), and through 7-Zip RAR, 7z, tar, ISO and tar inside gzip/bzip2/xz/Z (`.tar.gz .tgz .tar.bz2 .tbz2 .tar.xz .txz .tar.Z .taz`); nested dirs are separate albums; an unchanged archive rescans by `stat` | ✅ | `index/AlbumDiscovery`, `source/SevenZipContainer`, `ScanTest`, `SevenZipContainerTest` (RAR/ISO/Z untested: 7-Zip cannot write them) |
 | L2 | Images: jpg jpeg png gif webp bmp tif tiff; JPEG through libjpeg-turbo (CMYK/12-bit fall back to ImageIO + TwelveMonkeys), WebP stills through libwebp (animations: first frame through ImageIO + TwelveMonkeys), the rest through ImageIO; corrupt entries skipped | ✅ | `source/AlbumContainer.IMAGE_EXTENSIONS`, `image/Thumbnailer` |
+| L2a | xanderView's encrypted `.cry` images (in folders and archives) decrypt byte-compatibly with a password set in Settings → Folders; only the derived AES key is kept (`cryKey`), never the password, and only in memory for the session (clients see only a fingerprint) (forgotten on restart or 10 s after the last client leaves, never in `settings.json`); without a key `.cry` files are not images for new indexing (a folder of only `.cry` files is no album), but albums already indexed with a key stay as they are and only their on-demand reads fail until the password is entered again; setting a password, or a different one, re-indexes exactly the affected albums on the next scan; thumbnails and originals decrypt on demand at once; a wrong password skips the files with one warning per album | ✅ | `source/Cry`, `source/CryTest` (golden files written by xanderView), `ScanTest.encryptedImagesFollowThePassword` |
 | L3 | Album stats: image count, bytes, average and max resolution, shot date, modified/indexed time | ✅ | `index/AlbumIndexer` |
 | L4 | Album id is stable across re-index, moves and renames | ✅ | `ScanTest.renamedAlbumKeepsItsIdentity…` |
 | L5 | The library on disk is never modified by the app | ✅ | design rule (no writers in `source/`) |
@@ -61,7 +62,7 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | Q1 | Live search-as-you-type over name, model, studio, photographer, description, tags | ✅ | `JdbcAlbumRepositoryTest`, `core/store.ts` |
 | Q2 | Search syntax: `#tag`, `model:`/`studio:`/`by:`/`kind:` with quotes | ✅ | `search-syntax.spec.ts` |
 | Q3 | Filters: tags (all), model/studio/photographer, kind, roots, size, photo count, megapixels, date range, rating | ✅ | `ui/filters-panel.ts`, `JdbcAlbumRepositoryTest` |
-| Q4 | Sorts: newest, oldest, largest, smallest, most/fewest photos, best quality, top rated, name, recently indexed | ✅ | `AlbumQuery.Sort` |
+| Q4 | Sorts: date shot, size, photos, quality, rating, name, indexed — every field in both directions (field + direction control) | ✅ | `AlbumQuery.Sort`, `ui/sort-menu.ts` |
 | Q5 | Facet suggestions (top tags/models/studios/photographers) | ◐ | global only; not narrowed by the current query |
 | Q6 | Results update live while scanning or editing | ✅ | `core/store.ts` `onEvent`/`refresh` |
 
@@ -75,7 +76,7 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | U4 | Tile shows name and size; hover shows meta; details panel (floating/inline/bottom sheet) with editing | ✅ | `ui/album-card.ts`, `ui/details-panel.ts` |
 | U5 | Left sidebar with Folders / Refine tabs (`E` / `F`), slides over content below 1100px | ✅ | `ui/sidebar.ts`, `ui/filters-panel.ts`, `app.scss` |
 | U6 | Album viewer: photo grid, lightbox, set cover, reveal in OS file manager, show path | ✅ | `ui/album-viewer.ts`, `AlbumSocket.reveal` |
-| U7 | Themes: system/light/dark | ✅ | `styles/_tokens.scss`, `core/prefs.ts` |
+| U7 | Themes: light/dark toggle (`T`, top bar); a first run takes the system theme | ✅ | `styles/_tokens.scss`, `core/prefs.ts` |
 | U8 | Keyboard driven (see README) | ✅ | `app.ts`, `album-viewer.ts`, `tile-grid.ts` |
 | U9 | Works without backend in dev (mock dataset) | ✅ | `core/mock-gateway.ts` |
 | U10 | Settings dialog grouped in pages (Library, Folders, Thumbnails, Appearance, Keyboard, About) with one draft (bound to its library: discarded on a library switch) and an explicit Save/Revert for server-side settings | ✅ | `ui/settings/settings-dialog.ts`, `ui/settings/*-page.ts` |
@@ -83,7 +84,7 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | U12 | Library management: known libraries with switch/forget/add, composition chart (covers / metadata / overhead), counts, last update, sizes, Optimize | ✅ | `ui/settings/library-page.ts` |
 | U13 | Folder validation: a folder inside an indexed root is refused, a parent of indexed roots offers to replace them; an unreachable root is relocated with `Locate…`, which derives a path-map rule (drive and Unix prefixes) | ✅ | `ui/settings/folders-page.ts`, `core/paths.spec.ts` |
 | U14 | Cover and thumbnail rendering (format, quality, size, threads) editable in the UI | ✅ | `ui/settings/thumbnails-page.ts` |
-| U15 | Explorer-like directory tree (Library › roots › folders with album counts, lazy, keyboard); selecting a folder shows only albums at or below it | ✅ | `ui/folder-tree.ts`, `AlbumStore.goTo` |
+| U15 | Explorer-like directory tree (Library › roots › folders with album counts, lazy, keyboard); selecting a folder shows only albums at or below it; filter box over the loaded tree, collapse all, expand selected (≤ 300 folders) | ✅ | `ui/folder-tree.ts`, `AlbumStore.goTo` |
 | U16 | Location bar above the grid: ↑, crumbs with sub-folder popovers, editable path (must lie inside an indexed folder), album count | ✅ | `ui/location-bar.ts` |
 | U17 | Rescan of only the shown folder (Library = all roots); Cancel while running; empty-folder state offers it | ✅ | `ui/location-bar.ts`, `app.html` |
 

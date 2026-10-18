@@ -24,6 +24,7 @@ import thumbnailer.album.Entry;
 import thumbnailer.image.Thumbnailer.Thumb;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Cry;
 import thumbnailer.source.Exclusions;
 
 /**
@@ -83,8 +84,9 @@ class ImageController {
                 }
             }
         };
-        return ResponseEntity.ok().cacheControl(CACHE).eTag(etag(album)).contentLength(entry.bytes())
-                .contentType(MediaTypeFactory.getMediaType(entry.name()).orElse(MediaType.APPLICATION_OCTET_STREAM))
+        var response = ResponseEntity.ok().cacheControl(CACHE).eTag(etag(album));
+        if (!Cry.is(entry.name())) response.contentLength(entry.bytes()); // a .cry entry's size is the file's, not the image's
+        return response.contentType(MediaTypeFactory.getMediaType(entry.name()).orElse(MediaType.APPLICATION_OCTET_STREAM))
                 .body(new InputStreamResource(body));
     }
 

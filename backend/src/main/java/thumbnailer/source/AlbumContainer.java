@@ -22,7 +22,7 @@ import java.util.function.BiConsumer;
 /** An opened album (a directory or an archive): lists its files and streams their bytes. */
 public interface AlbumContainer extends Closeable {
 
-    Set<String> IMAGE_EXTENSIONS = Set.of("jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff");
+    Set<String> IMAGE_EXTENSIONS = Set.of("jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "cry");
 
     Comparator<Item> BY_NAME = Comparator.comparing(Item::name, String.CASE_INSENSITIVE_ORDER);
 
@@ -85,6 +85,9 @@ public interface AlbumContainer extends Closeable {
      * tar. Its reads hold no turn on a disk that pays for seeks: other albums read while it decompresses.
      */
     default boolean cpuBound() { return false; }
+
+    /** The key state of this container's encrypted members (see {@link Cry}): stored with the signature of an album holding any. */
+    default String keyTag() { return ""; }
 
     default List<Item> images() { return items().stream().filter(i -> isImage(i.name())).toList(); }
 

@@ -221,7 +221,7 @@ public class AlbumService {
     private Gallery gallery(Album album) throws IOException {
         if (album.kind() != Kind.ARCHIVE) return null;
         var s = settings.get();
-        var key = album.revision() + "/" + s.thumbs().epoch() + "/" + s.thumbs().permits();
+        var key = album.revision() + "/" + s.thumbs().epoch() + "/" + s.thumbs().permits() + "/" + s.cryKey();
         synchronized (galleries) {
             var pass = galleries.get(album.id());
             if (closing || pass != null && pass.live(key)) return closing ? null : pass.gallery();

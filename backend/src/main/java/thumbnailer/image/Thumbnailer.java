@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import thumbnailer.source.AlbumContainer;
 
@@ -27,11 +29,13 @@ public class Thumbnailer {
      * 1/2 50.6 dB in 64 ms, a full decode 49.3 dB in 77 ms; entropy decoding dominates, so smaller scales save little.
      */
     static final double GAP = 1.5;
+    private static final Logger log = LoggerFactory.getLogger(Thumbnailer.class);
 
     public Thumbnailer() {
         WebP.features(new byte[16]); // loads both natives now: a missing one fails the start, not the first scan
         TurboJpeg.isJpeg(MemorySegment.ofArray(new byte[0]));
-        Thread.ofPlatform().daemon().name("resampler-warmup").priority(Thread.MIN_PRIORITY).start(Resampler::warmUp);
+        log.info("Resampler: {}", Resampler.PATH);
+        Thread.ofPlatform().daemon().name("resampler-warmup").start(Resampler::warmUp); // ~1 s of one core; a scan at start must not starve it
     }
 
     /** Encoded bytes with the format and {@link Render#epoch()} that made them. */

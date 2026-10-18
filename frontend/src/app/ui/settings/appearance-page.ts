@@ -8,12 +8,11 @@ import { Icon } from '../shared/icon';
   imports: [Icon],
   template: `
     <h3>Appearance</h3>
-    <p class="hint">Stored in this browser and applied as you change them.</p>
+    <p class="hint">Stored in this browser and applied as you change them. The theme starts as the system's and then keeps your choice.</p>
     <section class="card">
       <h4>Theme</h4>
       <div class="field"><span>Theme</span>
         <div class="segmented">
-          <button [class.active]="prefs.theme() === 'system'" (click)="prefs.theme.set('system')"><app-icon name="monitor" [size]="13" />System</button>
           <button [class.active]="prefs.theme() === 'light'" (click)="prefs.theme.set('light')"><app-icon name="sun" [size]="13" />Light</button>
           <button [class.active]="prefs.theme() === 'dark'" (click)="prefs.theme.set('dark')"><app-icon name="moon" [size]="13" />Dark</button>
         </div></div>

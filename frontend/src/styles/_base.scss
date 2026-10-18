@@ -58,9 +58,12 @@ kbd {
   &.mono { font-family: var(--mono); font-size: 12px; }
 }
 textarea.input { height: auto; padding: 7px 10px; resize: vertical; line-height: 1.4; }
-select.input { padding-right: 26px; appearance: none; cursor: pointer;
+select.input, .input[list] {
   background-image: linear-gradient(45deg, transparent 50%, var(--text-2) 50%), linear-gradient(135deg, var(--text-2) 50%, transparent 50%);
   background-position: calc(100% - 13px) 55%, calc(100% - 9px) 55%; background-size: 4px 4px; background-repeat: no-repeat; }
+select.input { padding-right: 26px; appearance: none; cursor: pointer; }
+// datalist inputs: the same arrow as a select; the browser's own picker indicator sits invisibly on top of it and still opens the list
+.input[list] { padding-right: 8px; &::-webkit-calendar-picker-indicator { width: 18px; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; } }
 
 .chip {
   display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px;

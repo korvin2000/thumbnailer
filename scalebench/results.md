@@ -75,3 +75,7 @@ so smaller DCT scales save little; non-power-of-two scales (3/8 ...) have no SIM
 
 Interpreted, the Vector API boxes every vector: a single first resize took 0.5 s instead of 4 ms. The warm-up runs
 each kernel shape until C2 has compiled it; compiled code is shared by all threads.
+
+Without C2 the Vector API never becomes SIMD: with `-XX:TieredStopAtLevel=1` (C1 only; Spring Boot's `bootRun` adds it
+unless `optimizedLaunch = false`) the 12-thread harness did 313 resizes/s scalar and 3 SIMD (single resizes up to 2.8 s,
+a boxed vector per operation), the app 4.4 thumbnails/s instead of ~200. `Resampler.SIMD` is therefore false without C2.

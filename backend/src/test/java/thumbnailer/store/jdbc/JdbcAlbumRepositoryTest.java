@@ -93,6 +93,12 @@ class JdbcAlbumRepositoryTest {
                 .containsExactly("5", "3", "2", "1", "4", "6");
         assertThat(repo.search(query(null, null, null, null, Sort.OLDEST, 0, 10)).getLast().id()).isEqualTo("6");
 
+        // reverse orders: NAME_DESC mirrors NAME exactly; LOWEST_RATED breaks rating ties by name ascending
+        assertThat(repo.search(query(null, null, null, null, Sort.NAME_DESC, 0, 10))).extracting(Album::id)
+                .containsExactlyElementsOf(repo.search(query(null, null, null, null, Sort.NAME, 0, 10)).stream().map(Album::id).toList().reversed());
+        assertThat(repo.search(query(null, null, null, null, Sort.LOWEST_RATED, 0, 10))).extracting(Album::id)
+                .containsExactly("6", "2", "1", "5", "4", "3");
+
         // a LIKE wildcard in the text is literal; a tag must match whole
         assertThat(repo.count(query("%", null, null, null, Sort.NAME, 0, 10))).isZero();
         assertThat(repo.count(query(null, List.of("wed"), null, null, Sort.NAME, 0, 10))).isZero();

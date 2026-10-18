@@ -6,11 +6,17 @@ import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HexFormat;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import thumbnailer.source.Cry;
 import tools.jackson.databind.json.JsonMapper;
 
-/** {@link Settings} persisted as {@code settings.json} in the active library directory. */
+/**
+ * {@link Settings} persisted as {@code settings.json} in the active library directory, except {@code cryKey}: it lives
+ * in memory for this process only (a key found in an older file is dropped) until {@link #forgetKey}. Clients see only
+ * its fingerprint ({@link #masked}); sending that back keeps the key, a stale one is dropped.
+ */
 @Component
 public class SettingsStore {
 
@@ -21,16 +27,29 @@ public class SettingsStore {
     SettingsStore(@Value("${thumbnailer.library-dir:${thumbnailer.data-dir}}") Path dataDir, JsonMapper json) throws IOException {
         this.file = Files.createDirectories(dataDir).toAbsolutePath().normalize().resolve("settings.json");
         this.json = json;
-        this.current = Files.exists(file) ? json.readValue(file.toFile(), Settings.class) : Settings.DEFAULT;
+        this.current = Files.exists(file) ? json.readValue(file.toFile(), Settings.class).withKey(null) : Settings.DEFAULT;
     }
 
     public Settings get() { return current; }
 
+    /** The settings as clients see them: the key replaced by its fingerprint. */
+    public Settings masked() { return current.withKey(fingerprint(current)); }
+
     public synchronized Settings set(Settings settings) throws IOException {
+        var key = settings.cryKey();
+        if (key != null && key.length() == 8) settings = settings.withKey(key.equals(fingerprint(current)) ? current.cryKey() : null);
         var tmp = file.resolveSibling("settings.json.tmp");
-        json.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), settings.requireDisjointRoots());
+        json.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), settings.requireDisjointRoots().withKey(null));
         Files.move(tmp, file, REPLACE_EXISTING, ATOMIC_MOVE);
         return current = settings;
+    }
+
+    public synchronized void forgetKey() {
+        if (current.cryKey() != null) current = current.withKey(null);
+    }
+
+    private static String fingerprint(Settings s) {
+        return s.cryKey() == null ? null : Cry.fingerprint(HexFormat.of().parseHex(s.cryKey()));
     }
 
     public Path dataDir() { return file.getParent(); }

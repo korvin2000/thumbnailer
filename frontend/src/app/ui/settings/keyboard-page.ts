@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 
 const LIBRARY: [string[], string][] = [
-  [['/'], 'Focus the search box'], [['E'], 'Folders tab (sidebar)'], [['F'], 'Refine tab (sidebar)'], [['I'], 'Details panel'], [['T'], 'Cycle theme'],
+  [['/'], 'Focus the search box'], [['E'], 'Folders tab (sidebar)'], [['F'], 'Refine tab (sidebar)'], [['I'], 'Details panel'], [['T'], 'Light / dark theme'],
   [['[', ']'], 'Fewer / more albums per row'], [['↑', '↓', '←', '→'], 'Move the selection'], [['Home', 'End'], 'First / last album'],
   [['Enter'], 'Open the selected album'], [['Esc'], 'Close the overlaying sidebar (narrow windows), else clear the selection'],
 ];

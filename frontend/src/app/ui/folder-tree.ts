@@ -10,7 +10,7 @@ import { Icon, IconName } from './shared/icon';
 /** One visible line of the tree; `path` null = the Library row. */
 interface Row { key: string; path: string | null; label: string; title: string; count: number; depth: number; icon: IconName; nested: boolean; open: boolean; reachable: boolean }
 
-const INDENT = 14;
+const INDENT = 14, EXPAND_CAP = 300;
 const prefix = (dir: string) => dir.endsWith('/') ? dir : dir + '/';
 
 /** Explorer-like tree over the stored album paths: Library › roots › folders, loaded lazily per expanded node. */
@@ -19,6 +19,15 @@ const prefix = (dir: string) => dir.endsWith('/') ? dir : dir + '/';
   imports: [Icon, DecimalPipe],
   host: { tabindex: '0', '(keydown)': 'onKey($event)' },
   template: `
+    <div class="tools">
+      <label class="filter">
+        <app-icon name="search" [size]="13" />
+        <input #q placeholder="Filter folders" autocomplete="off" spellcheck="false" [value]="filter()" (input)="filter.set(q.value)" (keydown.escape)="filter.set(''); $event.stopPropagation()" />
+        @if (filter()) { <button class="clear" type="button" title="Clear filter" (click)="filter.set(''); q.focus()"><app-icon name="x" [size]="11" /></button> }
+      </label>
+      <button class="btn icon-btn sm ghost" type="button" title="Collapse all" (click)="collapseAll()"><app-icon name="collapseAll" [size]="15" /></button>
+      <button class="btn icon-btn sm ghost" type="button" [title]="store.folder() === null ? 'Expand all folders' : 'Expand selected folder'" (click)="expandSelected()"><app-icon name="expandAll" [size]="15" /></button>
+    </div>
     @for (r of rows(); track r.key) {
       <div class="row" [class.selected]="r.path === store.folder()" [class.dim]="!r.reachable" [style.padding-left.px]="6 + indent * r.depth" [title]="r.title"
            (click)="store.goTo(r.path)" (dblclick)="r.nested && toggle(r.path!)">
@@ -32,7 +41,14 @@ const prefix = (dir: string) => dir.endsWith('/') ? dir : dir + '/';
     }
   `,
   styles: `
-    :host { display: block; padding: 6px 0 20px; outline: none; user-select: none; }
+    :host { display: block; padding: 0 0 20px; outline: none; user-select: none; }
+    .tools { position: sticky; top: 0; z-index: 1; display: flex; gap: 4px; align-items: center; padding: 6px 8px 4px 10px; background: var(--bg-elev); }
+    .filter { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 3px 0 8px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--bg); color: var(--text-3); cursor: text; transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease); }
+    .filter:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .filter input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; outline: none; }
+    .filter input::placeholder { color: var(--text-3); }
+    .clear { display: inline-flex; flex: none; width: 18px; height: 18px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text-3); cursor: pointer; }
+    .clear:hover { color: var(--text); background: var(--surface-2); }
     .row { display: flex; align-items: center; gap: 5px; height: 28px; margin: 0 6px; padding-right: 10px; border-radius: var(--radius-s); color: var(--text-2); cursor: pointer; white-space: nowrap; }
     .row:hover { background: var(--surface-2); color: var(--text); }
     .row.selected { background: var(--accent-soft); color: var(--accent-strong); }
@@ -58,6 +74,7 @@ export class FolderTree {
 
   private readonly children = signal(new Map<string, Folder[]>());
   private readonly expanded = signal(new Set<string>());
+  protected readonly filter = signal('');
   protected readonly loading = signal(new Set<string>());
   private readonly seenRoots = new Set<string>();
   private rootsKey = '';
@@ -65,12 +82,16 @@ export class FolderTree {
   private epoch = 0;
 
   protected readonly rows = computed<Row[]>(() => {
-    const roots = this.store.roots(), kids = this.children(), open = this.expanded();
+    const roots = this.store.roots(), kids = this.children(), open = this.expanded(), q = this.filter().trim().toLowerCase();
     const out: Row[] = [{ key: '', path: null, label: 'Library', title: 'All indexed folders', count: roots.reduce((n, r) => n + r.albumCount, 0), depth: 0, icon: 'home', nested: false, open: false, reachable: true }];
-    const walk = (path: string, label: string, count: number, depth: number, nested: boolean, reachable: boolean) => {
-      const isOpen = nested && open.has(path), list = kids.get(path);
+    // filtering walks every loaded node regardless of `expanded` and keeps matches plus their ancestors; returns whether the subtree hit
+    const walk = (path: string, label: string, count: number, depth: number, nested: boolean, reachable: boolean): boolean => {
+      const list = kids.get(path), isOpen = q ? nested && !!list?.length : nested && open.has(path), at = out.length;
+      let hit = !q || label.toLowerCase().includes(q);
       out.push({ key: path, path, label, title: reachable ? path : path + ' — not reachable', count, depth, icon: isOpen ? 'folderOpen' : 'folder', nested: nested && (list?.length !== 0), open: isOpen, reachable });
-      if (isOpen) for (const f of list ?? []) walk(f.path, f.name, f.albums, depth + 1, f.nested, true);
+      if (isOpen) for (const f of list ?? []) hit = walk(f.path, f.name, f.albums, depth + 1, f.nested, true) || hit;
+      if (!hit) out.length = at;
+      return hit;
     };
     for (const r of roots) walk(r.path, lastSegment(r.path), r.albumCount, 1, r.exists, r.exists);
     return out;
@@ -107,6 +128,22 @@ export class FolderTree {
     if (!this.children().has(path)) void this.load(path);
   }
 
+  protected collapseAll() { this.expanded.set(new Set()); }
+
+  /** Breadth-first loads and expands the selected folder's subtree (Library: every reachable root), at most EXPAND_CAP folders. */
+  protected async expandSelected() {
+    const epoch = this.epoch, from = this.store.folder();
+    const queue = from === null ? this.store.roots().filter(r => r.exists).map(r => r.path) : [from];
+    for (let n = 0; queue.length; n++) {
+      if (n === EXPAND_CAP) { this.toasts.show(`Expanded the first ${EXPAND_CAP} folders`); break; }
+      const p = queue.shift()!, list = this.children().get(p) ?? await this.load(p);
+      if (epoch !== this.epoch) return;
+      this.expanded.update(s => new Set(s).add(p));
+      for (const f of list) if (f.nested) queue.push(f.path);
+    }
+    requestAnimationFrame(() => this.host.querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' }));
+  }
+
   private async load(path: string): Promise<Folder[]> {
     this.loading.update(s => new Set(s).add(path));
     const epoch = this.epoch;
@@ -135,6 +172,7 @@ export class FolderTree {
   }
 
   protected onKey(e: KeyboardEvent) {
+    if (e.target instanceof HTMLInputElement) return;
     const rows = this.rows(), i = rows.findIndex(r => r.path === this.store.folder()), cur = rows[i];
     const go = (r?: Row) => { if (r) this.store.goTo(r.path); };
     switch (e.key) {

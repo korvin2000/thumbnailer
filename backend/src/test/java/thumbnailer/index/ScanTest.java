@@ -18,6 +18,7 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -46,6 +47,8 @@ import thumbnailer.album.AlbumService;
 import thumbnailer.album.BlobStore;
 import thumbnailer.image.Render;
 import thumbnailer.settings.Settings;
+import thumbnailer.source.Cry;
+import thumbnailer.source.CryTest;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
@@ -334,6 +337,62 @@ class ScanTest {
         assertThat(scans.scan(null, () -> false).changed()).isZero();
         assertThat(repo.find(q.id())).as("outside the narrowed root").isEmpty();
         assertThat(repo.find(p.id()).orElseThrow().root()).isEqualTo(sub);
+    }
+
+    @Test
+    void encryptedImagesFollowThePassword() throws Exception {
+        // a client stays connected: the key lives as long as one does (a pending forget of an earlier test's socket is cancelled)
+        var received = new CopyOnWriteArrayList<String>();
+        var socket = connect(received);
+        socket.sendText("{\"type\":\"getSettings\",\"id\":1}", true).join();
+        await(received, m -> m.contains("\"id\":1"));
+        var key = Cry.key("test");
+        Files.createDirectories(root.resolve("E"));
+        Files.write(root.resolve("E/x1.cry"), CryTest.encrypt(jpeg(0), "a.jpg", key));
+        Files.write(root.resolve("E/x2.cry"), CryTest.encrypt(jpeg(1), "b.jpg", key));
+        dir(root.resolve("M"), "a.jpg");
+        Files.write(root.resolve("M/x3.cry"), CryTest.encrypt(jpeg(2), "c.jpg", key));
+        scan(() -> false);
+        assertThat(repo.byRoot(normalizedRoot())).as("without the password .cry files are no images").extracting(Album::name).containsExactly("M");
+        assertThat(byName("M").imageCount()).isEqualTo(1);
+
+        var s = settings.get();
+        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, "test"));
+        assertThat(settings.get().cryKey()).isEqualTo(HexFormat.of().formatHex(key));
+        assertThat(settings.get().cryPassword()).as("never kept").isNull();
+        assertThat(Files.readString(settings.file())).as("session only").doesNotContain("cryKey");
+        var fingerprint = Cry.fingerprint(key);
+        socket.sendText("{\"type\":\"getSettings\",\"id\":2}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":2"))).as("clients see only the fingerprint")
+                .contains("\"cryKey\":\"" + fingerprint + "\"").doesNotContain(settings.get().cryKey());
+        assertThat(fingerprint).matches("\\p{XDigit}{8}");
+        assertThat(settings.set(settings.masked()).cryKey()).as("echoed back: kept").isEqualTo(HexFormat.of().formatHex(key));
+        assertThat(scans.scan(null, () -> false).changed()).as("E is new, M holds a .cry file").isEqualTo(2);
+        var e = byName("E");
+        assertThat(e.imageCount()).isEqualTo(2);
+        assertThat(albums.storedCover(e)).as("cover decrypted while indexing").isPresent();
+        assertThat(albums.thumb(e, repo.entry(e.id(), 1).orElseThrow())).as("rendered on demand").isPresent();
+        assertThat(byName("M").imageCount()).isEqualTo(2);
+        assertThat(scans.scan(null, () -> false).changed()).as("same key: unchanged").isZero();
+        albums.patch(e.id(), new AlbumPatch(null, null, null, null, null, null, 4, null));
+
+        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, null));
+        var locked = scans.scan(null, () -> false);
+        assertThat(locked.changed() + " changed, " + locked.removed() + " removed").as("no key: kept as indexed").isEqualTo("0 changed, 0 removed");
+        assertThat(byName("E").imageCount()).isEqualTo(2);
+        assertThat(albums.thumb(e, repo.entry(e.id(), 1).orElseThrow())).as("cannot decrypt").isEmpty();
+
+        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, "test"));
+        assertThat(scans.scan(null, () -> false).changed()).as("the same key again: unchanged").isZero();
+        var back = byName("E");
+        assertThat(albums.thumb(back, repo.entry(e.id(), 1).orElseThrow())).isPresent();
+        assertThat(back.rating()).isEqualTo(4);
+
+        var echoed = settings.masked();
+        settings.forgetKey();
+        assertThat(settings.set(echoed).cryKey()).as("a stale fingerprint resurrects nothing").isNull();
+        assertThat(new Settings(s.roots(), s.exclusions(), false, null, null, null, "0A1B2C3D", null).cryKey()).isEqualTo("0a1b2c3d");
+        socket.abort();
     }
 
     @Test

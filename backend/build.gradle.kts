@@ -56,7 +56,12 @@ tasks.bootJar {
     archiveBaseName = "thumbnailer"
     manifest { attributes("Enable-Native-Access" to "ALL-UNNAMED", "Implementation-Version" to project.version) } // About: version
 }
-tasks.bootRun { jvmArgs(vector + nativeAccess) }
+// Boot's "optimized launch" adds -XX:TieredStopAtLevel=1 (C1 only). Only C2 turns the Vector API into SIMD; under C1 it boxes
+// every vector and the resampler ran 100x slower than scalar (4 thumbnails/s instead of 200), so no optimized launch here.
+tasks.bootRun {
+    jvmArgs(vector + nativeAccess)
+    optimizedLaunch = false
+}
 tasks.jar { enabled = false }
 tasks.test {
     useJUnitPlatform()

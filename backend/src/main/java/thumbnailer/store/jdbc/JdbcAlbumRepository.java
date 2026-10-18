@@ -271,9 +271,12 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
             case FEWEST_PHOTOS -> "image_count, ";
             case BEST_QUALITY -> "avg_pixels DESC, ";
             case TOP_RATED -> "rating DESC, ";
-            case NAME -> "";
+            case NAME, NAME_DESC -> "";
             case RECENTLY_INDEXED -> "indexed_at DESC, ";
-        } + "sort_name, id";
+            case WORST_QUALITY -> "avg_pixels, ";
+            case LOWEST_RATED -> "rating, ";
+            case FIRST_INDEXED -> "indexed_at, ";
+        } + (sort == AlbumQuery.Sort.NAME_DESC ? "sort_name DESC, id" : "sort_name, id");
     }
 
     private static void count(Map<String, Integer> counts, String value) {

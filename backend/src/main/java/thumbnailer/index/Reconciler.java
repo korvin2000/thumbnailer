@@ -15,6 +15,7 @@ import thumbnailer.album.AlbumRepository.Stamp;
 import thumbnailer.album.AlbumService;
 import thumbnailer.settings.Settings;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Cry;
 import thumbnailer.source.Disks;
 import thumbnailer.source.Exclusions;
 
@@ -71,8 +72,11 @@ class Reconciler {
             if (stamp != null) seen.add(stamp.id()); // even if indexing fails below: unreadable is not deleted
             if (cancelled.getAsBoolean()) return false; // a cancelled scan's queue on the disk drains without reading
             try (var turn = lane.enter(); var container = containers.open(found.kind(), found.path(), exclusions)) {
-                if (cancelled.getAsBoolean() || stamp != null && stamp.signature().equals(container.signature())) return false;
-                if (container.images().isEmpty()) return false;
+                if (cancelled.getAsBoolean() || stamp != null && Cry.matches(stamp.signature(), container)) return false;
+                if (container.images().isEmpty()) { // nothing left to show (all excluded, or .cry files without the password): not met, pruned with its scope
+                    if (stamp != null) seen.remove(stamp.id());
+                    return false;
+                }
                 // Only changed albums load in full; a moved one is relocated by the commit below only.
                 var base = (stamp != null ? repo.find(stamp.id()) : moved(container.contentId(), path)).orElse(null);
                 if (base != null) seen.add(base.id());

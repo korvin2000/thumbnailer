@@ -16,7 +16,6 @@ import { Sidebar } from './ui/sidebar';
 import { TileGrid } from './ui/tile-grid';
 import { Topbar } from './ui/topbar';
 
-const THEMES = ['system', 'light', 'dark'] as const;
 
 @Component({
   selector: 'app-root',
@@ -54,7 +53,7 @@ export class App {
       case 'e': case 'E': if (viewer) return; this.toggleTab('folders'); break;
       case 'f': case 'F': if (viewer) return; this.toggleTab('refine'); break;
       case 'i': case 'I': this.prefs.detailsOpen.update(v => !v); break;
-      case 't': case 'T': this.prefs.theme.update(t => THEMES[(THEMES.indexOf(t) + 1) % THEMES.length]); break;
+      case 't': case 'T': this.prefs.toggleTheme(); break;
       case '[': this.prefs.setColumns(this.prefs.columns() - 1); break;
       case ']': this.prefs.setColumns(this.prefs.columns() + 1); break;
       case 'Escape':

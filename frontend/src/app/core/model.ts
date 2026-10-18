@@ -39,19 +39,19 @@ export interface Entry {
 
 export type Sort =
   | 'NEWEST' | 'OLDEST' | 'LARGEST' | 'SMALLEST' | 'MOST_PHOTOS' | 'FEWEST_PHOTOS'
-  | 'BEST_QUALITY' | 'TOP_RATED' | 'NAME' | 'RECENTLY_INDEXED';
+  | 'BEST_QUALITY' | 'TOP_RATED' | 'NAME' | 'RECENTLY_INDEXED'
+  | 'WORST_QUALITY' | 'LOWEST_RATED' | 'NAME_DESC' | 'FIRST_INDEXED';
 
-export const SORTS: { value: Sort; label: string }[] = [
-  { value: 'NEWEST', label: 'Newest first' },
-  { value: 'OLDEST', label: 'Oldest first' },
-  { value: 'LARGEST', label: 'Biggest first' },
-  { value: 'SMALLEST', label: 'Smallest first' },
-  { value: 'MOST_PHOTOS', label: 'Most photos' },
-  { value: 'FEWEST_PHOTOS', label: 'Fewest photos' },
-  { value: 'BEST_QUALITY', label: 'Best quality' },
-  { value: 'TOP_RATED', label: 'Top rated' },
-  { value: 'NAME', label: 'Name A–Z' },
-  { value: 'RECENTLY_INDEXED', label: 'Recently indexed' },
+/** One sortable field with its two wire orders; the first listed direction is the default when the field is picked. */
+export interface SortField { label: string; desc: Sort; asc: Sort; ascFirst?: boolean }
+export const SORT_FIELDS: SortField[] = [
+  { label: 'Date shot', desc: 'NEWEST', asc: 'OLDEST' },
+  { label: 'Size', desc: 'LARGEST', asc: 'SMALLEST' },
+  { label: 'Photos', desc: 'MOST_PHOTOS', asc: 'FEWEST_PHOTOS' },
+  { label: 'Quality', desc: 'BEST_QUALITY', asc: 'WORST_QUALITY' },
+  { label: 'Rating', desc: 'TOP_RATED', asc: 'LOWEST_RATED' },
+  { label: 'Name', desc: 'NAME_DESC', asc: 'NAME', ascFirst: true },
+  { label: 'Indexed', desc: 'RECENTLY_INDEXED', asc: 'FIRST_INDEXED' },
 ];
 
 /** Everything the user can narrow a search by; absent = no filter. */
@@ -101,7 +101,8 @@ export type ImageFormat = 'WEBP' | 'JPEG';
 export interface Render { format: ImageFormat; quality: number; size: number; threads: number }
 /** Prefix rewrite applied on this machine; both ends are normalized dirs ending in '/'. */
 export interface Mapping { from: string; to: string }
-export interface Settings { roots: ScanRoot[]; exclusions: string[]; scanOnStart: boolean; pathMap: Mapping[]; covers: Render; thumbs: Render }
+/** `cryKey`: xanderView's `.cry` key, derived by the server from a `cryPassword` sent with a save (never kept or echoed) and held in server memory for the session only (never in settings.json); on the wire it is the key's 8-hex fingerprint: sending it back keeps the session key, a stale one is dropped; null/absent = none. */
+export interface Settings { roots: ScanRoot[]; exclusions: string[]; scanOnStart: boolean; pathMap: Mapping[]; covers: Render; thumbs: Render; cryKey?: string | null; cryPassword?: string | null }
 export const DEFAULT_SETTINGS: Settings = { roots: [], exclusions: [], scanOnStart: true, pathMap: [], covers: { format: 'WEBP', quality: 75, size: 512, threads: 4 }, thumbs: { format: 'JPEG', quality: 85, size: 512, threads: 0 } };
 /** `location` = `path` after the path map, i.e. where the root is looked for on this machine. */
 export interface RootStatus { path: string; location: string; exists: boolean; albumCount: number; lastScanAt: string | null; storage: 'SSD' | 'HDD' }

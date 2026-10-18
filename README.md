@@ -43,6 +43,13 @@ cover/thumbnail rendering are configured in the UI (Settings → Folders, Settin
 `settings.json` in the library dir. The library itself (metadata database, cover store, settings.json) is chosen,
 inspected and optimized in Settings → Library; several libraries can be kept and switched.
 
+**Encrypted images.** xanderView's `.cry` files (AES-encrypted images, also inside archives) are read when their
+password (the contents of xanderView's key file) is entered in Settings → Folders → Encrypted images. Only the key
+derived from it is kept, in memory only: it is forgotten on restart or 10 s after the last browser tab closes, never
+written to `settings.json`. Albums holding `.cry` files appear or change on the next scan after the password is set or
+changed; without it new `.cry` files are ignored, while albums already indexed stay, their images unreadable until the
+password is entered again.
+
 **Libraries.** A library is a folder holding settings.json, the database and the cover store. `libraries.json` in the
 data dir remembers the known libraries and the active one. Switching a library, or Optimize (cover store compaction,
 then a full database compaction while it closes), restarts the application inside the same process: open windows
@@ -51,7 +58,7 @@ argument (or environment variable) pins the library; a switch made in the UI the
 
 Native code (TuplDB, libjpeg-turbo, libwebp, 7-Zip) needs `--enable-native-access=ALL-UNNAMED`; the jar manifest,
 `bootRun` and the tests set it. `--add-modules jdk.incubator.vector` turns on the SIMD resampler (a jar manifest cannot;
-without it the scalar path runs: same pixels, 2-3x slower resizing). The natives ship inside the jar and are unpacked once per version into
+without it the scalar path runs: same pixels, 2-3x slower resizing). SIMD also needs the C2 JIT: under `-XX:TieredStopAtLevel=1` or `-Xint` the Vector API boxes every vector (100x slower), so the scalar path runs there too; `bootRun` therefore turns off Spring Boot's optimized launch, which adds that flag. The natives ship inside the jar and are unpacked once per version into
 `~/.thumbnailer/natives` (`-Dthumbnailer.natives=<dir>` moves that cache); x86_64 needs an AVX2 CPU. Archives rescan by
 file size and date: the first scan after upgrading re-lists every zip album once (photos are not decoded again). Upgrading from a version with `thumbs.mv`: that file is no longer used and can be deleted, and the first
 scan re-indexes every album once (new signature hash; stored photo facts are migrated, so photos are not re-probed);

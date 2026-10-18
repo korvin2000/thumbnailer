@@ -7,6 +7,22 @@ undo. Reference SPEC IDs.
 
 ## State (2026-10-14, v0.1.0, single initial commit + uncommitted tree)
 
+- 2026-10-14 `.cry` password is session-only: the key lives in server memory (never in settings.json), forgotten on restart or 10 s after the last client leaves; clients see an 8-hex fingerprint only; albums indexed with a key survive a missing key (only their `.cry` reads fail); Folders page shows a masked set state and an eye toggle for a typed password.
+- 2026-10-14 UI polish: sort = field × direction (`ui/sort-menu.ts`, 4 reverse `Sort` orders + indexes), folder tree filter/collapse/expand, kind strip, light/dark toggle only, settings behind the brand button, zip-file archive icon, datalist arrows and Save icon fixed. Checks: backend 70 tests pass (1 skipped), frontend build + 15 tests pass.
+- 2026-10-14 SIMD resampler "5-10x slower in the app": the dev run `bootRun` carried Spring Boot's optimized launch
+  (`-XX:TieredStopAtLevel=1`, C1 only), where the Vector API is never intrinsified and boxes every vector: 4 thumbnails/s
+  instead of ~200 with the jar, 320 CPU-s per minute, 2.4 GB working set. Fixed with `optimizedLaunch = false` and
+  `Resampler.SIMD` requiring C2 (`c2()`, the path is logged at start as `Resampler.PATH`; the warm-up runs at normal priority; warming the
+  gather branch as well was tried and dropped: it left the main shape 3x slower afterwards); with C2 the SIMD path is 1.7x faster than scalar on 12 threads and on par in
+  the decode-bound app (202 vs 189 thumbnails/s; cold scan of 120 albums 1.5 vs 1.7 s). Numbers in
+  [scalebench/results.md](scalebench/results.md).
+- 2026-10-14 xanderView `.cry` images (SPEC L2a): `source/Cry` decorates every container (`Containers.open`), password
+  in Settings → Folders stored as the derived key (`cryKey`); stored signatures carry the key state so a password
+  change re-indexes only the albums holding `.cry` files; locked `.cry` files are not images (pure-`.cry` albums
+  removed, tombstoned, on the next scan). Byte compatibility checked against files written by xanderView's own
+  encryptor (`cry-golden.tsv`); decrypt cost measured at ~4.4 GB/s (24 MiB read 16 ms vs 11 ms plain). Checks:
+  `:backend:test` 69 (+1 env-gated bench) green, frontend `ng build`.
+
 - 2026-10-14 storage-aware reads (Next 7, steps 1–3): per-disk FIFO lanes with SSD/HDD detection (C: NVMe → SSD,
   V: network → HDD verified; D: untouched, reserved for the cold final test), read → queue → parallel decode
   pipeline, head probes for TIFF/PNG/GIF/BMP, on-disk/packing order for heads, one gallery pass per viewed solid
@@ -124,6 +140,8 @@ undo. Reference SPEC IDs.
 | The `root` column is informational; scans, pruning, folders and filters select by path prefix (`album_path` index); `retainRoots` re-roots | widening or narrowing a root keeps its albums; the folder tree needs no table of its own |
 | Libraries: `data-dir` = home with `libraries.json`, every store under `library-dir`, switch and optimize by in-process restart | every store, the H2 URL and the settings hang off one property, so no store has to be re-creatable; the UI's reconnect path already exists; H2 compacts fully only offline (`SHUTDOWN COMPACT`) |
 | Identity: `signature` (all files + mtime) vs `contentId` (images, name + bytes) | sidecar edits trigger re-index; moves/renames keep id and edits |
+| `.cry` key state as a signature suffix (`+locked` / `+hash` / `+` none) instead of a schema column or a key-change event | a password change re-indexes exactly the affected albums through the ordinary scan; archives without `.cry` keep their `stat`-only rescan; one-time re-index of pre-feature signatures is the price |
+| `settings.json` keeps the PBKDF2-derived `.cry` key, not the password | the key decrypts the files anyway (as xanderView's key file does), but a reused password never lands on disk |
 | Roots must be disjoint | nested roots would index the same album twice under different ids |
 | Mock gateway in the browser | UI work without a backend; also the demo mode |
 | Custom layout engine (bricks/grid) as a pure function | testable, absolute placements enable virtual scrolling |

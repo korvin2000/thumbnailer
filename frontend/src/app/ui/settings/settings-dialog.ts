@@ -79,7 +79,7 @@ const PAGES: { id: Page; label: string; icon: IconName }[] = [
     .content { display: flex; flex-direction: column; flex: 1; min-width: 0; }
     .scroll { flex: 1; overflow: auto; padding: 18px 24px 24px; }
     .unsaved { display: flex; align-items: center; gap: 8px; flex: none; padding: 8px 16px 8px 20px; border-top: 1px solid var(--border); background: var(--bg); font-size: 12.5px; color: var(--text-2); animation: fade-up 0.15s var(--ease); }
-    .unsaved app-icon { color: var(--accent); }
+    .unsaved > app-icon { color: var(--accent); }
     .unsaved span { flex: 1; }
     .toasts { position: absolute; left: 50%; bottom: 14px; z-index: 5; display: flex; flex-direction: column; gap: 6px; transform: translateX(-50%); pointer-events: none; }
     .toast { padding: 8px 14px; border-radius: var(--radius); background: var(--glass); backdrop-filter: blur(12px); border: 1px solid var(--border); box-shadow: var(--shadow-2); font-size: 12.5px; pointer-events: auto; cursor: pointer; animation: fade-up 0.2s var(--ease); white-space: nowrap; }

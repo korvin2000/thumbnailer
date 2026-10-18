@@ -11,17 +11,22 @@ import org.springframework.stereotype.Component;
 public class Containers {
 
     private final List<ContainerFactory> factories;
+    private final Cry cry;
 
-    public Containers(List<ContainerFactory> factories) { this.factories = List.copyOf(factories); }
+    public Containers(List<ContainerFactory> factories, Cry cry) {
+        this.factories = List.copyOf(factories);
+        this.cry = cry;
+    }
 
     /** The archive kind of a regular file, if any factory claims it. */
     public Optional<Kind> archive(Path file) {
         return factories.stream().filter(f -> f.accepts(file)).map(ContainerFactory::kind).findFirst();
     }
 
+    /** Every container comes {@linkplain Cry#wrap wrapped}: {@code .cry} members decrypt with the key configured now. */
     public AlbumContainer open(Kind kind, Path path, Exclusions exclusions) throws IOException {
-        return factories.stream().filter(f -> f.kind() == kind).findFirst()
-                .orElseThrow(() -> new IllegalStateException("No container factory for " + kind)).open(path, exclusions);
+        return cry.wrap(factories.stream().filter(f -> f.kind() == kind).findFirst()
+                .orElseThrow(() -> new IllegalStateException("No container factory for " + kind)).open(path, exclusions));
     }
 
     /** The canonical form of every path the application stores or sends: absolute, normalized, '/' separators. */

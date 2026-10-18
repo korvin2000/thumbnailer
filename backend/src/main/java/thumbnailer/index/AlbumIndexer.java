@@ -30,6 +30,7 @@ import thumbnailer.image.ImageProbe;
 import thumbnailer.image.Thumbnailer.Thumb;
 import thumbnailer.metadata.Metadata;
 import thumbnailer.source.AlbumContainer;
+import thumbnailer.source.Cry;
 import thumbnailer.source.Disks;
 import thumbnailer.source.Kind;
 
@@ -169,11 +170,12 @@ class AlbumIndexer {
                 entries.stream().mapToInt(Entry::width).max().orElse(0),
                 entries.stream().mapToInt(Entry::height).max().orElse(0), shotDate,
                 Instant.ofEpochMilli(mtime.getMax()), Instant.now(), null, null, null, null, List.of(), 0,
-                new Album.Internal(container.contentId(), container.signature(), extracted, AlbumMeta.EMPTY));
+                new Album.Internal(container.contentId(), Cry.signature(container), extracted, AlbumMeta.EMPTY));
         return Optional.of(new Indexed(album.withEdits(AlbumMeta.EMPTY), List.copyOf(entries), thumb));
     }
 
+    /** Never a {@code .cry} entry: a re-index may be due to a key change, which its file does not show. */
     private static boolean unchanged(Entry old, long bytes, long mtime) {
-        return old != null && old.bytes() == bytes && old.mtime() == mtime;
+        return old != null && old.bytes() == bytes && old.mtime() == mtime && !Cry.is(old.name());
     }
 }

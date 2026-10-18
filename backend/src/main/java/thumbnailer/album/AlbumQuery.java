@@ -10,7 +10,8 @@ public record AlbumQuery(String text, List<String> tags, String model, String st
                          Integer maxCount, Double minMegapixels, Double maxMegapixels, LocalDate dateFrom,
                          LocalDate dateTo, Integer minRating, Integer maxRating, Sort sort, int offset, int limit) {
 
-    public enum Sort { NEWEST, OLDEST, LARGEST, SMALLEST, MOST_PHOTOS, FEWEST_PHOTOS, BEST_QUALITY, TOP_RATED, NAME, RECENTLY_INDEXED }
+    public enum Sort { NEWEST, OLDEST, LARGEST, SMALLEST, MOST_PHOTOS, FEWEST_PHOTOS, BEST_QUALITY, TOP_RATED, NAME, RECENTLY_INDEXED,
+        WORST_QUALITY, LOWEST_RATED, NAME_DESC, FIRST_INDEXED }
 
     public static final AlbumQuery ALL = new AlbumQuery(null, null, null, null, null, null, null, null, null, null,
             null, null, null, null, null, null, null, null, 0, 0);

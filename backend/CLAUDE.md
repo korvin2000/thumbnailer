@@ -15,7 +15,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Nullness by convention (null = not set / no filter / unchanged); `Optional` for lookups. No custom exceptions:
   `IllegalArgumentException` / `NoSuchElementException` / `IllegalStateException`; WS turns any exception into
   `Event.Error`. Per-item I/O failures: `catch (IOException | RuntimeException e)` → `log.warn` → skip.
-- Threads: platform daemon threads `scan`, `ws-broadcast`, `covers-compact`, `resampler-warmup` (once at start); the non-daemon `restart` thread; virtual `walk-N` (one walker per disk in a scan) and `gallery` (one pass per viewed sequential archive); indexing runs one virtual thread per
+- Threads: platform daemon threads `scan`, `ws-broadcast`, `ws-idle`, `covers-compact`, `resampler-warmup` (once at start); the non-daemon `restart` thread; virtual `walk-N` (one walker per disk in a scan) and `gallery` (one pass per viewed sequential archive); indexing runs one virtual thread per
   album (`index-N`), bounded by a semaphore (`index-threads` albums per disk walker); renders are a pipeline in `AlbumService`
   (covers: indexing + cover misses; entry thumbnails): read in a disk turn (`source/Disks` lane: FIFO, `hdd-readers`
   at once on an HDD/network/unknown disk, ungated on an SSD; separate `SCAN` and `VIEW` lanes), a place in the queue
@@ -42,6 +42,8 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Image pipeline: one `Pixels` layout (packed `0x??RRGGBB`) from decode to encode; read an entry once (`AlbumContainer.read`
   into a confined arena, `head` for header parsers). 7-Zip calls its output streams from its own threads: callbacks
   touch no thread-confined state (arenas, `Thread.currentThread()`), and a `heads` sink must not read the container.
+  The Vector API is SIMD only in C2 code: `Resampler.SIMD` is false without C2 and `bootRun` sets `optimizedLaunch = false`
+  (Boot's default `-XX:TieredStopAtLevel=1` boxed every vector: 4 thumbnails/s instead of 200, the PC lagging).
 - Paths: always `Containers.normalize()` (absolute, `/`), compare with `Containers.prefix()` / `within()`. Stored
   paths are canonical and never rewritten; `Settings.locate(canonical)` is the only canonical → physical mapping and
   every disk access (walk, container open, `Files.notExists`, reveal) goes through it. A scan binds each root to one
@@ -62,7 +64,10 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Metadata merges differ on purpose: `AlbumMeta.over` (edits over extracted, null falls through) vs `orElse`
   (extractor chain, blank falls through, tags union). In the edited layer `""`/`[]` mean "explicitly empty".
 - Identity: `signature` (all files incl. sidecars, with mtime) decides re-index; `contentId` (images, name + bytes)
-  decides moves. A move needs the old path to be gone.
+  decides moves. A move needs the old path to be gone. Stored signatures end in the `.cry` key state (`Cry.signature`,
+  compared with `Cry.matches`, which accepts the two valid forms without listing an archive): store and compare through
+  `Cry`, never the raw `container.signature()`; a missing key (session-only, `SettingsStore`) never re-indexes a keyed album. Containers always come wrapped by `Cry` (`Containers.open`); arrays a
+  container hands out (`head`, `heads`) are never written, 7-Zip keeps them as its head cache.
 - Removal (`Reconciler.Pass.prune`) only for scopes (a root or a folder below one) whose walk completed without cancel
   or errors, and only of albums at or below the scope; an album is marked seen before indexing, so failures never
   delete. Unreachable roots are skipped. `AlbumRepository.delete` always leaves a tombstone (`removed`, by content id)

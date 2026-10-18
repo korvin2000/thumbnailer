@@ -36,7 +36,7 @@ symbols, so open code only after the map points to it.
 
 | change | files (B = backend `thumbnailer/`, F = frontend `src/app/`) |
 |---|---|
-| search filter / sort | B `album/AlbumQuery` · B `store/jdbc/JdbcAlbumRepository` (`Where`, ORDER BY) · F `core/model.ts` · F `core/store.ts` (`query`) · F `ui/filters-panel.ts` (Refine tab) · F `ui/topbar.ts` (chips) · F `core/mock-gateway.ts` (`matches`, `comparator`) · ARCH §3 |
+| search filter / sort | B `album/AlbumQuery` · B `store/jdbc/JdbcAlbumRepository` (`Where`, ORDER BY) · F `core/model.ts` · F `core/store.ts` (`query`) · F `ui/filters-panel.ts` (Refine tab) · F `ui/topbar.ts` (chips) · F `ui/sort-menu.ts` · F `core/mock-gateway.ts` (`matches`, `comparator`) · ARCH §3 |
 | folder tree / location bar | F `ui/folder-tree.ts` · F `ui/location-bar.ts` · F `core/store.ts` (`folder`, `goTo`, `rootOf`, `treeVersion`) · F `ui/sidebar.ts` (tabs, `Prefs.sidebar`) · B `web/ws/AlbumSocket` `folders` · B `AlbumRepository.folders` (JDBC) · F `core/mock-gateway.ts` (`folders`) |
 | WS message | B `web/ws/Request`/`Event` · B `web/ws/AlbumSocket.handle` · F `core/model.ts` · F `core/gateway.ts` · F `core/ws-gateway.ts` · F `core/mock-gateway.ts` · ARCH §3 |
 | album field | B `album/Album` (+`AlbumMeta`/`AlbumPatch` if editable) · `schema.sql` · B `JdbcAlbumRepository` · F `core/model.ts` · F `ui/details-panel.ts` · F mock · ARCH §1 |

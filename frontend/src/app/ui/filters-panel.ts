@@ -42,13 +42,13 @@ const MEGAPIXELS = [0, 1, 2, 4, 8, 12, 16, 24, 36, 50, 100, Infinity];
         </select></label>
     </section>
 
-    <section class="row">
-      <h3>Kind</h3>
-      <div class="segmented">
-        <button [class.active]="!f().kind" (click)="store.setFilter('kind', null)">All</button>
-        <button [class.active]="f().kind === 'DIRECTORY'" (click)="setKind('DIRECTORY')"><app-icon name="folder" [size]="13" />Folders</button>
-        <button [class.active]="f().kind === 'ZIP'" (click)="setKind('ZIP')"><app-icon name="archive" [size]="13" />Zips</button>
-        <button [class.active]="f().kind === 'ARCHIVE'" (click)="setKind('ARCHIVE')"><app-icon name="archive" [size]="13" />Archives</button>
+    <section>
+      <h3><app-icon name="archive" [size]="13" /> Kind</h3>
+      <div class="segmented kinds">
+        <button [class.active]="!f().kind" (click)="store.setFilter('kind', null)" title="Folders and archives">All</button>
+        <button [class.active]="f().kind === 'DIRECTORY'" (click)="setKind('DIRECTORY')" title="Plain folders">Folders</button>
+        <button [class.active]="f().kind === 'ZIP'" (click)="setKind('ZIP')" title="Zip archives">Zips</button>
+        <button [class.active]="f().kind === 'ARCHIVE'" (click)="setKind('ARCHIVE')" title="Other archives: rar, 7z, tar, iso">Archives</button>
       </div>
     </section>
 
@@ -83,13 +83,14 @@ const MEGAPIXELS = [0, 1, 2, 4, 8, 12, 16, 24, 36, 50, 100, Infinity];
     section { padding: 12px 0; border-bottom: 1px solid var(--border); }
     section:last-child { border-bottom: 0; }
     h3 { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
-    .row { display: flex; align-items: center; justify-content: space-between; }
-    .row h3 { margin: 0; }
+    .kinds { display: flex; width: 100%; }
+    .kinds > button { flex: 1; justify-content: center; padding: 0 4px; }
     .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
     .facets { display: flex; flex-direction: column; gap: 8px; }
     .facets label { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
     .facets label span { display: inline-flex; align-items: center; gap: 6px; }
     .dates { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
+    .dates .input { flex: 1; min-width: 0; width: auto; padding: 0 6px; }
   `,
   changeDetection: ChangeDetectionStrategy.OnPush,
 })

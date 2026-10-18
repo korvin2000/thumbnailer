@@ -1,9 +1,12 @@
 package thumbnailer.settings;
 
+import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL;
 import static java.util.stream.Collectors.toMap;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
@@ -11,16 +14,22 @@ import java.util.Optional;
 import java.util.function.Function;
 import thumbnailer.image.Render;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Cry;
 import thumbnailer.source.Disks.Storage;
 
 /**
  * User settings: scan roots with their own exclusions, global exclusions, scan on start, where moved folders are found
- * now ({@code pathMap}) and how covers and entry thumbnails render. Absent fields (an older settings.json) are defaults.
+ * now ({@code pathMap}), how covers and entry thumbnails render, and the key of encrypted {@code .cry} images
+ * ({@code cryKey}, set through {@code cryPassword}; {@link SettingsStore} keeps it in memory only). Absent fields (an older settings.json) are defaults.
  */
 public record Settings(List<Root> roots, List<String> exclusions, boolean scanOnStart, List<Mapping> pathMap,
-                       Render covers, Render thumbs) {
+                       Render covers, Render thumbs, @JsonInclude(NON_NULL) String cryKey, @JsonInclude(NON_NULL) String cryPassword) {
 
     public static final Settings DEFAULT = new Settings(null, null, true, null, null, null);
+
+    public Settings(List<Root> roots, List<String> exclusions, boolean scanOnStart, List<Mapping> pathMap, Render covers, Render thumbs) {
+        this(roots, exclusions, scanOnStart, pathMap, covers, thumbs, null, null);
+    }
 
     /** {@code storage}: how the root's disk is read, detected ({@code AUTO}, also when absent) or forced. */
     public record Root(String path, List<String> exclusions, Storage storage) {
@@ -54,6 +63,20 @@ public record Settings(List<Root> roots, List<String> exclusions, boolean scanOn
                 : pathMap.stream().filter(m -> m != null && m.from() != null && m.to() != null).toList();
         covers = Objects.requireNonNullElse(covers, Render.COVERS);
         thumbs = Objects.requireNonNullElse(thumbs, Render.THUMBS);
+        // the AES key of xanderView's .cry images, derived here from a given password (which is never kept), or the key's
+        // fingerprint a client echoes back (SettingsStore resolves it); null = none
+        if (cryPassword != null && !cryPassword.trim().isEmpty()) cryKey = HexFormat.of().formatHex(Cry.key(cryPassword));
+        else if (cryKey != null) {
+            var key = HexFormat.of().parseHex(cryKey.strip());
+            if (key.length != 16 && key.length != 4) throw new IllegalArgumentException("cryKey must be 16 bytes of hex, or a 4-byte fingerprint");
+            cryKey = HexFormat.of().formatHex(key);
+        }
+        cryPassword = null;
+    }
+
+    /** The same settings with this key ({@code null} = none). */
+    public Settings withKey(String cryKey) {
+        return new Settings(roots, exclusions, scanOnStart, pathMap, covers, thumbs, cryKey, null);
     }
 
     /**

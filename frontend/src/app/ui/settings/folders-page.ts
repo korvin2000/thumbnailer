@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, inject, model, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, linkedSignal, model, signal } from '@angular/core';
 import { FolderPicker } from '../../core/folder-picker';
 import { commonSuffixMapping, dir, normPath } from '../../core/paths';
 import { Mapping, RootStatus, Settings } from '../../core/model';
@@ -62,6 +62,19 @@ const under = (path: string, root: string) => path.toLowerCase().startsWith(root
     </section>
 
     <section class="card">
+      <h4>Encrypted images (.cry)</h4>
+      <p class="hint">xanderView's <code>.cry</code> files, in folders or archives, open with the password of its key file. It is kept in memory for this session only, never in settings.json: after a restart, or once the last window has been closed for a while, enter it again. Without it <code>.cry</code> files are not images; albums indexed with it stay as they are.</p>
+      <div class="field"><span>Password</span>
+        <div class="secret">
+          <input class="input sm" [class.set]="draft().cryKey && !draft().cryPassword" [type]="showKey() ? 'text' : 'password'" autocomplete="off" [value]="draft().cryPassword ?? ''"
+                 [placeholder]="draft().cryKey ? '••••••••••••' : 'not set'" (input)="patch({ cryPassword: $any($event.target).value || null })" aria-label="Password" />
+          <button class="eye" [disabled]="!draft().cryPassword" [title]="showKey() ? 'Hide password' : 'Show password'" (click)="showKey.update(v => !v)"><app-icon [name]="showKey() ? 'eyeOff' : 'eye'" [size]="14" /></button>
+          @if (draft().cryKey || draft().cryPassword) { <button class="btn sm" (click)="patch({ cryKey: null, cryPassword: null })"><app-icon name="trash" [size]="13" /> Clear</button> }
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
       <h4>Path mapping (this machine)</h4>
       <p class="hint">A library moved from another machine finds its folders under a new prefix. Stored paths stay as they were created; each rule rewrites a prefix on this machine.</p>
       @for (m of draft().pathMap; track $index) {
@@ -116,6 +129,10 @@ const under = (path: string, root: string) => path.toLowerCase().startsWith(root
     .rule { display: grid; grid-template-columns: 1fr auto auto 1fr auto auto; align-items: center; gap: 4px; margin-bottom: 6px; }
     .arrow { color: var(--text-3); margin: 0 2px; }
     .row { display: flex; align-items: center; gap: 10px; }
+    .secret { display: flex; align-items: center; gap: 6px; justify-self: stretch; }
+    .secret .input { flex: 1; width: auto; padding-right: 28px; max-width: 320px; }
+    .secret .input.set::placeholder { color: var(--text); letter-spacing: 0.08em; }
+    .eye { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; margin-left: -32px; margin-right: 8px; border-radius: 4px; color: var(--text-3); &:hover:not(:disabled) { color: var(--text); background: var(--surface-2); } }
     .progress { margin-top: 10px; font-size: 11.5px; color: var(--text-2); }
     .track { height: 4px; border-radius: 2px; background: var(--border); margin-bottom: 4px; overflow: hidden; }
     .fill { height: 100%; background: var(--accent); transition: width 0.3s; }
@@ -135,6 +152,8 @@ export class FoldersPage {
   readonly draft = model.required<Settings>();
   /** Pending "replace nested roots with their parent" question. */
   protected readonly replace = signal<{ path: string; roots: string[] } | null>(null);
+  /** Reveals a password typed in this dialog (a saved one is only ever a key, so it stays masked); masked again once the typed one is gone. */
+  protected readonly showKey = linkedSignal<boolean, boolean>({ source: () => !!this.draft().cryPassword, computation: () => false });
 
   protected dirty() { return JSON.stringify(this.draft()) !== JSON.stringify(this.store.settings()?.settings); }
   protected status(path: string): RootStatus | undefined { return this.store.settings()?.roots.find(r => r.path === path); }

@@ -109,7 +109,8 @@ export class MockGateway extends Gateway {
   async setSettings(s: Settings): Promise<SettingsInfo> {
     const same = (k: keyof Settings) => JSON.stringify(s[k]) === JSON.stringify(this.settings[k]);
     if (this.scanning && !(same('roots') && same('pathMap'))) throw new Error('Stop the scan before changing folders');
-    this.settings = s;
+    const { cryPassword, ...rest } = s; // the server derives the key, drops the password and echoes only an 8-hex fingerprint
+    this.settings = cryPassword ? { ...rest, cryKey: cryPassword.length.toString(16).padStart(8, '0') } : rest;
     return this.info();
   }
   async reveal() { await delay(30); }
@@ -333,5 +334,9 @@ function comparator(sort: Sort): (a: Album, b: Album) => number {
     case 'TOP_RATED': return num(a => a.rating, true);
     case 'RECENTLY_INDEXED': return (a, b) => b.indexedAt.localeCompare(a.indexedAt) || byName(a, b);
     case 'NAME': return byName;
+    case 'WORST_QUALITY': return num(a => a.avgPixels, false);
+    case 'LOWEST_RATED': return num(a => a.rating, false);
+    case 'NAME_DESC': return (a, b) => byName(b, a);
+    case 'FIRST_INDEXED': return (a, b) => a.indexedAt.localeCompare(b.indexedAt) || byName(a, b);
   }
 }

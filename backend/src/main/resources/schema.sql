@@ -45,6 +45,10 @@ CREATE INDEX IF NOT EXISTS album_quality ON album (avg_pixels DESC, sort_name, i
 CREATE INDEX IF NOT EXISTS album_rated ON album (rating DESC, sort_name, id);
 CREATE INDEX IF NOT EXISTS album_name ON album (sort_name, id);
 CREATE INDEX IF NOT EXISTS album_indexed ON album (indexed_at DESC, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_worst ON album (avg_pixels, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_lowest ON album (rating, sort_name, id);
+CREATE INDEX IF NOT EXISTS album_name_desc ON album (sort_name DESC, id);
+CREATE INDEX IF NOT EXISTS album_first ON album (indexed_at, sort_name, id);
 
 -- One packed value per album (store/jdbc/EntryCodec), not one row per image; JdbcAlbumRepository packs and drops the
 -- per-image table of older versions on start.

@@ -1,5 +1,7 @@
 package thumbnailer.image;
 
+import com.sun.management.HotSpotDiagnosticMXBean;
+import java.lang.management.ManagementFactory;
 import java.util.Arrays;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.VectorMask;
@@ -15,16 +17,33 @@ import jdk.incubator.vector.VectorSpecies;
  * other ratios use an antialiased Keys cubic (a = -0.55).
  * Short kernels run in Q7 with red and blue sharing one multiply in 16-bit fields; long ones in Q22 per channel.
  * Two paths, same bits: SIMD through the Vector API when {@code jdk.incubator.vector} is present (launch with
- * {@code --add-modules jdk.incubator.vector}) and vectors hold 8+ ints, else scalar loops that C2 auto-vectorizes. Chosen in a 4-way competition, see
+ * {@code --add-modules jdk.incubator.vector}), C2 runs and vectors hold 8+ ints, else scalar loops that C2 auto-vectorizes. Chosen in a 4-way competition, see
  * scalebench/README.md: the gpt-6-astra candidate with the power-of-two box of the Fable and Opus ones.
  */
 final class Resampler {
 
     private static final int BITS = 7, HALF = 1 << (BITS - 1), RB = (16384 + HALF) * 65537;
-    /** The faster path where it exists: the Vector API module is present and vectors hold at least 8 ints. */
-    static final boolean SIMD = ModuleLayer.boot().findModule("jdk.incubator.vector").isPresent() && Simd.S.length() >= 8;
+    /** The path taken and why, logged at start: SIMD needs the Vector API module, C2 and vectors of at least 8 ints. */
+    static final String PATH = ModuleLayer.boot().findModule("jdk.incubator.vector").isEmpty() ? "scalar: no jdk.incubator.vector module"
+            : !c2() ? "scalar: no C2 JIT (-XX:TieredStopAtLevel below 4 or -Xint)" : Simd.S.length() < 8 ? "scalar: vectors narrower than 8 ints" : "SIMD";
+    static final boolean SIMD = PATH.equals("SIMD");
 
     private Resampler() {}
+
+    /**
+     * Only C2 turns the Vector API into SIMD instructions; the interpreter and C1 box every vector, 100x slower than the
+     * scalar loops (bootRun's default {@code -XX:TieredStopAtLevel=1} did that: 4 thumbnails/s instead of 200, the PC
+     * lagging). Without C2 (-Xint, a C1-only or non-HotSpot JVM) the scalar path runs.
+     */
+    private static boolean c2() {
+        try {
+            var vm = ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class);
+            return Boolean.parseBoolean(vm.getVMOption("UseCompiler").getValue())
+                    && Integer.parseInt(vm.getVMOption("TieredStopAtLevel").getValue()) >= 4;
+        } catch (RuntimeException | LinkageError e) { // not HotSpot, or no jdk.management: no known SIMD
+            return false;
+        }
+    }
 
     /**
      * {@code boxed}: the source is already area-averaged (a DCT-scaled JPEG decode), so a shrink takes the Lanczos3
@@ -40,8 +59,10 @@ final class Resampler {
      */
     static void warmUp() {
         if (!SIMD) return;
-        int[][] shapes = { // source, target, boxed: cubic 2 groups, DCT-scaled Lanczos 3 and 4 groups, 4x box
-                {900, 600, 512, 341, 0}, {1500, 1000, 512, 341, 1}, {2000, 1500, 512, 384, 1}, {3072, 2048, 384, 256, 0}};
+        // Only the shapes real images take: adding tiny gather and Q22 shapes (ratio > 4 without a box: sources under 64 px)
+        // left the 1500x1000 shape 3x slower afterwards. Source, target, boxed: cubic 2 groups, DCT-scaled Lanczos 3 and 4
+        // groups, 4x box.
+        int[][] shapes = {{900, 600, 512, 341, 0}, {1500, 1000, 512, 341, 1}, {2000, 1500, 512, 384, 1}, {3072, 2048, 384, 256, 0}};
         for (int[] s : shapes) {
             var p = new Pixels(new int[s[0] * s[1]], s[0], s[1]);
             for (int i = 0; i < 12; i++) resize(p, s[2], s[3], s[4] == 1, true);

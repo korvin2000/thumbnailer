@@ -1,20 +1,17 @@
 import { ChangeDetectionStrategy, Component, computed, ElementRef, inject, output, signal, viewChild } from '@angular/core';
 import { formatBytes, formatMegapixels } from '../core/format';
-import { Prefs, SidebarTab, Theme } from '../core/prefs';
-import { SORTS } from '../core/model';
+import { Prefs, SidebarTab } from '../core/prefs';
 import { AlbumStore } from '../core/store';
 import { Icon, IconName } from './shared/icon';
+import { SortMenu } from './sort-menu';
 
 interface Chip { key: string; label: string; icon?: IconName; remove: () => void }
 
-const THEMES: Theme[] = ['system', 'light', 'dark'];
-const THEME_ICON: Record<Theme, IconName> = { system: 'monitor', light: 'sun', dark: 'moon' };
-
 @Component({
   selector: 'app-topbar',
-  imports: [Icon],
+  imports: [Icon, SortMenu],
   template: `
-    <div class="brand" title="Thumbnailer"><span class="logo"><app-icon name="images" [size]="18" /></span><span class="name">Thumbnailer</span></div>
+    <button class="brand" title="Thumbnailer — settings" (click)="settings.emit()"><span class="logo"><app-icon name="images" [size]="18" /></span><span class="name">Thumbnailer</span></button>
 
     <button class="btn icon-btn" [class.active]="prefs.sidebar() === 'folders'" title="Folders (E)" (click)="toggleTab('folders')"><app-icon name="folder" /></button>
     <button class="btn icon-btn" [class.active]="prefs.sidebar() === 'refine'" title="Refine (F)" (click)="toggleTab('refine')">
@@ -37,9 +34,7 @@ const THEME_ICON: Record<Theme, IconName> = { system: 'monitor', light: 'sun', d
       }
     </div>
 
-    <select class="input sort" [value]="store.sort()" (change)="store.sort.set($any($event.target).value)" title="Sort">
-      @for (s of sorts; track s.value) { <option [value]="s.value">{{ s.label }}</option> }
-    </select>
+    <app-sort-menu />
 
     <div class="stepper" title="Albums per row ( [ and ] )">
       <button class="btn icon-btn sm ghost" (click)="prefs.setColumns(prefs.columns() - 1)" [disabled]="prefs.columns() <= 1"><app-icon name="minus" [size]="14" /></button>
@@ -52,13 +47,14 @@ const THEME_ICON: Record<Theme, IconName> = { system: 'monitor', light: 'sun', d
       <button [class.active]="prefs.layoutMode() === 'grid'" (click)="prefs.layoutMode.set('grid')" title="Grid: strict order, one tile per cell"><app-icon name="grid" [size]="15" /></button>
     </div>
 
-    <button class="btn icon-btn" [title]="'Theme: ' + prefs.theme() + ' (T)'" (click)="cycleTheme()"><app-icon [name]="themeIcon()" /></button>
+    <button class="btn icon-btn" [title]="(prefs.theme() === 'dark' ? 'Light' : 'Dark') + ' theme (T)'" (click)="prefs.toggleTheme()"><app-icon [name]="prefs.theme() === 'dark' ? 'sun' : 'moon'" /></button>
     <button class="btn icon-btn" [class.active]="prefs.detailsOpen()" title="Details panel (I)" (click)="prefs.detailsOpen.set(!prefs.detailsOpen())"><app-icon name="panelRight" /></button>
-    <button class="btn icon-btn" title="Settings" (click)="settings.emit()"><app-icon name="sliders" /></button>
   `,
   styles: `
     :host { display: flex; align-items: center; gap: 8px; height: var(--topbar-h); padding: 0 12px; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
-    .brand { display: flex; align-items: center; gap: 8px; margin-right: 4px; font-weight: 700; letter-spacing: -0.01em; }
+    .brand { display: flex; align-items: center; gap: 8px; margin-right: 4px; padding: 2px 8px 2px 2px; border-radius: 9px; font-weight: 700; letter-spacing: -0.01em; transition: background 0.15s; }
+    .brand:hover { background: var(--surface); }
+    .brand:hover .logo { background: linear-gradient(135deg, var(--accent-strong), var(--accent)); }
     .logo { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent-strong)); color: var(--on-accent); }
     .search {
       flex: 1; min-width: 160px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px 0 12px; border-radius: 18px;
@@ -71,10 +67,9 @@ const THEME_ICON: Record<Theme, IconName> = { system: 'monitor', light: 'sun', d
     .chips { display: flex; gap: 4px; max-width: 45%; overflow: hidden; }
     .chips .chip { height: 24px; }
     .clear { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 50%; color: var(--text-2); &:hover { background: var(--surface-2); color: var(--text); } }
-    .sort { width: 160px; flex: none; }
     .stepper { display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 2px; border-radius: var(--radius-s); border: 1px solid var(--border); background: var(--surface); }
     .val { display: inline-flex; align-items: center; gap: 4px; min-width: 38px; justify-content: center; font-weight: 600; font-variant-numeric: tabular-nums; }
-    @media (max-width: 1100px) { .brand .name, .chips { display: none; } .sort { width: 130px; } }
+    @media (max-width: 1100px) { .brand .name, .chips { display: none; } }
     @media (max-width: 760px) { :host { flex-wrap: wrap; height: auto; padding: 8px 10px; } .search { order: 10; flex-basis: 100%; } .stepper, .segmented { display: none; } }
   `,
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -83,11 +78,8 @@ export class Topbar {
   readonly settings = output<void>();
   protected readonly store = inject(AlbumStore);
   protected readonly prefs = inject(Prefs);
-  protected readonly sorts = SORTS;
   protected readonly focused = signal(false);
   private readonly input = viewChild.required<ElementRef<HTMLInputElement>>('q');
-
-  protected readonly themeIcon = computed(() => THEME_ICON[this.prefs.theme()]);
 
   /** Active structured criteria as removable chips; tags typed as `#tag` are removed from the text itself. */
   protected readonly chips = computed<Chip[]>(() => {
@@ -117,6 +109,4 @@ export class Topbar {
 
   /** Opens the tab, or closes the sidebar when that tab is already showing. */
   protected toggleTab(tab: SidebarTab) { this.prefs.sidebar.update(v => v === tab ? 'none' : tab); }
-
-  protected cycleTheme() { this.prefs.theme.set(THEMES[(THEMES.indexOf(this.prefs.theme()) + 1) % THEMES.length]); }
 }
