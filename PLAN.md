@@ -7,6 +7,7 @@ undo. Reference SPEC IDs.
 
 ## State (2026-10-18, v0.1.0)
 
+- 2026-10-18 viewer: its own photos-per-row setting (`Prefs.viewerColumns`, default 3) with a header stepper, `[` `]` keys and an Appearance slider; the library's `[` `]` stay out of the overlays.
 - 2026-10-18 **post-review UI fixes**: topbar = one sidebar toggle (last tab, `Prefs.lastTab`), Catalog ▾ → entity picker → card
   (⋯ merge/delete on the card), compact columns stepper, one bricks ⇄ grid toggle; sidebar header fits the panel (Browse segment
   shows the group + caret); album menu grouped Archive ▸ / Encryption ▸ (key only) / Files ▸; Refine kind strip All · Folders ·

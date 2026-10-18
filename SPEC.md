@@ -71,7 +71,7 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | ID | requirement | status | evidence |
 |---|---|---|---|
 | U1 | Brick layout packs 16:9 and 9:16 tiles without gaps (proportional covers fill them centre-cropped, `object-fit: cover`); strict grid mode as alternative | ✅ | `layout.spec.ts` |
-| U2 | Configurable tiles per row (1–12), responsive below 1440px | ✅ | `core/prefs.ts`, `responsiveColumns` |
+| U2 | Configurable tiles per row (1–12) for the album grid and, separately, photos per row in the viewer (default 3; header stepper, `[` `]`, Settings → Appearance); responsive below 1440px | ✅ | `core/prefs.ts` (`columns`, `viewerColumns`), `responsiveColumns` |
 | U3 | Virtual scrolling and paging for thousands of albums | ✅ | `ui/tile-grid.ts` |
 | U4 | Tile shows name and size; hover shows meta; details panel (floating/inline/bottom sheet) with editing | ✅ | `ui/album-card.ts`, `ui/details-panel.ts` |
 | U5 | Left sidebar with Browse / Refine tabs (`E` / `F`; one topbar button reopens the tab shown last), a header that fits the panel for every group name, slides over content below 1100px | ✅ | `ui/sidebar.ts`, `ui/filters-panel.ts`, `app.scss`, `core/prefs.ts` (`lastTab`); browser pass 2026-10-18 |

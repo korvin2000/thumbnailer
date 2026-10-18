@@ -60,6 +60,11 @@ const slot = (key: string) => /^[0-9]$/.test(key) ? (+key + 9) % 10 : -1;
             </div>
           }
         </span>
+        <div class="stepper" title="Photos per row ( [ and ] )">
+          <button class="btn icon-btn sm ghost" (click)="prefs.setViewerColumns(prefs.viewerColumns() - 1)" [disabled]="prefs.viewerColumns() <= 1"><app-icon name="minus" [size]="13" /></button>
+          <span class="val">{{ prefs.viewerColumns() }}</span>
+          <button class="btn icon-btn sm ghost" (click)="prefs.setViewerColumns(prefs.viewerColumns() + 1)" [disabled]="prefs.viewerColumns() >= 12"><app-icon name="plus" [size]="13" /></button>
+        </div>
         <button class="btn sm" (click)="scaleMenu($event)" title="Lightbox scale (S cycles)"><app-icon name="zoom" [size]="14" />{{ scaleLabels[prefs.viewerScale()] }}</button>
         <button class="btn icon-btn" (click)="fullscreen()" title="Full screen (F11)"><app-icon name="maximize" [size]="16" /></button>
         <app-rating [value]="a.rating" (valueChange)="store.patch(a.id, { rating: $event })" />
@@ -71,7 +76,7 @@ const slot = (key: string) => /^[0-9]$/.test(key) ? (+key + 9) % 10 : -1;
     </header>
 
     <div class="body">
-      <app-tile-grid class="grid" [tiles]="tiles()" mode="grid" [columns]="prefs.columns()" [gap]="8" [padding]="10" [empty]="emptyState"
+      <app-tile-grid class="grid" [tiles]="tiles()" mode="grid" [columns]="prefs.viewerColumns()" [gap]="8" [padding]="10" [empty]="emptyState"
                      [selectedId]="selectedName()" [selection]="sel" (select)="focus($event)" (open)="openByName($event)">
         <ng-template let-e>
           @let a = album()!;
@@ -121,6 +126,9 @@ const slot = (key: string) => /^[0-9]$/.test(key) ? (+key + 9) % 10 : -1;
     :host { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); animation: fade-up 0.18s var(--ease); }
     .bar { display: flex; align-items: center; gap: 8px; min-height: var(--topbar-h); padding: 6px 12px; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
     .title { flex: 1; min-width: 0; }
+    .stepper { display: flex; flex: none; align-items: center; height: 32px; padding: 0 1px; border-radius: var(--radius-s); border: 1px solid var(--border); background: var(--surface); }
+    .stepper .btn { width: 24px; }
+    .stepper .val { display: inline-flex; min-width: 18px; justify-content: center; font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
     h1 { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--text-2); }
     .meta span, .meta .link { display: inline-flex; align-items: center; gap: 4px; }
@@ -500,6 +508,8 @@ export class AlbumViewer {
       case 'ArrowLeft': if (open) this.step(-1); else return; break;
       case ' ': this.toggleSlideshow(); break;
       case 'F11': this.fullscreen(); break;
+      case '[': this.prefs.setViewerColumns(this.prefs.viewerColumns() - 1); break;
+      case ']': this.prefs.setViewerColumns(this.prefs.viewerColumns() + 1); break;
       case 's': case 'S': this.setScale(nextScale(this.scale())); break;
       case 'r': case 'R': this.reshuffle(); break;
       case 'f': case 'F': { const f = this.focused(); if (!f) return; this.favoritesMenu(this.anchorFor(f)); break; }

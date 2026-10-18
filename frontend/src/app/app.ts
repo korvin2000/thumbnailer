@@ -99,8 +99,8 @@ export class App {
       case 'f': case 'F': if (overlay) return; this.toggleTab('refine'); break;
       case 'i': case 'I': this.prefs.detailsOpen.update(v => !v); break;
       case 't': case 'T': this.prefs.toggleTheme(); break;
-      case '[': this.prefs.setColumns(this.prefs.columns() - 1); break;
-      case ']': this.prefs.setColumns(this.prefs.columns() + 1); break;
+      case '[': if (overlay) return; this.prefs.setColumns(this.prefs.columns() - 1); break;
+      case ']': if (overlay) return; this.prefs.setColumns(this.prefs.columns() + 1); break;
       case 'h': case 'H': if (overlay) return; this.actions.toggleHidden(); break;
       case 'Delete': if (overlay) return; this.actions.deleteSelection(); break;
       case 'Escape': {

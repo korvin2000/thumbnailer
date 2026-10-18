@@ -111,5 +111,5 @@ into the jar; recipe in [backend/CLAUDE.md](backend/CLAUDE.md#extending-recipes)
 `Ctrl+Space` toggle, `Ctrl+A` select all (≤ 500) · `Shift+F10` or right-click album menu (also on folders and entity rows) · `H` hide · `Delete` delete… · `Enter` open ·
 `C` use photo as cover · `Esc` clear the selection, close
 
-Viewer: `F11` full screen · `Space` slideshow · `S` scale mode · `R` reshuffle · `1`–`9` `0` copy to target · `Ctrl+1…0` rate · `F` favorites ·
+Viewer: `[` `]` photos per row · `F11` full screen · `Space` slideshow · `S` scale mode · `R` reshuffle · `1`–`9` `0` copy to target · `Ctrl+1…0` rate · `F` favorites ·
 `M` metadata · `B` bio · `C` cover · `Ctrl`/`Shift`+click, `Ctrl+A` select photos · `Esc` close

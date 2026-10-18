@@ -10,7 +10,7 @@ const LIBRARY: [string[], string][] = [
 ];
 const VIEWER: [string[], string][] = [
   [['↑', '↓', '←', '→'], 'Move between photos'], [['Enter'], 'Open the photo full size'], [['Ctrl', 'Shift', 'click'], 'Select several photos'], [['Ctrl', 'A'], 'Select all photos'],
-  [['C'], 'Use the photo as cover'], [['F11'], 'Full screen'], [['Space'], 'Slideshow: start / pause'], [['S'], 'Next scale mode (fit, fit large, 1:1, width, height)'],
+  [['C'], 'Use the photo as cover'], [['[', ']'], 'Fewer / more photos per row'], [['F11'], 'Full screen'], [['Space'], 'Slideshow: start / pause'], [['S'], 'Next scale mode (fit, fit large, 1:1, width, height)'],
   [['R'], 'Random order, reshuffled'], [['1', '…', '9', '0'], 'Copy to target 1–10 (Settings → Operations)'], [['Ctrl', '1', '…', '0'], 'Rate 1–10'],
   [['F'], 'Favorites lists'], [['M'], 'Metadata'], [['B'], 'Bio text'], [['Esc'], 'Close the lightbox, clear the selection, then the album'],
 ];

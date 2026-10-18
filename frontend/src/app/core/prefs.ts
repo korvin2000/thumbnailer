@@ -32,6 +32,8 @@ export class Prefs {
   readonly detailsOpen = this.persisted('detailsOpen', false);
   readonly groupBy = this.persisted<GroupBy>('groupBy', 'folders');
   readonly viewerScale = this.persisted<ViewerScale>('viewerScale', 'fitLarge');
+  /** Photos per row in the album viewer (1–12), its own value beside the library's `columns`. */
+  readonly viewerColumns = this.persisted('viewerColumns', 3);
   readonly viewerSort = this.persisted<ViewerSort>('viewerSort', 'name');
   /** Direction of `viewerSort` (true = descending); a new field resets it to its default (`SORT_DESC_FIRST`). */
   readonly viewerSortDesc = this.persisted('viewerSortDesc', false);
@@ -56,6 +58,7 @@ export class Prefs {
   /** Closes the sidebar, or reopens it on the tab shown last. */
   toggleSidebar() { this.sidebar.update(v => v === 'none' ? this.lastTab() : 'none'); }
   setColumns(n: number) { this.columns.set(Math.max(1, Math.min(12, Math.round(n)))); }
+  setViewerColumns(n: number) { this.viewerColumns.set(Math.max(1, Math.min(12, Math.round(n)))); }
 
   private persisted<T>(key: string, fallback: T): WritableSignal<T> {
     const k = `thumbnailer.${key}`;

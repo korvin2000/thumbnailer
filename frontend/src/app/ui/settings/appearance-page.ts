@@ -32,6 +32,7 @@ import { SCALE_LABELS, SIDE_PRESETS, SORT_LABELS } from '../viewer/photo-order';
     <section class="card">
       <h4>Album viewer</h4>
       <p class="hint">What the viewer opens with; the viewer's own menus change the same values.</p>
+      <label class="field"><span>Photos per row</span><span class="slider"><input type="range" min="1" max="12" [value]="prefs.viewerColumns()" (input)="prefs.setViewerColumns(+$any($event.target).value)" /><b>{{ prefs.viewerColumns() }}</b></span></label>
       <div class="field"><span>Lightbox scale</span>
         <div class="segmented">@for (s of scales; track s) { <button [class.active]="prefs.viewerScale() === s" (click)="prefs.viewerScale.set(s)">{{ scaleLabels[s] }}</button> }</div></div>
       <label class="field"><span>Sort photos by</span>
