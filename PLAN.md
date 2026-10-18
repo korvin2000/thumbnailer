@@ -42,6 +42,17 @@ undo. Reference SPEC IDs.
   (+ `verify`), `PhotoNames`; `SevenZipContainer.extract` (one pass, fail-closed); streaming `Cry.encrypt`/`decrypt`.
   Not wired: B2 calls them. Checks: `:backend:test` 111 (1 skipped), all B3 tests green; `AlbumServiceTest.removeDeletes…`
   fails under full-suite load (phase-0 race: `blob.remove` vs the released `recount` thread; passes alone).
+  entities-under/genres filter/alias-resolved filters (B1), packers (B3), `Entry.flags`
+  always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4).
+
+- 2026-10-18 **catalog B2 ops core**: `ops/FileOps` runs every operation of catalog_plan.md §4.5 item by item through
+  `Planner` (sources, destinations, conflicts, containment, space, preflight wording) and `Steps` (journaled
+  phases `copying → verified → disposing → installing → rebasing → indexing`, per-file for in-place encryption,
+  `CHECKPOINT SYNC` before a line goes; `recover()` at start and before each operation), `Journal` +
+  `Manifest` (`<library-dir>/ops.journal`, `ops/<op>/<item>.json`), `Trees` (hashing copies, retries, naming),
+  `Crypt` (the operation's own key). Packers stay behind B3's interfaces (a test stand-in). Checks:
+  `:backend:test` 108 (1 skipped), `FileOpsTest` 8. Unverified: a real second volume, the
+  `AtomicMoveNotSupportedException` fallback, recovery of an encryption that changed the path without a key.
 
 - 2026-10-18 catalog phase 1 **B4 extraction + photos**: `Extraction` context (texts with the image heads in one pass, BOM/UTF-8/CP1251, 8 × 64 KiB ≤ 256 KiB; `longestDir`, `sampleImage`), extractor and cover chains over beans + `ServiceLoader` by `order()` (`NameHint`/`Smallest` ordinary strategies), genres from `thumbnailer.genres`, `bio`, `Entry.flags` from `Header.meta`, `photos`/`photoMeta`/`albumText`. Open: `photoMeta` does not write learned flags back (needs `AlbumService.setFlags`), `photos` queries through `JdbcTemplate` in `PhotosApi` until `CatalogRepository` has a page of a list's photos. Checks: `:backend:test` 109 (1 skipped).
 - 2026-10-14 `.cry` password is session-only: the key lives in server memory (never in settings.json), forgotten on restart or 10 s after the last client leaves; clients see an 8-hex fingerprint only; albums indexed with a key survive a missing key (only their `.cry` reads fail); Folders page shows a masked set state and an eye toggle for a typed password.
