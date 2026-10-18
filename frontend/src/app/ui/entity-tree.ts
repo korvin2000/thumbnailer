@@ -57,7 +57,7 @@ const same = (a: number[], b: number[]) => a.length === b.length && a.every(x =>
         <app-icon [name]="r.icon" [size]="15" />
         <span class="name">{{ r.label }}</span>
         @if (r.entity?.auto) { <span class="dot"></span> }
-        <span class="n">@if (r.count === null) { … } @else { {{ r.count | number }} }</span>
+        @if (!r.empty) { <span class="n">@if (r.count === null) { … } @else { {{ r.count | number }} }</span> }
       </div>
     }
     @if (loading()) { <div class="state"><span class="spinner"></span> Loading…</div> }
@@ -226,6 +226,7 @@ export class EntityTree {
   // ---- rows ----
 
   protected isScope(r: Row): boolean {
+    if (r.empty) return false;
     const f = this.store.filters(), ids = f.entities ?? [];
     return r.scope === 'all' ? !ids.length && !f.missing : r.scope === 'missing' ? f.missing === this.kind() : !f.missing && same(r.scope, ids);
   }
