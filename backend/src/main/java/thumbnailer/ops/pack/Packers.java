@@ -24,7 +24,10 @@ public class Packers implements Packer {
 
     public Packers(Containers containers) { this.containers = containers; }
 
-    /** {@code format} null = {@code AUTO}. A failure leaves a partial {@code target} for the caller to delete. */
+    /**
+     * {@code format} null = {@code AUTO}. {@code target} is created: one already there fails ({@code FileAlreadyExistsException},
+     * left as it is); any other failure leaves a partial {@code target} for the caller to delete.
+     */
     @Override
     public Map<String, Long> pack(AlbumContainer raw, Collection<String> names, Path target, Op.Format format) throws IOException {
         return format == Op.Format.SEVEN_ZIP ? SevenZipPacker.pack(raw, names, target) : ZipPacker.pack(raw, names, target);

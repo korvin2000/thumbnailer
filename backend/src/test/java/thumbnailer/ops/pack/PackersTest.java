@@ -1,32 +1,47 @@
 package thumbnailer.ops.pack;
 
+import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InterruptedIOException;
+import java.io.UncheckedIOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 import net.sf.sevenzipjbinding.ArchiveFormat;
+import net.sf.sevenzipjbinding.ISequentialInStream;
+import net.sf.sevenzipjbinding.SevenZipException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import thumbnailer.ops.Hashes;
 import thumbnailer.ops.Op;
 import thumbnailer.source.AlbumContainer;
+import thumbnailer.source.AlbumContainer.Item;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Kind;
@@ -136,7 +151,7 @@ class PackersTest {
 
     @Test
     void entryNamesThatLeaveTheFolderAreRefusedBeforeAnythingIsWritten() throws IOException {
-        var out = Files.createDirectory(dir.resolve("out"));
+        var out = dir.resolve("out"); // created by the unpacker
         for (var n : List.of("../a.jpg", "a/../../b.jpg", "a/..", "/abs.jpg", "\\\\server\\x.jpg", "C:/x.jpg", "c:x.jpg", "a:b.jpg", "", "a\u0001.jpg"))
             assertThatThrownBy(() -> FolderUnpacker.contained(out, n)).as(n).isInstanceOf(IOException.class);
         assertThat(FolderUnpacker.contained(out, "a/./b.jpg")).isEqualTo(out.resolve("a/b.jpg"));
@@ -145,8 +160,122 @@ class PackersTest {
         try (var raw = containers.openRaw(Kind.ZIP, dir.resolve("evil.zip"))) {
             assertThatThrownBy(() -> unpacker.unpack(raw, out, Map.of())).isInstanceOf(IOException.class).hasMessageContaining("evil");
         }
-        assertThat(out).isEmptyDirectory();
+        assertThat(out).doesNotExist();
         assertThat(dir.resolve("evil.jpg")).doesNotExist();
+    }
+
+    @Test
+    void stagingPathsThatExistAreNeverWrittenThrough() throws IOException {
+        var src = dir.resolve("Shoot");
+        album(src);
+        for (var format : List.of(Op.Format.ZIP, Op.Format.SEVEN_ZIP)) {
+            var target = Files.writeString(dir.resolve("Shoot." + format + ".part"), "someone else's download");
+            assertThatThrownBy(() -> pack(src, target, format)).as(format.toString()).isInstanceOf(FileAlreadyExistsException.class);
+            assertThat(target).hasContent("someone else's download");
+        }
+        var out = Files.createDirectory(dir.resolve("Shoot.part"));
+        try (var raw = containers.openRaw(Kind.DIRECTORY, src)) {
+            assertThatThrownBy(() -> unpacker.unpack(raw, out, Map.of())).isInstanceOf(FileAlreadyExistsException.class);
+        }
+        assertThat(out).isEmptyDirectory();
+        assertThat(spills()).isEmpty();
+    }
+
+    @Test
+    void aSourceShorterThanItsListingFailsEveryFormat() {
+        var source = source(List.of(new Item("a.jpg", 2, 0), new Item("b.txt", 2, 0)), n -> new byte[1]);
+        for (var name : List.of("a.jpg", "b.txt")) // stored and deflated in a zip
+            for (var format : List.of(Op.Format.ZIP, Op.Format.SEVEN_ZIP))
+                assertThatThrownBy(() -> packers.pack(source, List.of(name), dir.resolve(name + "." + format), format))
+                        .as(name + " → " + format).isInstanceOf(IOException.class).hasMessageContaining("1 bytes, listed 2");
+    }
+
+    @Test
+    void namesListedTwiceFailClosed() throws IOException {
+        var file = dir.resolve("dup.zip");
+        zip(file, new LinkedHashMap<>(Map.of("a.jpg", "1111".getBytes(UTF_8), "b.jpg", "2222".getBytes(UTF_8))));
+        Files.write(file, new String(Files.readAllBytes(file), ISO_8859_1).replace("b.jpg", "a.jpg").getBytes(ISO_8859_1));
+        try (var raw = containers.openRaw(Kind.ZIP, file)) {
+            assertThat(names(raw)).containsExactly("a.jpg", "a.jpg");
+            for (var format : List.of(Op.Format.ZIP, Op.Format.SEVEN_ZIP))
+                assertThatThrownBy(() -> packers.pack(raw, List.of("a.jpg"), dir.resolve("dup." + format + ".part"), format)).as(format.toString())
+                        .isInstanceOf(IOException.class).hasMessageContaining("Duplicate entry name a.jpg");
+            assertThatThrownBy(() -> unpacker.unpack(raw, dir.resolve("dup"), Map.of())).hasMessageContaining("Duplicate entry name a.jpg");
+        }
+    }
+
+    @Test
+    void anEmpty7zReadsAsNoEntries() throws IOException {
+        var file = dir.resolve("empty.7z");
+        Archives.sevenZip(file, ArchiveFormat.SEVEN_ZIP, Map.of(), false);
+        assertThat(packers.hashes(file)).isEmpty();
+    }
+
+    @Test
+    void aFatalErrorInThePassStillEndsThe7zWriter() {
+        var broken = source(List.of(new Item("a.jpg", 1, 0), new Item("b.jpg", 1, 0)), n -> {
+            if (n.equals("b.jpg")) throw new AssertionError("broken source");
+            return new byte[1];
+        });
+        assertTimeoutPreemptively(Duration.ofSeconds(20), () -> assertThatThrownBy(() -> packers.pack(broken, List.of("a.jpg", "b.jpg"),
+                dir.resolve("e.7z"), Op.Format.SEVEN_ZIP)).isInstanceOf(IOException.class).hasRootCauseMessage("broken source"));
+    }
+
+    @Test
+    void theEndOfThePassLeavesTheSpill7ZipReadsOpen() throws Exception {
+        var relay = new SevenZipPacker.Relay(dir.resolve("r.7z"));
+        var b = random(new SplittableRandom(4), 200_000);
+        var pass = Thread.ofPlatform().start(() -> {
+            try {
+                relay.accept(new Item("b.jpg", b.length, 0), new ByteArrayInputStream(b)); // 7-Zip wants a.jpg: b.jpg spills
+                relay.accept(new Item("a.jpg", 1, 0), new ByteArrayInputStream(new byte[1]));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
+        assertThat(read(relay.take("a.jpg"))).hasSize(1);
+        pass.join();
+        var spill = relay.take("b.jpg");
+        relay.end(null); // the pass is over while 7-Zip reads the spill
+        assertThat(read(spill)).isEqualTo(b);
+        relay.clean();
+    }
+
+    @Test
+    void anInterruptedPackStopsThePassAndLeavesNoSpill() throws Exception {
+        var items = List.of(new Item("a.jpg", 1, 0), new Item("c.jpg", 1, 0));
+        var spilled = new CountDownLatch(1);
+        var slow = new AlbumContainer() {
+            @Override public String name() { return "slow"; }
+            @Override public List<Item> items() { return items; }
+            @Override public InputStream open(String name) { throw new UnsupportedOperationException(); }
+            @Override public void close() {}
+
+            @Override
+            public void extract(Collection<String> names, EntrySink sink) throws IOException {
+                sink.accept(items.get(1), new ByteArrayInputStream(new byte[1])); // 7-Zip asks for a.jpg first: c.jpg spills
+                spilled.countDown();
+                try {
+                    Thread.sleep(30_000);
+                } catch (InterruptedException e) {
+                    throw new InterruptedIOException();
+                }
+            }
+        };
+        var thrown = new AtomicReference<Throwable>();
+        var packing = Thread.ofPlatform().start(() -> {
+            try {
+                packers.pack(slow, List.of("a.jpg", "c.jpg"), dir.resolve("i.7z"), Op.Format.SEVEN_ZIP);
+            } catch (Throwable e) {
+                thrown.set(e);
+            }
+        });
+        spilled.await();
+        packing.interrupt();
+        packing.join(20_000);
+        assertThat(thrown.get()).isInstanceOf(InterruptedIOException.class);
+        assertThat(Thread.getAllStackTraces().keySet()).noneMatch(t -> t.getName().equals("pack-read"));
+        assertThat(spills()).isEmpty();
     }
 
     /** An album folder: incompressible images (mixed case, a space, a non-ASCII name), a text sidecar, distinct mtimes. */
@@ -171,7 +300,7 @@ class PackersTest {
     }
 
     private void unpackRoundTrip(Path archive, Kind kind, Path src, Map<String, byte[]> files) throws IOException {
-        var out = Files.createDirectory(dir.resolve(archive.getFileName() + ".part"));
+        var out = dir.resolve(archive.getFileName() + ".part");
         try (var raw = containers.openRaw(kind, archive)) {
             assertThat(unpacker.unpack(raw, out, Map.of())).isEqualTo(hashes(files));
         }
@@ -191,6 +320,24 @@ class PackersTest {
     }
 
     private static List<String> names(AlbumContainer c) { return c.items().stream().map(AlbumContainer.Item::name).toList(); }
+
+    /** A source listing {@code items} whose files read as {@code bytes} gives them. */
+    private static AlbumContainer source(List<Item> items, Function<String, byte[]> bytes) {
+        return new AlbumContainer() {
+            @Override public String name() { return "source"; }
+            @Override public List<Item> items() { return items; }
+            @Override public InputStream open(String name) { return new ByteArrayInputStream(bytes.apply(name)); }
+            @Override public void close() {}
+        };
+    }
+
+    /** What 7-Zip reads from a relay stream, to its end. */
+    private static byte[] read(ISequentialInStream in) throws SevenZipException {
+        var out = new ByteArrayOutputStream();
+        var buf = new byte[8192];
+        for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+        return out.toByteArray();
+    }
 
     private static Map<String, Long> hashes(Map<String, byte[]> files) {
         var m = new HashMap<String, Long>();
