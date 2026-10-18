@@ -477,7 +477,7 @@ class ScanTest {
         socket.sendText("{\"type\":\"search\",\"id\":10,\"query\":{\"roots\":[\"" + normalizedRoot() + "\"],\"offset\":0,\"limit\":10}}", true).join();
         assertThat(await(received, m -> m.endsWith("\"id\":10}"))).as("hidden").contains("\"total\":0");
         socket.sendText("{\"type\":\"album\",\"id\":7,\"albumId\":\"" + l.id() + "\"}", true).join();
-        assertThat(await(received, m -> m.endsWith("\"id\":7}"))).contains("\"marks\":" + marks, "\"flags\":0");
+        assertThat(await(received, m -> m.endsWith("\"id\":7}"))).contains("\"marks\":" + marks, "\"flags\":1");
         socket.sendText("{\"type\":\"compareCopies\",\"id\":8,\"a\":\"x\",\"b\":\"y\"}", true).join();
         assertThat(await(received, m -> m.endsWith("\"id\":8}"))).isEqualTo("{\"type\":\"error\",\"message\":\"No album x\",\"id\":8}");
 

@@ -8,7 +8,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   constructors; protocols/events = sealed interfaces + pattern-matching `switch`.
 - Spring: constructor injection only, component scanning, no `@Bean` methods, no `@ConfigurationProperties`
   (`@Value("${thumbnailer.x:default}")`). SPI implementations are `@Component`s collected as `List<…>`
-  (`Containers`, `Metadata`; extractor order by `@Order`). Adapters chosen by
+  (`Containers`; `Metadata` and `CoverSelector` also take `META-INF/services` providers through `Plugins.load`, ordered by the SPI's `order()`, not `@Order`). Adapters chosen by
   `@ConditionalOnProperty(name = "thumbnailer.store.albums|blobs", havingValue = …, matchIfMissing = true)`.
 - Jackson 3: `tools.jackson.databind.json.JsonMapper`; annotations still `com.fasterxml.jackson.annotation`.
   `AlbumSocket` hides `Album.internal` and `Entry.mtime` from the wire via mixins.
@@ -124,8 +124,9 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Container kind: a format 7-Zip reads is one more entry in `SevenZipContainer.EXTENSIONS`; anything else is a
   `ContainerFactory` `@Component` (copy `ZipContainer.Factory`), add to `Kind`, mirror `Kind` in
   `frontend/src/app/core/model.ts`.
-- Metadata source: `MetadataExtractor` `@Component @Order(n)` returning a partial `AlbumMeta`.
-- Cover rule: new `CoverStrategy` + add it to the chain in `CoverSelector` (chain is hardcoded — see PLAN).
+- Metadata source: `MetadataExtractor` `@Component` with `order()`, returning a partial `AlbumMeta` from the `Extraction`
+  context; a plugin jar instead registers a public no-argument class in `META-INF/services/thumbnailer.metadata.MetadataExtractor`.
+- Cover rule: `CoverStrategy` `@Component` with `order()` (or `META-INF/services/thumbnailer.cover.CoverStrategy`).
 - Storage engine: new package under `store/`, implement the port, `@ConditionalOnProperty` on a new value.
 - WS message: record in `web/ws/Request` or `Event` with `@JsonTypeName`, a `case` in `AlbumSocket.handle`, then the
   frontend mirror (see `.claude/rules/wire-contract.md`).

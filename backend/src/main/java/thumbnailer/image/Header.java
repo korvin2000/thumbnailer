@@ -13,11 +13,20 @@ import thumbnailer.image.ImageProbe.Exif;
  * An image's stored size and the three EXIF tags the app reads (IFD0 Orientation and Artist, Exif-IFD DateTimeOriginal)
  * from a prefix of the file, without a decoder or a metadata tree: JPEG by walking the markers up to the first SOFn,
  * TIFF by its IFD0, PNG by IHDR and an {@code eXIf} chunk before the image data, GIF by its logical screen, BMP by its
- * DIB header. {@link #parse} returns null for any other format, or when the facts lie past the prefix.
+ * DIB header. {@link #parse} returns null for any other format, or when the facts lie past the prefix. {@code meta}:
+ * the walk saw a metadata block (a JPEG APP1, a TIFF's IFDs, a PNG {@code eXIf}).
  */
-record Header(int width, int height, Exif exif) {
+public record Header(int width, int height, Exif exif, boolean meta) {
 
     private static final DateTimeFormatter EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss");
+
+    Header(int width, int height, Exif exif) { this(width, height, exif, false); }
+
+    /** Whether the file carries metadata, as far as its head shows; null when the head could not be parsed. */
+    public static Boolean meta(byte[] head) {
+        var h = parse(MemorySegment.ofArray(head));
+        return h == null ? null : h.meta;
+    }
 
     static Header parse(MemorySegment d) {
         if (d.byteSize() < 4) return null;
@@ -29,7 +38,10 @@ record Header(int width, int height, Exif exif) {
             else if (a == 'G' && b == 'I' && u8(d, 2) == 'F') h = gif(d);
             else if (a == 'B' && b == 'M') h = u32(d, 14, true) == 12 ? new Header(u16(d, 18, true), u16(d, 20, true), Exif.NONE)
                     : new Header((int) u32(d, 18, true), Math.abs((int) u32(d, 22, true)), Exif.NONE); // OS/2 core header, else Windows
-            else if (a == b && (a == 'I' || a == 'M') && u16(d, 2, a == 'I') == 42) h = tiff(d);
+            else if (a == b && (a == 'I' || a == 'M') && u16(d, 2, a == 'I') == 42) {
+                var t = tiff(d);
+                h = new Header(t.width, t.height, t.exif, true);
+            }
         } catch (IndexOutOfBoundsException truncated) {
             // the facts lie past the prefix
         }
@@ -39,6 +51,7 @@ record Header(int width, int height, Exif exif) {
     private static Header jpeg(MemorySegment d) {
         long n = d.byteSize();
         Exif exif = Exif.NONE;
+        boolean app1 = false;
         try {
             for (long i = 2; i + 4 <= n; ) {
                 if (u8(d, i) != 0xFF) return null;
@@ -47,11 +60,12 @@ record Header(int width, int height, Exif exif) {
                 if (m == 0x01 || m >= 0xD0 && m <= 0xD8) { i += 2; continue; } // standalone markers
                 if (m == 0xD9 || m == 0xDA) return null; // EOI / SOS before any frame header
                 long seg = i + 4, end = i + 2 + u16(d, i + 2, false);
+                app1 |= m == 0xE1; // Exif or XMP
                 if (m == 0xE1 && exif == Exif.NONE && seg + 14 <= n && u8(d, seg) == 'E' && u8(d, seg + 1) == 'x'
                         && u8(d, seg + 2) == 'i' && u8(d, seg + 3) == 'f' && u8(d, seg + 4) == 0)
                     exif = tiff(d.asSlice(seg + 6, Math.min(end, n) - seg - 6)).exif;
                 if (m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC)
-                    return seg + 5 <= n ? new Header(u16(d, seg + 3, false), u16(d, seg + 1, false), exif) : null;
+                    return seg + 5 <= n ? new Header(u16(d, seg + 3, false), u16(d, seg + 1, false), exif, app1) : null;
                 i = end;
             }
         } catch (IndexOutOfBoundsException truncated) {
@@ -63,9 +77,13 @@ record Header(int width, int height, Exif exif) {
     /** IHDR, then the chunks before the image data for {@code eXIf}; null when the prefix ends before IDAT. */
     private static Header png(MemorySegment d) {
         var exif = Exif.NONE;
+        boolean seen = false;
         for (long i = 8 + 25; u32(d, i + 4, false) != 0x49444154; i += 12 + u32(d, i, false)) // chunks after IHDR, until IDAT
-            if (u32(d, i + 4, false) == 0x65584966) exif = tiff(d.asSlice(i + 8, u32(d, i, false))).exif; // eXIf
-        return new Header((int) u32(d, 16, false), (int) u32(d, 20, false), exif);
+            if (u32(d, i + 4, false) == 0x65584966) { // eXIf
+                seen = true;
+                exif = tiff(d.asSlice(i + 8, u32(d, i, false))).exif;
+            }
+        return new Header((int) u32(d, 16, false), (int) u32(d, 20, false), exif, seen);
     }
 
     /** The first frame's size, as ImageIO reads it (the logical screen may be larger): past the colour table and extensions. */

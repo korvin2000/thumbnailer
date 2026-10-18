@@ -1,22 +1,17 @@
 package thumbnailer.cover;
 
-import java.util.Comparator;
-import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
 import thumbnailer.album.Entry;
+import thumbnailer.metadata.Extraction;
 
-/** SPI: proposes a cover among an album's entries; {@link CoverSelector} runs the chain in order. */
-@FunctionalInterface
+/**
+ * SPI: proposes a cover among an album's images. Implementations are Spring beans or {@code META-INF/services}
+ * providers (public, no-argument constructor); {@link CoverSelector} runs them by {@link #order}. Outside indexing
+ * the context holds the entries only ({@link Extraction#of}): a strategy that needs the container checks for null.
+ */
 public interface CoverStrategy {
 
-    Optional<Entry> pick(List<Entry> entries);
-    //board, folder, *_ch, 0.jpg, logo, icon, covet
-    Pattern HINT = Pattern.compile("(?i)cover|poster|logo|_cv\\.[^.]+$");
+    Optional<Entry> pick(Extraction ctx);
 
-    /** A file name announcing a cover: cover, poster, logo, or a {@code _cv} suffix. */
-    CoverStrategy NAME_HINT = entries -> entries.stream()
-            .filter(e -> HINT.matcher(e.name().substring(e.name().lastIndexOf('/') + 1)).find()).findFirst();
-
-    CoverStrategy SMALLEST = entries -> entries.stream().min(Comparator.comparingLong(Entry::bytes));
+    default int order() { return 100; }
 }

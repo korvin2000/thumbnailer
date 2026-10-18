@@ -10,6 +10,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -17,7 +18,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -27,8 +30,10 @@ import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
 import thumbnailer.album.Entry;
 import thumbnailer.cover.CoverSelector;
+import thumbnailer.image.Header;
 import thumbnailer.image.ImageProbe;
 import thumbnailer.image.Thumbnailer.Thumb;
+import thumbnailer.metadata.Extraction;
 import thumbnailer.metadata.Metadata;
 import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Cry;
@@ -36,14 +41,16 @@ import thumbnailer.source.Disks;
 import thumbnailer.source.Kind;
 
 /**
- * Builds an album from an open container: entry probes, extracted metadata, statistics, cover thumbnail. Unchanged
- * files reuse their stored probe and the stored cover; covers render through {@link AlbumService#renderCover}, which
- * bounds them.
+ * Builds an album from an open container: entry probes and their metadata flags, the {@link Extraction} context (text
+ * members read with the image heads, in one pass), extracted metadata, the bio file, statistics, cover thumbnail.
+ * Unchanged files reuse their stored probe and the stored cover; covers render through {@link
+ * AlbumService#renderCover}, which bounds them.
  */
 @Component
 class AlbumIndexer {
 
     private static final Logger log = LoggerFactory.getLogger(AlbumIndexer.class);
+    private static final Pattern BIO = Pattern.compile("bio|model");
 
     private final AlbumRepository repo;
     private final Metadata metadata;
@@ -75,6 +82,10 @@ class AlbumIndexer {
         var was = nameMap.entrySet().stream().collect(Collectors.toMap(Map.Entry::getValue, Map.Entry::getKey));
         Function<String, Entry> known = name -> stored.get(was.getOrDefault(name, name));
         var images = container.images();
+        var items = container.items();
+        var budget = Extraction.budget(items);
+        var texts = new HashMap<String, String>();
+        var flags = new HashMap<String, Integer>();
         boolean cpuBound = container.cpuBound();
         if (cpuBound) turn.close(); // decompression, not the disk, limits it: let other albums read meanwhile
         var probes = new HashMap<String, Object>(); // name -> Probe, or the reason it is unreadable
@@ -87,14 +98,22 @@ class AlbumIndexer {
         var later = new ArrayList<String>(); // formats the head alone cannot probe
         var indexer = Thread.currentThread();
         try { // the container picks the read order: one decompression pass for a solid archive, maybe on its threads
-            container.heads(todo, ImageProbe.HEAD, (name, head) -> {
+            container.heads(Stream.concat(todo.stream(), budget.keySet().stream()).toList(), ImageProbe.HEAD, (name, head) -> {
                 if (indexer.isInterrupted()) throw new InterruptedIOException(); // shutting down
                 lane.giveWay();
+                var allowed = budget.get(name);
+                if (allowed != null) { // a text member, never an image
+                    var text = Extraction.decode(head.length <= allowed ? head : Arrays.copyOf(head, allowed), allowed < bytes(items, name));
+                    synchronized (probes) { texts.put(name, text); }
+                    return;
+                }
                 try {
                     var probe = ImageProbe.probe(head); // pure: a sink must not read the container
+                    int f = flags(head);
                     synchronized (probes) {
                         if (probe != null) probes.put(name, probe);
                         else later.add(name);
+                        flags.put(name, f);
                     }
                 } catch (RuntimeException e) {
                     synchronized (probes) { probes.put(name, e.toString()); }
@@ -110,7 +129,11 @@ class AlbumIndexer {
                     } catch (IOException | RuntimeException e) {
                         probe = e.toString();
                     }
-                    synchronized (probes) { probes.put(name, probe); }
+                    int f = flags(whole);
+                    synchronized (probes) {
+                        probes.put(name, probe);
+                        flags.put(name, f);
+                    }
                 });
                 synchronized (probes) {}
             } else {
@@ -135,18 +158,22 @@ class AlbumIndexer {
             var old = known.apply(item.name());
             if (probes.get(item.name()) instanceof ImageProbe.Probe probe)
                 entries.add(new Entry(entries.size(), item.name(), item.bytes(), item.mtime(), probe.width(), probe.height(),
-                        probe.shotAt(), unchanged(old, item.bytes(), item.mtime()) ? old.flags() : 0));
+                        probe.shotAt(), unchanged(old, item.bytes(), item.mtime()) ? old.flags() : flags.getOrDefault(item.name(), 0)));
             else log.warn("Skipping unreadable image {} in {}: {}", item.name(), path, probes.getOrDefault(item.name(), "no data"));
         }
         if (entries.isEmpty()) return Optional.empty();
 
-        var meta = metadata.extract(container, entries);
+        var ctx = new Extraction(container.name(), path, kind, entries, items, kind == Kind.DIRECTORY ? null : Extraction.longestDir(items),
+                Extraction.sample(entries), texts, container);
+        var meta = metadata.extract(ctx);
+        var bio = items.stream().map(AlbumContainer.Item::name)
+                .filter(n -> Extraction.isText(n) && BIO.matcher(Extraction.fileName(n)).find()).findFirst().orElse(null);
         var baseCover = base == null || base.cover() == null ? null : nameMap.getOrDefault(base.cover(), base.cover());
         String pinned = base != null && base.coverPinned() ? baseCover : null;
         var storedCover = base == null ? Optional.<Thumb>empty() : albums.storedCover(base);
         Entry cover = null;
         Thumb thumb = null;
-        for (var it = covers.candidates(entries, pinned).iterator(); cover == null && it.hasNext(); ) {
+        for (var it = covers.candidates(ctx, pinned).iterator(); cover == null && it.hasNext(); ) {
             if (Thread.currentThread().isInterrupted()) return Optional.empty();
             var candidate = it.next();
             if (storedCover.isPresent() && candidate.name().equals(baseCover) && unchanged(known.apply(candidate.name()), candidate.bytes(), candidate.mtime())) {
@@ -177,9 +204,19 @@ class AlbumIndexer {
                 entries.stream().mapToLong(Entry::bytes).sum(), (long) pixels.getAverage(),
                 entries.stream().mapToInt(Entry::width).max().orElse(0),
                 entries.stream().mapToInt(Entry::height).max().orElse(0), shotDate,
-                Instant.ofEpochMilli(mtime.getMax()), Instant.now(), null, null, null, null, List.of(), 0, false, null,
+                Instant.ofEpochMilli(mtime.getMax()), Instant.now(), null, null, null, null, List.of(), 0, false, bio,
                 List.of(), List.of(), 0, new Album.Internal(container.contentId(), Cry.signature(container), extracted, AlbumMeta.EMPTY, 0));
         return Optional.of(new Indexed(album.withEdits(AlbumMeta.EMPTY), List.copyOf(entries), thumb));
+    }
+
+    private static long bytes(List<AlbumContainer.Item> items, String name) {
+        return items.stream().filter(i -> i.name().equals(name)).findFirst().map(AlbumContainer.Item::bytes).orElse(0L);
+    }
+
+    /** {@link Entry#flags} from what a head shows: 0 when it could not be parsed. */
+    private static int flags(byte[] head) {
+        var meta = Header.meta(head);
+        return meta == null ? 0 : Entry.META_KNOWN | (meta ? Entry.META : 0);
     }
 
     /** Never a {@code .cry} entry: a re-index may be due to a key change, which its file does not show. */
