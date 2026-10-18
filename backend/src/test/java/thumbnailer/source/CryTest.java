@@ -8,10 +8,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.ValueLayout;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -22,8 +20,6 @@ import java.util.Map;
 import java.util.Random;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
-import javax.crypto.Cipher;
-import javax.crypto.spec.SecretKeySpec;
 import net.sf.sevenzipjbinding.ArchiveFormat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,7 +28,7 @@ import thumbnailer.image.ImageProbe;
 /**
  * Against {@code cry-golden.tsv}: files written by xanderView's own {@code Encryptor.encrypt0} with the password
  * "test" (17 sizes × name lengths covering every padding, a PNG with a Cyrillic name, a 100 KiB payload), which also
- * validate {@link #encrypt}, the test writer used for everything larger.
+ * validate {@link Cry#encrypt}, the writer used for everything larger.
  */
 public class CryTest {
 
@@ -56,30 +52,22 @@ public class CryTest {
 
     @TempDir Path dir;
 
-    /** xanderView's layout: header, biased name length, zero padding of the name to fill the last block. */
-    public static byte[] encrypt(byte[] plain, String name, byte[] key) {
-        var n = name.getBytes(UTF_8);
-        int p = (16 - (plain.length + 2 + n.length) % 16) % 16, l = n.length + p;
-        var body = ByteBuffer.allocate(2 + l + plain.length).putShort((short) (Math.min(l, 32767) - 32768)).put(n).put(new byte[p]).put(plain).array();
-        try {
-            var c = Cipher.getInstance("AES/ECB/NoPadding");
-            c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"));
-            return ByteBuffer.allocate(5 + body.length).putInt(plain.length).put((byte) 1).put(c.doFinal(body)).array();
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException(e);
-        }
-    }
-
     @Test
     void keyAndWriterMatchXanderView() throws Exception {
         assertThat(HEX.formatHex(KEY)).isEqualTo(FACTS.get("KEY"));
-        for (var g : GOLDEN) assertThat(encrypt(g.plain, g.name, KEY)).as(g.name).isEqualTo(g.cry);
+        for (var g : GOLDEN) assertThat(Cry.encrypt(g.plain, g.name, KEY)).as(g.name).isEqualTo(g.cry);
         var png = FACTS.get("PNG").split("\t");
-        assertThat(encrypt(HEX.parseHex(png[0]), "Фото №1.png", KEY)).isEqualTo(HEX.parseHex(png[1]));
+        assertThat(Cry.encrypt(HEX.parseHex(png[0]), "Фото №1.png", KEY)).isEqualTo(HEX.parseHex(png[1]));
         var big = big();
         var sha = MessageDigest.getInstance("SHA-256");
         assertThat(FACTS.get("BIG")).contains("sha256(plain)=" + HEX.formatHex(sha.digest(big)))
-                .contains("sha256(cry)=" + HEX.formatHex(sha.digest(encrypt(big, "big.bin", KEY))));
+                .contains("sha256(cry)=" + HEX.formatHex(sha.digest(Cry.encrypt(big, "big.bin", KEY))));
+        for (var g : GOLDEN) assertThat(Cry.plainName(g.cry, KEY)).as("embedded name").isEqualTo(g.name);
+        assertThat(Cry.plainName(HEX.parseHex(png[1]), KEY)).isEqualTo("Фото №1.png");
+        var longName = "a-name-longer-than-two-blocks-of-the-cipher.jpg";
+        var head = Arrays.copyOf(Cry.encrypt(big, longName, KEY), 5 + 64);
+        assertThat(Cry.plainName(head, KEY)).isEqualTo(longName);
+        assertThatThrownBy(() -> Cry.plainName(Arrays.copyOf(head, 5 + 32), KEY)).isInstanceOf(IOException.class);
     }
 
     @Test
@@ -107,7 +95,7 @@ public class CryTest {
     @Test
     void aHeadDecryptsAlone_aWrongKeyIsRefused_noKeyHidesTheFiles() throws IOException {
         var big = big();
-        Files.write(dir.resolve("big.cry"), encrypt(big, "big.bin", KEY));
+        Files.write(dir.resolve("big.cry"), Cry.encrypt(big, "big.bin", KEY));
         Files.write(dir.resolve("plain.jpg"), new byte[]{1, 2, 3});
         try (var c = Cry.wrap(new DirectoryContainer(dir, Exclusions.NONE), KEY)) {
             // 4096 bytes read: 4080 decrypt, minus the length field and the 14-byte padded name
@@ -141,8 +129,8 @@ public class CryTest {
         new Random(7).nextBytes(a);
         new Random(8).nextBytes(b);
         var files = new LinkedHashMap<String, byte[]>();
-        files.put("a.cry", encrypt(a, "a.jpg", KEY));
-        files.put("b.cry", encrypt(b, "b.png", KEY));
+        files.put("a.cry", Cry.encrypt(a, "a.jpg", KEY));
+        files.put("b.cry", Cry.encrypt(b, "b.png", KEY));
         files.put("c.jpg", new byte[]{9});
         var solid = dir.resolve("solid.7z");
         Archives.sevenZip(solid, ArchiveFormat.SEVEN_ZIP, files, true);
@@ -177,7 +165,7 @@ public class CryTest {
         assertThat(Cry.matches(sig + "+", plain)).isTrue();
         assertThat(Cry.matches(sig, plain)).as("indexed before .cry support: once more").isFalse();
 
-        Files.write(dir.resolve("b.cry"), encrypt(new byte[]{2}, "b.jpg", KEY));
+        Files.write(dir.resolve("b.cry"), Cry.encrypt(new byte[]{2}, "b.jpg", KEY));
         var keyed = Cry.wrap(new DirectoryContainer(dir, Exclusions.NONE), KEY);
         var locked = Cry.wrap(new DirectoryContainer(dir, Exclusions.NONE), null);
         sig = keyed.signature();

@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -60,23 +61,26 @@ class AlbumIndexer {
     record Indexed(Album album, List<Entry> entries, Thumb cover) {}
 
     /**
-     * Entries whose name, size and mtime are unchanged since {@code base} reuse the stored probe. Reads during
+     * Entries whose name, size and mtime are unchanged since {@code base} reuse the stored probe and its flags; entries an
+     * operation renamed ({@code nameMap}: old name → new name, else empty) are looked up by their old name. Reads during
      * {@code turn}, the album's turn on its disk, which the first cover read ends (or the end of the reads when the
      * stored cover still holds); a further candidate waits for a new turn on {@code lane}. A {@link
      * AlbumContainer#cpuBound} archive gives the turn back after its listing. Between head reads the scan gives way
      * to the UI reading the same disk.
      */
     Optional<Indexed> index(AlbumContainer container, String root, String path, Kind kind, Album base, Disks.Hold turn,
-                            Disks.Lane lane) {
-        Map<String, Entry> known = base == null ? Map.of()
+                            Disks.Lane lane, Map<String, String> nameMap) {
+        var stored = base == null ? Map.<String, Entry>of()
                 : repo.entries(base.id()).stream().collect(toMap(Entry::name, Function.identity()));
+        var was = nameMap.entrySet().stream().collect(Collectors.toMap(Map.Entry::getValue, Map.Entry::getKey));
+        Function<String, Entry> known = name -> stored.get(was.getOrDefault(name, name));
         var images = container.images();
         boolean cpuBound = container.cpuBound();
         if (cpuBound) turn.close(); // decompression, not the disk, limits it: let other albums read meanwhile
         var probes = new HashMap<String, Object>(); // name -> Probe, or the reason it is unreadable
         var todo = new ArrayList<String>();
         for (var item : images) {
-            var old = known.get(item.name());
+            var old = known.apply(item.name());
             if (unchanged(old, item.bytes(), item.mtime())) probes.put(item.name(), new ImageProbe.Probe(old.width(), old.height(), old.shotAt()));
             else todo.add(item.name());
         }
@@ -128,23 +132,26 @@ class AlbumIndexer {
         }
         var entries = new ArrayList<Entry>();
         for (var item : images) {
+            var old = known.apply(item.name());
             if (probes.get(item.name()) instanceof ImageProbe.Probe probe)
-                entries.add(new Entry(entries.size(), item.name(), item.bytes(), item.mtime(), probe.width(), probe.height(), probe.shotAt()));
+                entries.add(new Entry(entries.size(), item.name(), item.bytes(), item.mtime(), probe.width(), probe.height(),
+                        probe.shotAt(), unchanged(old, item.bytes(), item.mtime()) ? old.flags() : 0));
             else log.warn("Skipping unreadable image {} in {}: {}", item.name(), path, probes.getOrDefault(item.name(), "no data"));
         }
         if (entries.isEmpty()) return Optional.empty();
 
-        var extracted = metadata.extract(container, entries);
-        String pinned = base != null && base.coverPinned() ? base.cover() : null;
-        var stored = base == null ? Optional.<Thumb>empty() : albums.storedCover(base);
+        var meta = metadata.extract(container, entries);
+        var baseCover = base == null || base.cover() == null ? null : nameMap.getOrDefault(base.cover(), base.cover());
+        String pinned = base != null && base.coverPinned() ? baseCover : null;
+        var storedCover = base == null ? Optional.<Thumb>empty() : albums.storedCover(base);
         Entry cover = null;
         Thumb thumb = null;
         for (var it = covers.candidates(entries, pinned).iterator(); cover == null && it.hasNext(); ) {
             if (Thread.currentThread().isInterrupted()) return Optional.empty();
             var candidate = it.next();
-            if (stored.isPresent() && candidate.name().equals(base.cover()) && unchanged(known.get(candidate.name()), candidate.bytes(), candidate.mtime())) {
+            if (storedCover.isPresent() && candidate.name().equals(baseCover) && unchanged(known.apply(candidate.name()), candidate.bytes(), candidate.mtime())) {
                 cover = candidate; // the stored bytes still show this file: no decode, no encode
-                thumb = stored.get();
+                thumb = storedCover.get();
                 break;
             }
             try {
@@ -162,15 +169,16 @@ class AlbumIndexer {
         var mtime = entries.stream().mapToLong(Entry::mtime).summaryStatistics();
         var pixels = entries.stream().mapToLong(e -> (long) e.width() * e.height()).summaryStatistics();
         var shotDate = entries.stream().map(Entry::shotAt).filter(Objects::nonNull).min(Comparator.naturalOrder())
-                .map(LocalDateTime::toLocalDate).orElse(extracted.date() != null ? extracted.date()
+                .map(LocalDateTime::toLocalDate).orElse(meta.date() != null ? meta.date()
                         : LocalDate.ofInstant(Instant.ofEpochMilli(mtime.getMin()), ZoneId.systemDefault()));
+        var extracted = meta.withDate(shotDate); // the computed date is the extracted one: an edited date overrides it
         var album = new Album(null, root, path, kind, null, cover == null ? null : cover.name(),
                 cover != null && cover.name().equals(pinned), 0, thumb != null && thumb.portrait(), entries.size(),
                 entries.stream().mapToLong(Entry::bytes).sum(), (long) pixels.getAverage(),
                 entries.stream().mapToInt(Entry::width).max().orElse(0),
                 entries.stream().mapToInt(Entry::height).max().orElse(0), shotDate,
-                Instant.ofEpochMilli(mtime.getMax()), Instant.now(), null, null, null, null, List.of(), 0,
-                new Album.Internal(container.contentId(), Cry.signature(container), extracted, AlbumMeta.EMPTY));
+                Instant.ofEpochMilli(mtime.getMax()), Instant.now(), null, null, null, null, List.of(), 0, false, null,
+                List.of(), List.of(), 0, new Album.Internal(container.contentId(), Cry.signature(container), extracted, AlbumMeta.EMPTY, 0));
         return Optional.of(new Indexed(album.withEdits(AlbumMeta.EMPTY), List.copyOf(entries), thumb));
     }
 

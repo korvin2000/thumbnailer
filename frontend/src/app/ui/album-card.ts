@@ -2,7 +2,7 @@ import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input, output, signal } from '@angular/core';
 import { BytesPipe, MegapixelsPipe } from '../core/format';
 import { Gateway } from '../core/gateway';
-import { Album } from '../core/model';
+import { Album, EntityKind } from '../core/model';
 import { Icon } from './shared/icon';
 
 /** One album in the grid: cover, permanent name/size label, hover metadata and quick actions. */
@@ -15,17 +15,23 @@ import { Icon } from './shared/icon';
     <div class="badges">
       <span class="badge" [title]="a.kind === 'DIRECTORY' ? 'Folder' : a.kind === 'ZIP' ? 'Zip archive' : 'Archive'"><app-icon [name]="a.kind === 'DIRECTORY' ? 'folder' : 'archive'" [size]="12" /></span>
       @if (a.rating) { <span class="badge rating"><app-icon name="star" [size]="10" />{{ a.rating }}</span> }
+      @if (a.hidden) { <span class="badge" title="Hidden"><app-icon name="eyeOff" [size]="12" /></span> }
+      @if (a.copies > 1) { <button class="badge copies" [title]="a.copies + ' copies (same names and sizes)'" (click)="copies.emit(); $event.stopPropagation()" (dblclick)="$event.stopPropagation()"><app-icon name="layers" [size]="11" />×{{ a.copies }}</button> }
     </div>
+    @if (checked()) { <span class="check" title="In the selection"><app-icon name="check" [size]="13" /></span> }
     <div class="actions">
       <button class="act" title="Details (I)" (click)="info.emit(); $event.stopPropagation()"><app-icon name="info" [size]="15" /></button>
       <button class="act" title="Open album (Enter)" (click)="open.emit(); $event.stopPropagation()"><app-icon name="maximize" [size]="15" /></button>
     </div>
     <div class="scrim">
       <div class="meta">
-        @if (a.model || a.studio) {
-          <div class="line"><app-icon name="user" [size]="12" /><span>{{ a.model || '—' }}@if (a.studio) { <span class="dim"> · {{ a.studio }}</span> }</span></div>
+        @let model = names().MODEL || a.model;
+        @let studio = names().STUDIO || a.studio;
+        @let photographer = names().PHOTOGRAPHER || a.photographer;
+        @if (model || studio) {
+          <div class="line"><app-icon name="user" [size]="12" /><span>{{ model || '—' }}@if (studio) { <span class="dim"> · {{ studio }}</span> }</span></div>
         }
-        @if (a.photographer) { <div class="line"><app-icon name="camera" [size]="12" /><span>{{ a.photographer }}</span></div> }
+        @if (photographer) { <div class="line"><app-icon name="camera" [size]="12" /><span>{{ photographer }}</span></div> }
         @if (a.shotDate) { <div class="line"><app-icon name="calendar" [size]="12" /><span>{{ a.shotDate | date: 'mediumDate' }}</span></div> }
         @if (showTags() && a.tags.length) {
           <div class="tags">@for (t of a.tags; track t) { <span class="tag">#{{ t }}</span> }</div>
@@ -53,6 +59,13 @@ import { Icon } from './shared/icon';
       backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     }
     .badge.rating { color: var(--accent); }
+    .check {
+      position: absolute; right: 0; bottom: 0; display: inline-flex; align-items: flex-end; justify-content: flex-end; width: 30px; height: 30px; padding: 3px;
+      background: var(--accent); color: var(--on-accent); clip-path: polygon(100% 0, 100% 100%, 0 100%); pointer-events: none;
+    }
+    :host(.checked) { outline-color: var(--accent); }
+    .badge.copies { cursor: pointer; &:hover { background: var(--accent); color: var(--on-accent); } }
+    :host(.dimmed) img.loaded { opacity: 0.4; filter: grayscale(0.6); }
     .actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transform: translateY(-4px); transition: opacity 0.15s, transform 0.15s; }
     :host(:hover) .actions, :host(.selected) .actions { opacity: 1; transform: none; }
     .act {
@@ -73,7 +86,7 @@ import { Icon } from './shared/icon';
     :host(.portrait) .meta { font-size: 11px; }
   `,
   host: {
-    '[class.selected]': 'selected()', '[class.portrait]': 'album().coverPortrait', '[style.--tint]': 'tint()',
+    '[class.selected]': 'selected()', '[class.checked]': 'checked()', '[class.portrait]': 'album().coverPortrait', '[class.dimmed]': 'album().hidden', '[style.--tint]': 'tint()',
     '(click)': 'select.emit()', '(dblclick)': 'open.emit()', '(mouseenter)': 'hover.emit(album().id)', '(mouseleave)': 'hover.emit(null)',
   },
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -81,14 +94,24 @@ import { Icon } from './shared/icon';
 export class AlbumCard {
   readonly album = input.required<Album>();
   readonly selected = input(false);
+  /** In the multi-selection: a check corner and an accent outline. */
+  readonly checked = input(false);
   readonly showTags = input(true);
   readonly select = output<void>();
   readonly open = output<void>();
   readonly info = output<void>();
   readonly hover = output<string | null>();
+  /** The ×N badge was clicked: show the album's copies. */
+  readonly copies = output<void>();
 
   protected readonly gw = inject(Gateway);
   protected readonly loaded = signal(false);
+  /** Display names per role from the album's links (primary names; the raw text is the fallback). */
+  protected readonly names = computed(() => {
+    const by: Partial<Record<EntityKind, string>> = {};
+    for (const l of this.album().links ?? []) by[l.role] = by[l.role] ? `${by[l.role]}, ${l.name}` : l.name;
+    return by;
+  });
   /** Placeholder colour while the cover loads, stable per album. */
   protected readonly tint = computed(() => {
     let h = 0;

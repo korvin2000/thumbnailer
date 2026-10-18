@@ -13,7 +13,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,12 +25,16 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import thumbnailer.album.AlbumRepository.Save;
+import thumbnailer.album.AlbumRepository.Stamp;
 import thumbnailer.album.AlbumRepository.Tombstone;
+import thumbnailer.catalog.Catalog;
 import thumbnailer.cover.CoverSelector;
 import thumbnailer.image.Limiter;
 import thumbnailer.image.Render;
 import thumbnailer.image.Thumbnailer;
 import thumbnailer.image.Thumbnailer.Thumb;
+import thumbnailer.index.Gate;
 import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.AlbumContainer;
@@ -45,12 +53,16 @@ import thumbnailer.source.Kind;
  * producer-consumer pipeline: files are read one by one in turns on their disk ({@link Disks.Lane}, FIFO; at once on
  * an SSD) into a queue of {@code 2 × threads} read files, from which up to {@code threads} decode, resize and encode in
  * parallel while the disk reads the next ones. An archive that reads only front to back serves its entry thumbnails
- * from one {@link Gallery} pass.
+ * from one {@link Gallery} pass. Every save resolves the album's text into catalog links, stored with the album.
+ * An operation working on an album's files makes it busy ({@link #quiesce}): nothing renders from it until released.
  */
 @Service
 public class AlbumService {
 
     private static final Logger log = LoggerFactory.getLogger(AlbumService.class);
+    /** The message of the {@code IllegalStateException} a read of a busy album throws (HTTP 503). */
+    public static final String BUSY = "busy";
+    private static final long QUIET = TimeUnit.SECONDS.toNanos(5); // the longest quiesce waits for reads in flight
 
     private final AlbumRepository repo;
     private final BlobStore blobs;
@@ -60,6 +72,10 @@ public class AlbumService {
     private final SettingsStore settings;
     private final ApplicationEventPublisher events;
     private final Disks disks;
+    private final Catalog catalog;
+    private final Gate gate;
+    private final Set<String> busy = ConcurrentHashMap.newKeySet();
+    private final Map<String, Integer> readers = new ConcurrentHashMap<>(); // reads in flight per album; notified when busy
     private final Limiter coverSlots = new Limiter(), thumbSlots = new Limiter(), coverQueue = new Limiter(), thumbQueue = new Limiter();
     private final Object[] locks = new Object[64];
     /** The last albums whose entry thumbnails were asked for; gallery null = entries read one by one. */
@@ -80,7 +96,8 @@ public class AlbumService {
     }
 
     public AlbumService(AlbumRepository repo, BlobStore blobs, Containers containers, Thumbnailer thumbnailer,
-                        CoverSelector covers, SettingsStore settings, ApplicationEventPublisher events, Disks disks) {
+                        CoverSelector covers, SettingsStore settings, ApplicationEventPublisher events, Disks disks,
+                        Catalog catalog, Gate gate) {
         this.repo = repo;
         this.blobs = blobs;
         this.containers = containers;
@@ -89,6 +106,8 @@ public class AlbumService {
         this.settings = settings;
         this.events = events;
         this.disks = disks;
+        this.catalog = catalog;
+        this.gate = gate;
         Arrays.setAll(locks, i -> new Object());
     }
 
@@ -96,31 +115,64 @@ public class AlbumService {
      * Stores an indexed album. {@code base} is the stored album the scan matched (null = new); it is kept if it still
      * sits at the indexed path or, for a move, at its old path that no longer exists. Otherwise the album takes over
      * the tombstone of a removed album with the same content, if any (so a copy of a deleted album inherits its
-     * edits), else it is new. Id, rating, edits and a pinned cover come from that prior state, revision + 1. The save
-     * consumes the tombstone, so a failed save keeps it; one whose id is live again (a copy took it) is ignored. The
-     * cover is tagged with the epoch its bytes were rendered with, whatever the settings say by now.
+     * edits), else it is new. Id, rating, edits, hidden, seq and a pinned cover come from that prior state, revision + 1.
+     * The save consumes the tombstone, so a failed save keeps it; one whose id is live again (a copy took it) is ignored.
+     * The cover is tagged with the epoch its bytes were rendered with, whatever the settings say by now.
      */
     public Album commit(Album base, Album indexed, List<Entry> entries, Thumb cover) {
         Album album;
         synchronized (lock(base != null ? base.id() : indexed.internal().contentId())) {
-            var prior = Optional.ofNullable(base).flatMap(b -> repo.find(b.id())).filter(a -> a.path().equals(indexed.path())
-                            || a.path().equals(base.path()) && Files.notExists(settings.get().locate(a.path())))
-                    .map(Tombstone::of).or(() -> repo.recall(indexed.internal().contentId())
-                            .filter(t -> repo.find(t.id()).isEmpty()));
-            var pin = prior.filter(Tombstone::coverPinned).flatMap(p -> entry(entries, p.cover()));
-            // The indexer chose with the pin it saw when it started; choose again if that is no longer the pin.
-            var chosen = pin.isPresent() || indexed.coverPinned()
-                    ? pin.or(() -> covers.candidates(entries, null).findFirst()) : Optional.<Entry>empty();
-            boolean rendered = chosen.map(e -> e.name().equals(indexed.cover())).orElse(true);
-            album = indexed.with(prior.map(Tombstone::id).orElseGet(() -> UUID.randomUUID().toString()),
-                            prior.map(Tombstone::revision).orElse(0L) + 1, prior.map(Tombstone::rating).orElse(0))
-                    .withEdits(prior.map(Tombstone::edited).orElse(AlbumMeta.EMPTY))
-                    .withCover(rendered ? indexed.cover() : chosen.get().name(), pin.isPresent(),
-                            rendered ? indexed.coverPortrait() : portrait(chosen.get()));
-            repo.save(album, entries);
-            if (rendered && cover != null) blobs.put(album.id(), value(album, cover));
+            var stored = Optional.ofNullable(base).flatMap(b -> repo.find(b.id())).filter(a -> a.path().equals(indexed.path())
+                    || a.path().equals(base.path()) && Files.notExists(settings.get().locate(a.path())));
+            var prior = stored.map(Tombstone::of).or(() -> repo.recall(indexed.internal().contentId())
+                    .filter(t -> repo.find(t.id()).isEmpty()));
+            album = store(prior.orElseGet(() -> new Tombstone(UUID.randomUUID().toString(), 0, 0, null, false, AlbumMeta.EMPTY, 0, false)),
+                    stored.filter(a -> !a.hidden()).isPresent(), indexed, entries, cover, Map.of());
         }
         return changed(album);
+    }
+
+    /**
+     * Stores an album an operation re-indexed: the operation asserts its identity, so the album stored under
+     * {@code prior}'s id now (re-read under the lock: an edit made while indexing survives, its revision is not reused)
+     * is adopted whatever the paths say, {@code prior} only if that row is gone. Entries it renamed ({@code nameMap}:
+     * old → new) keep their pinned cover and photo marks.
+     */
+    public Album commit(Tombstone prior, Album indexed, List<Entry> entries, Thumb cover, Map<String, String> nameMap) {
+        Album album;
+        synchronized (lock(prior.id())) {
+            var cur = repo.find(prior.id());
+            album = store(cur.map(Tombstone::of).orElse(prior), cur.filter(a -> !a.hidden()).isPresent(), indexed, entries,
+                    cover, nameMap);
+        }
+        return changed(album);
+    }
+
+    /** The commit both paths share; {@code visibleBefore}: the album was live and not hidden (never a revived one). */
+    private Album store(Tombstone prior, boolean visibleBefore, Album indexed, List<Entry> entries, Thumb cover,
+                        Map<String, String> nameMap) {
+        var pin = Optional.of(prior).filter(Tombstone::coverPinned)
+                .flatMap(p -> entry(entries, p.cover() == null ? null : nameMap.getOrDefault(p.cover(), p.cover())));
+        // The indexer chose with the pin it saw when it started; choose again if that is no longer the pin.
+        var chosen = pin.isPresent() || indexed.coverPinned()
+                ? pin.or(() -> covers.candidates(entries, null).findFirst()) : Optional.<Entry>empty();
+        boolean rendered = chosen.map(e -> e.name().equals(indexed.cover())).orElse(true);
+        var album = save(indexed.adopt(prior).withCover(rendered ? indexed.cover() : chosen.get().name(), pin.isPresent(),
+                rendered ? indexed.coverPortrait() : portrait(chosen.get())), entries, visibleBefore, nameMap);
+        if (rendered && cover != null) blobs.put(album.id(), value(album, cover));
+        return album;
+    }
+
+    /**
+     * Resolves the album's text into catalog links and saves both under the catalog read lock (counts suspended while a
+     * scan holds the gate: it recounts at its end, after this lock); returns the album as stored (seq, links, copies).
+     * Photo marks follow {@code nameMap} (old → new entry name) in the same transaction.
+     */
+    private Album save(Album album, List<Entry> entries, boolean visibleBefore, Map<String, String> nameMap) {
+        var in = album.internal();
+        catalog.resolving(in.edited().over(in.extracted()).effective(), in.seq(), r -> repo.save(album, entries, r,
+                new Save(visibleBefore, !album.hidden(), gate.current() == Gate.Activity.SCAN, nameMap)));
+        return repo.find(album.id()).orElseThrow();
     }
 
     /** Edits keep the files, so an unchanged cover keeps its tag; a new one is rendered on the next request. */
@@ -130,22 +182,112 @@ public class AlbumService {
         Album album;
         synchronized (lock(id)) {
             var stored = repo.find(id).orElseThrow(() -> new NoSuchElementException("No album " + id));
-            album = stored.withEdits(patch.meta().over(stored.internal().edited()))
-                    .with(id, stored.revision() + 1, patch.rating() != null ? patch.rating() : stored.rating());
+            album = stored.withEdits(patch.edit(stored.internal().edited(), stored.tags()))
+                    .with(id, stored.revision() + 1, patch.rating() != null ? patch.rating() : stored.rating())
+                    .withHidden(patch.hidden() != null ? patch.hidden() : stored.hidden());
             if (patch.cover() != null) {
                 var entries = repo.entries(id);
                 var cover = (patch.cover().isEmpty() ? covers.candidates(entries, null) : entry(entries, patch.cover()).stream())
                         .findFirst().orElseThrow(() -> new IllegalArgumentException("No entry " + patch.cover()));
                 album = album.withCover(cover.name(), !patch.cover().isEmpty(), portrait(cover));
             }
-            repo.save(album, null);
+            album = save(album, null, !stored.hidden(), Map.of());
         }
         return changed(album);
     }
 
+    /** A moved album keeps everything but its path and root; the move is a save, so it bumps the revision. */
+    public Album relocate(String id, String path, String root) {
+        Album album;
+        synchronized (lock(id)) {
+            repo.relocate(id, path, root);
+            album = repo.find(id).orElseThrow(() -> new NoSuchElementException("No album " + id));
+        }
+        return changed(album);
+    }
+
+    /**
+     * A renamed or moved folder: the albums at or below it follow, each under its own lock (a concurrent edit re-saves
+     * its whole row); returns how many. Paths move only under the gate, so reading them first is safe.
+     */
+    public int rebase(String oldDir, String newDir, String newRoot) {
+        var moved = repo.byRoot(oldDir);
+        moved.forEach(a -> relocate(a.id(), newDir + a.path().substring(oldDir.length()), a.root().equals(oldDir) ? newRoot : a.root()));
+        return moved.size();
+    }
+
+    /** Removes every album at or below {@code dir} (each leaves its tombstone). */
+    public void removeBelow(String dir) { repo.stamps(dir).values().forEach(s -> remove(s.id())); }
+
+    /**
+     * Marks albums busy while an operation works on their files: their gallery passes close and nothing reads them
+     * ({@code IllegalStateException("busy")}, HTTP 503) until {@link #release}d. Then waits until the reads that began
+     * before the mark (requests, gallery passes) have left and closed their files; after 5 s it logs and proceeds.
+     */
+    public void quiesce(Collection<String> ids) {
+        ids.forEach(id -> readers.compute(id, (k, n) -> { // under the key's lock, where a read counts itself
+            busy.add(k);
+            return n;
+        }));
+        synchronized (galleries) {
+            ids.forEach(id -> {
+                var pass = galleries.remove(id);
+                if (pass != null) pass.close();
+            });
+        }
+        long end = System.nanoTime() + QUIET;
+        synchronized (readers) {
+            while (ids.stream().anyMatch(readers::containsKey)) {
+                long left = end - System.nanoTime();
+                if (left <= 0) {
+                    log.warn("Albums {} are still being read after 5 s; the operation goes on", ids.stream().filter(readers::containsKey).toList());
+                    return;
+                }
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(readers, left);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    /** {@link #quiesce} for every album at or below {@code dir}; returns their ids, for the release. */
+    public List<String> quiesceBelow(String dir) {
+        var ids = repo.stamps(dir).values().stream().map(Stamp::id).toList();
+        quiesce(ids);
+        return ids;
+    }
+
+    public void release(Collection<String> ids) { busy.removeAll(ids); }
+
+    public boolean busy(String id) { return busy.contains(id); }
+
+    /** A read of an album's files, counted until closed (closing it again is harmless); {@link #quiesce} waits for it. */
+    public interface Reading extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    /** Starts a read of the album's files; refused ({@code IllegalStateException("busy")}) while the album is busy. */
+    public Reading read(String id) {
+        readers.compute(id, (k, n) -> { // checked and counted under the lock quiesce marks the key in: refused or waited for
+            idle(k);
+            return n == null ? 1 : n + 1;
+        });
+        var open = new AtomicBoolean(true);
+        return () -> { if (open.getAndSet(false)) leave(id); };
+    }
+
+    private void leave(String id) {
+        if (readers.computeIfPresent(id, (k, n) -> n > 1 ? n - 1 : null) == null && busy.contains(id))
+            synchronized (readers) { readers.notifyAll(); }
+    }
+
     public void remove(String id) {
         synchronized (lock(id)) {
-            repo.delete(id);
+            catalog.reading(() -> repo.delete(id)); // its count deltas must not interleave with a list change (write lock)
             blobs.remove(id);
         }
         events.publishEvent(new AlbumEvent.Removed(id));
@@ -167,11 +309,13 @@ public class AlbumService {
 
     /** The stored cover of this album state, else a fresh render, stored for the next request. */
     public Optional<Thumb> cover(Album album) {
-        var hit = storedCover(album);
-        if (hit.isPresent() || album.cover() == null) return hit;
-        var fresh = render(album, album.cover(), coverQueue, coverSlots, Settings::covers);
-        fresh.ifPresent(t -> blobs.put(album.id(), value(album, t)));
-        return fresh;
+        try (var _ = read(album.id())) {
+            var hit = storedCover(album);
+            if (hit.isPresent() || album.cover() == null) return hit;
+            var fresh = render(album, album.cover(), coverQueue, coverSlots, Settings::covers);
+            fresh.ifPresent(t -> blobs.put(album.id(), value(album, t)));
+            return fresh;
+        }
     }
 
     /**
@@ -203,20 +347,24 @@ public class AlbumService {
      * revision and render epoch.
      */
     public Optional<Thumb> thumb(Album album, Entry entry) {
-        try {
-            var gallery = gallery(album);
-            var thumb = gallery == null ? null : gallery.take(entry.name());
-            if (thumb != null) return Optional.of(thumb);
-        } catch (IOException | RuntimeException e) {
-            log.warn("Cannot render {} of {}: {}", entry.name(), album.path(), e.toString());
-            return Optional.empty();
+        try (var _ = read(album.id())) {
+            try {
+                var gallery = gallery(album);
+                var thumb = gallery == null ? null : gallery.take(entry.name());
+                if (thumb != null) return Optional.of(thumb);
+            } catch (IOException | RuntimeException e) {
+                log.warn("Cannot render {} of {}: {}", entry.name(), album.path(), e.toString());
+                return Optional.empty();
+            }
+            // taken before, random access, or a pass closed meanwhile (render refuses a busy album)
+            return render(album, entry.name(), thumbQueue, thumbSlots, Settings::thumbs);
         }
-        return render(album, entry.name(), thumbQueue, thumbSlots, Settings::thumbs); // taken before, or random access
     }
 
     /**
-     * The one-pass gallery of an archive that reads only front to back, started by its first thumbnail; else null.
-     * The archive is looked at outside the lock; the first of racing requests publishes its gallery.
+     * The one-pass gallery of an archive that reads only front to back, started by its first thumbnail; else null
+     * (also for a busy album: no new pass). The archive is looked at outside the lock; the first of racing requests
+     * publishes its gallery, which counts as a read of the album until its pass ends.
      */
     private Gallery gallery(Album album) throws IOException {
         if (album.kind() != Kind.ARCHIVE) return null;
@@ -233,13 +381,17 @@ public class AlbumService {
         }
         var fresh = !sequential ? null : new Gallery(() -> containers.open(album.kind(), path, Exclusions.NONE),
                 repo.entries(album.id()).stream().map(Entry::name).toList(), lane(s, album.path()), thumbQueue, thumbSlots,
-                s.thumbs(), thumbnailer);
-        synchronized (galleries) {
+                s.thumbs(), thumbnailer, () -> leave(album.id()));
+        synchronized (galleries) { // quiesce marks busy, then removes passes under this lock: none is published after
             var pass = galleries.get(album.id());
-            if (closing || pass != null && pass.live(key)) return closing ? null : pass.gallery();
+            if (closing || busy.contains(album.id())) return null;
+            if (pass != null && pass.live(key)) return pass.gallery();
             if (pass != null) pass.close();
             galleries.put(album.id(), new Pass(key, fresh));
-            if (fresh != null) fresh.start();
+            if (fresh != null) {
+                readers.merge(album.id(), 1, Integer::sum);
+                fresh.start();
+            }
             return fresh;
         }
     }
@@ -259,6 +411,7 @@ public class AlbumService {
     }
 
     private Optional<Thumb> render(Album album, String entry, Limiter queue, Limiter slots, Function<Settings, Render> spec) {
+        idle(album.id());
         var s = settings.get();
         try (var container = containers.open(album.kind(), s.locate(album.path()), Exclusions.NONE)) {
             return Optional.of(render(container, entry, queue, slots, spec.apply(s), lane(s, album.path()).enter()));
@@ -269,7 +422,7 @@ public class AlbumService {
     }
 
     /** The UI's lane on the disk of the root holding {@code path}. */
-    private Disks.Lane lane(Settings s, String path) {
+    public Disks.Lane lane(Settings s, String path) {
         var disk = s.root(path).map(r -> disks.disk(s.locate(r.path()), r.storage()))
                 .orElseGet(() -> disks.disk(s.locate(path).getRoot(), null));
         return disks.lane(disk, Disks.Use.VIEW);
@@ -313,6 +466,11 @@ public class AlbumService {
                 .putLong(tag(album, cover.epoch()));
         if (!legacy) v.putInt(cover.bytes().length);
         return v.put(cover.bytes()).array();
+    }
+
+    /** The one busy check every read path makes (requests on entry, renders, a new gallery pass). */
+    private void idle(String id) {
+        if (busy.contains(id)) throw new IllegalStateException(BUSY);
     }
 
     private static Optional<Entry> entry(List<Entry> entries, String name) {

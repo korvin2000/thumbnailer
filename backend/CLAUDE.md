@@ -52,8 +52,9 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 ## Invariants (don't break)
 
 - `AlbumService` is the only writer (`commit`, `patch`, `remove`, `retainRoots`). Writes happen under
-  `synchronized (lock(id))`; events are published **after** the lock; `commit` re-reads the stored album under the
-  lock so a scan never overwrites a concurrent edit.
+  `synchronized (lock(id))`; events are published **after** the lock; both `commit`s re-read the stored album under
+  the lock so a scan or an operation never overwrites a concurrent edit; a failed WS request logs its `type`, never
+  the payload (passwords).
 - Every save bumps `revision`. Only covers are stored: key = album id, value = 8-byte tag (wyhash seeded by the
   render epoch, of cover name + signature) + `[len 4][bytes]`; for `Render.LEGACY_EPOCH` (WebP/75/512) the older
   `[tag 8][webp]` with the RIFF size as length, so old stores stay valid. The epoch travels with the bytes (`Thumb`):
@@ -74,6 +75,29 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   that `AlbumService.commit` recalls (a read-only peek) for the next new album with that content (id, revision + 1,
   rating, edits, pin); `save` deletes the tombstones of the saved id in its own transaction, so adoption is atomic
   with the save, and `commit` ignores a tombstone whose id is live again.
+- Catalog ([catalog_plan.md](../catalog_plan.md) §2): the album's text fields are the truth, `album_link` rows are
+  derived from them by `Catalog.resolving` inside every save, which runs `repo.save(album, entries, resolution, Save)`
+  under the catalog read lock (album, links, count deltas, renamed photo marks and the alias-extended `search` in one
+  transaction); `Album.links` is display data. Lock
+  order stripe → catalog read/write lock, never back: catalog writes (merge, rename, alias, delete, list membership, backfill) never
+  take an album stripe; what must change album text goes through `patch`/`unlink` as a separate step. Catalog
+  changes broadcast `catalogChanged` and never bump `revision`. `hidden` is filtered in `Where.of`, `folders`,
+  `rootStats`, `stats` — **never in `UNDER`** (`stamps`, `byRoot`, `reroot` must see hidden albums). `album.seq`
+  is the key of every new table, is never in the `MERGE` column list (identity on insert; a tombstone's value set
+  by one `UPDATE` on adoption) and stays with the tombstone (`removed` PK `(content_id, id)`, newest wins).
+  `entity.albums` changes only in `JdbcAlbumRepository.save` (its own deltas over every role from the links it
+  replaces and `Save.visibleBefore/After`; skipped under a scan), `setListLink` (a row really changed, album visible),
+  `delete` (run under the catalog read lock, `Catalog.reading`, inside the stripe) and `recount()`.
+- One admission gate (`index/Gate`): SCAN, OP, RESTART (never released), SETTINGS (root/path-map saves). Scans,
+  operations, library switch/optimize and such saves take it by compare-and-set; two `running()` checks are not
+  mutual exclusion. An operation snapshots `Settings` and the `.cry` key at admission.
+- `ops/FileOps` is the only code that writes to the library; it updates the index only through `AlbumService`
+  (`relocate`, `rebase`, `remove`, `patch(hidden)`) and `index/Reindexer` (`commit(prior, …, nameMap)`: an
+  operation asserts the identity; the scan keeps the path-gone heuristic of `commit(base, …)`). It reads through
+  `Containers.openRaw` (unwrapped: ciphertext as is, `Exclusions.NONE`) — the one exception to "containers always
+  come wrapped by `Cry`" besides `compareCopies`. A busy album (`AlbumService.quiesce`) answers 503 on `/img`: every
+  `/img` read of an album's files is an `AlbumService.read` (counted; refused once busy) and `quiesce` waits ≤ 5 s for those
+  in flight, gallery passes included.
 - The `root` column is informational: scans, pruning, folders and the root filter select by path prefix
   (`path = dir OR path LIKE 'dir/%' ESCAPE '!'`, index `album_path`); `retainRoots` (on `setSettings` and at every scan
   start) re-roots the albums of a removed root that lie under a configured one and removes the rest.
@@ -83,8 +107,8 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   `Libraries`/`LibraryLocator` use `data-dir`, the home); never set `library-dir` in `application.yml` (the locator
   would take it as pinned). Switch and optimize end in `ThumbnailerApplication.restart()` (close context, run again),
   so everything must close cleanly on context close and nothing may assume one context per JVM; library operations
-  are refused while a scan runs, and an accepted switch/optimize calls `ScanService.freeze()` (no scan starts, no
-  second operation) until the restart, which falls back to the previous library once if the new one fails to start.
+  are refused while the gate is held, and an accepted switch/optimize keeps it as RESTART (a switch hands its SETTINGS
+  hold over by `Hold.restart()`, optimize enters by `ScanService.freeze()`: no scan starts, no second operation) until the restart, which falls back to the previous library once if the new one fails to start.
   `thumbnailer.library-pinned` (set by the locator) is the pinned flag. H2 compacts fully only at close (`compact()` → `SHUTDOWN COMPACT`, offline), TuplDB
   online (stepped `compactFile`).
 - `JdbcAlbumRepository.save` is two H2 `MERGE ... KEY` upserts (album, packed `entries`) plus the tombstone delete

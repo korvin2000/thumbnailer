@@ -20,7 +20,7 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 
 | ID | requirement | status | evidence |
 |---|---|---|---|
-| S1 | Scan roots and exclusions (`*` globs, global and per root) are configured in the UI and persisted | ✅ | `settings/`, `ui/settings/folders-page.ts`; Save disabled while a scan runs and roots/path map changed (`SettingsDialog.blocked`); the server refuses such a save too (`Stop the scan before changing folders`, `AlbumSocket`) |
+| S1 | Scan roots and exclusions (`*` globs, global and per root) are configured in the UI and persisted | ✅ | `settings/`, `ui/settings/folders-page.ts`; Save disabled while a scan runs and roots/path map changed (`SettingsDialog.blocked`); the server refuses such a save too with the gate's blocker (`A scan is running`, `index/Gate`, `AlbumSocket`) |
 | S2 | Incremental: unchanged albums (same path + signature) are skipped; changed ones re-indexed; unchanged photos inside a changed album are not re-probed, an unchanged cover is not re-rendered | ✅ | `index/Reconciler`, `AlbumIndexer` |
 | S3 | Moves/renames detected by content id (image names + sizes); id, rating and edits kept | ✅ | `ScanTest.reconciles…`, `…renamed…` |
 | S4 | Removal only after a complete, uncancelled walk of a reachable scope (a root, or a folder below one), and only of albums at or below it; unplugged roots untouched. A removed album leaves a tombstone: one that comes back with the same content (moved out of a rescanned folder, restored from a backup, or a copy of a deleted album) keeps id, rating, edits and pinned cover; the tombstone is consumed by the save that adopts it, so a failed save keeps it | ✅ | `ScanTest.reconciles…`, `…scanningAFolderPrunesOnlyBelowIt`, `…aRemovedAlbumThatComesBackKeepsItsIdentity`, `JdbcAlbumRepositoryTest.deleteLeavesATombstone…` |
@@ -87,6 +87,31 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | U15 | Explorer-like directory tree (Library › roots › folders with album counts, lazy, keyboard); selecting a folder shows only albums at or below it; filter box over the loaded tree, collapse all, expand selected (≤ 300 folders) | ✅ | `ui/folder-tree.ts`, `AlbumStore.goTo` |
 | U16 | Location bar above the grid: ↑, crumbs with sub-folder popovers, editable path (must lie inside an indexed folder), album count | ✅ | `ui/location-bar.ts` |
 | U17 | Rescan of only the shown folder (Library = all roots); Cancel while running; empty-folder state offers it | ✅ | `ui/location-bar.ts`, `app.html` |
+
+## K — Catalog ([catalog_plan.md](catalog_plan.md); status = phase 0 landed: data model, wire, mock; logic per track)
+
+| ID | requirement | status | evidence |
+|---|---|---|---|
+| K1 | Entities of six kinds (model, studio/agency, photographer, genre, tag, favorites list) in one table with aliases; album text fields resolve into links on every save; display names from links | ◐ | `catalog/Catalog.resolve` (B1), `schema.sql` tables, `JdbcCatalogRepositoryTest` |
+| K2 | Auto-created entities flagged until confirmed; rename keeps the old name as an alias; merge unions links; delete unlinks | ◐ | `Catalog.save/confirm/delete` (phase 0), `merge` (B1) |
+| K3 | Cards: model (profile, studios table with credited alias and roles, genres, own hashtags), studio (roster, photographers, genres), photographer, genre, list; derived facts read-only, curated facts editable | ○ | F3, `ui/entity-card.ts` |
+| K4 | Sidebar grouped by Folders / Studios / Models / Photographers / Genres / Favorites with counts, Unassigned rows, batch confirm/merge/delete | ○ | F3, `ui/entity-tree.ts` |
+| K5 | Filters by entity id, by missing role, by genre; `model:`/`studio:`/`by:`/`#tag` resolve through aliases; facets from links | ◐ | `JdbcAlbumRepository.Where` (`entities`, `missing` phase 0; aliases B1) |
+| K6 | Favorites lists for albums and photos; photo ratings 1–10 by entry name | ◐ | `CatalogRepository.mark` (phase 0), viewer UI (F2) |
+| K7 | Hidden = safe-delete: index only, excluded from default views and counts, visible in the Hidden view, reconciliation unaffected | ◐ | `JdbcAlbumRepositoryTest` hidden rules (phase 0), Views strip (F3) |
+| K8 | Copies by content stamp: `copies` per page, copy list with Compare, Duplicates view | ◐ | `copies` (phase 0), `compareCopies` (B1), UI (F3) |
+| K9 | Multi-selection (≤ 500), context menus on albums, folders, entities, photos; confirm dialogs for every operation | ◐ | `core/selection.spec.ts` (phase 0), F1/F4 |
+
+## O — Operations ([catalog_plan.md](catalog_plan.md) §4)
+
+| ID | requirement | status | evidence |
+|---|---|---|---|
+| O1 | One admission gate for scans, operations, restart and root settings | ✅ | `index/Gate`, `GateTest` |
+| O2 | Move, copy, delete, pack/unpack/repack (zip, 7z, auto), encrypt/decrypt `.cry`, copy photos, folder rename/move/copy/delete: manifested, journaled, verified byte for byte before the source is deleted, recoverable after a crash | ○ | B2/B3: `ops/FileOps` (phase 0 refuses with "not implemented") |
+| O3 | Identity survives every operation: `relocate`/`rebase` for path changes, re-index with asserted identity (`commit(prior, …, nameMap)`) for container changes; pins and photo marks follow renamed entries | ◐ | `index/Reindexer`, `AlbumService.commit(prior…)` (phase 0) |
+| O4 | Bulk metadata assignment (model, studio, photographer, genre, tags add/remove, rating, shot date) to a selection or a tree node's albums | ◐ | `bulkUpdate` (phase 0), menus (F4) |
+| O5 | Viewer: sort (name, size, date, dimensions, rating, random), min-size filter, five scale modes, full screen with slideshow, photo favorites and ratings, copy to 1 of 10 targets with skip-identical and auto-rename, metadata view, bio text | ○ | F2, B4 |
+| O6 | Plugin contracts: `Extraction` context for extractors and cover strategies, beans + `ServiceLoader`, later a `:spi` module | ○ | B4, phase 3 |
 
 ## N — Platform and non-functional
 

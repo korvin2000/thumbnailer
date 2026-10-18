@@ -13,22 +13,32 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 import thumbnailer.image.Render;
+import thumbnailer.ops.Op;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
 import thumbnailer.source.Disks.Storage;
 
 /**
  * User settings: scan roots with their own exclusions, global exclusions, scan on start, where moved folders are found
- * now ({@code pathMap}), how covers and entry thumbnails render, and the key of encrypted {@code .cry} images
- * ({@code cryKey}, set through {@code cryPassword}; {@link SettingsStore} keeps it in memory only). Absent fields (an older settings.json) are defaults.
+ * now ({@code pathMap}), how covers and entry thumbnails render, where photos are copied to ({@code copyTargets}, at
+ * most 10), operation defaults ({@code ops}) and the key of encrypted {@code .cry} images ({@code cryKey}, set through
+ * {@code cryPassword}; {@link SettingsStore} keeps it in memory only). Absent fields (an older settings.json) are defaults.
  */
 public record Settings(List<Root> roots, List<String> exclusions, boolean scanOnStart, List<Mapping> pathMap,
-                       Render covers, Render thumbs, @JsonInclude(NON_NULL) String cryKey, @JsonInclude(NON_NULL) String cryPassword) {
+                       Render covers, Render thumbs, List<String> copyTargets, Ops ops,
+                       @JsonInclude(NON_NULL) String cryKey, @JsonInclude(NON_NULL) String cryPassword) {
 
     public static final Settings DEFAULT = new Settings(null, null, true, null, null, null);
 
     public Settings(List<Root> roots, List<String> exclusions, boolean scanOnStart, List<Mapping> pathMap, Render covers, Render thumbs) {
-        this(roots, exclusions, scanOnStart, pathMap, covers, thumbs, null, null);
+        this(roots, exclusions, scanOnStart, pathMap, covers, thumbs, null, null, null, null);
+    }
+
+    /** Defaults of file operations; {@code packFormat}: what pack writes unless the operation says otherwise. */
+    public record Ops(Op.Format packFormat) {
+        public static final Ops DEFAULT = new Ops(null);
+
+        public Ops { packFormat = Objects.requireNonNullElse(packFormat, Op.Format.AUTO); }
     }
 
     /** {@code storage}: how the root's disk is read, detected ({@code AUTO}, also when absent) or forced. */
@@ -63,6 +73,10 @@ public record Settings(List<Root> roots, List<String> exclusions, boolean scanOn
                 : pathMap.stream().filter(m -> m != null && m.from() != null && m.to() != null).toList();
         covers = Objects.requireNonNullElse(covers, Render.COVERS);
         thumbs = Objects.requireNonNullElse(thumbs, Render.THUMBS);
+        copyTargets = copyTargets == null ? List.of() : copyTargets.stream().filter(t -> t != null && !t.isBlank())
+                .map(t -> Containers.normalize(Path.of(t.strip()))).distinct().toList();
+        if (copyTargets.size() > 10) throw new IllegalArgumentException("At most 10 copy targets");
+        ops = Objects.requireNonNullElse(ops, Ops.DEFAULT);
         // the AES key of xanderView's .cry images, derived here from a given password (which is never kept), or the key's
         // fingerprint a client echoes back (SettingsStore resolves it); null = none
         if (cryPassword != null && !cryPassword.trim().isEmpty()) cryKey = HexFormat.of().formatHex(Cry.key(cryPassword));
@@ -76,7 +90,7 @@ public record Settings(List<Root> roots, List<String> exclusions, boolean scanOn
 
     /** The same settings with this key ({@code null} = none). */
     public Settings withKey(String cryKey) {
-        return new Settings(roots, exclusions, scanOnStart, pathMap, covers, thumbs, cryKey, null);
+        return new Settings(roots, exclusions, scanOnStart, pathMap, covers, thumbs, copyTargets, ops, cryKey, null);
     }
 
     /**

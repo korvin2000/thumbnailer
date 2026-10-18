@@ -57,16 +57,92 @@ CREATE TABLE IF NOT EXISTS entries (
     data     VARBINARY   NOT NULL
 );
 
--- Tombstones (AlbumRepository.delete / recall), by content: an album that comes back after a removal (moved out of a
--- rescanned folder, restored from a backup, a copy) takes back its id, rating, edits and pinned cover.
+-- Tombstones (AlbumRepository.delete / recall), one per (content, album id): an album that comes back after a removal
+-- (moved out of a rescanned folder, restored from a backup, a copy) takes back its id, rating, edits, pinned cover,
+-- hidden flag and seq (so its links and photo marks); the newest wins. Older libraries keyed it by content_id alone:
+-- JdbcAlbumRepository widens that key on start.
 CREATE TABLE IF NOT EXISTS removed (
-    content_id   VARCHAR(64)   PRIMARY KEY,
+    content_id   VARCHAR(64)   NOT NULL,
     id           VARCHAR(36)   NOT NULL,
     revision     BIGINT        NOT NULL,
     rating       INT           NOT NULL,
     cover        VARCHAR(4096),
     cover_pinned BOOLEAN       NOT NULL,
     edited_json  CLOB          NOT NULL,
-    removed_at   BIGINT        NOT NULL
+    removed_at   BIGINT        NOT NULL,
+    PRIMARY KEY (content_id, id)
 );
 CREATE INDEX IF NOT EXISTS removed_id ON removed (id); -- every save consumes the tombstones of its id
+ALTER TABLE removed ADD COLUMN IF NOT EXISTS seq INT DEFAULT 0 NOT NULL;
+ALTER TABLE removed ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE NOT NULL;
+
+-- Catalog (catalog_plan.md §2). Albums get a compact surrogate key that every catalog table references (assigned by the
+-- identity on insert, never in the MERGE column list, adopted from a tombstone by one UPDATE), the safe-delete flag
+-- (filtered in queries, no index: it leaves few rows) and the entry name of their bio text.
+ALTER TABLE album ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE NOT NULL;
+ALTER TABLE album ADD COLUMN IF NOT EXISTS bio VARCHAR(4096);
+ALTER TABLE album ADD COLUMN IF NOT EXISTS seq INT AUTO_INCREMENT;
+CREATE UNIQUE INDEX IF NOT EXISTS album_seq ON album (seq);
+
+-- Models, studios, photographers, genres, tags and favorites lists; kind = EntityKind code (1 model · 2 studio ·
+-- 3 photographer · 4 genre · 5 tag · 6 list); albums = visible linked albums, maintained by saves and Catalog.recount.
+CREATE TABLE IF NOT EXISTS entity (
+    id      INT          AUTO_INCREMENT PRIMARY KEY,
+    kind    TINYINT      NOT NULL,
+    name    VARCHAR(256) NOT NULL,
+    rating  TINYINT      NOT NULL,
+    auto    BOOLEAN      NOT NULL,
+    albums  INT          NOT NULL,
+    profile CLOB
+);
+ALTER TABLE entity ADD COLUMN IF NOT EXISTS sort_name VARCHAR(256) GENERATED ALWAYS AS (LOWER(name));
+CREATE INDEX IF NOT EXISTS entity_kind ON entity (kind, sort_name);
+CREATE INDEX IF NOT EXISTS entity_count ON entity (kind, albums DESC);
+
+-- Every name an entity is known by, its primary name included (Catalog.norm); unique per kind.
+CREATE TABLE IF NOT EXISTS alias (
+    kind      TINYINT      NOT NULL,
+    norm      VARCHAR(256) NOT NULL,
+    entity_id INT          NOT NULL,
+    PRIMARY KEY (kind, norm)
+);
+CREATE INDEX IF NOT EXISTS alias_entity ON alias (entity_id);
+
+-- catalog_version; KEY and VALUE are reserved words in H2 2.x
+CREATE TABLE IF NOT EXISTS meta (name VARCHAR(32) PRIMARY KEY, val VARCHAR(256) NOT NULL);
+
+-- An album credited to an entity, role = the entity's kind; roles 1-5 are derived from the album's text on every save,
+-- 6 (favorites) only from link/unlink. alias = the token in the text when it is not the primary name.
+CREATE TABLE IF NOT EXISTS album_link (
+    album_seq INT          NOT NULL,
+    role      TINYINT      NOT NULL,
+    entity_id INT          NOT NULL,
+    alias     VARCHAR(256),
+    PRIMARY KEY (album_seq, role, entity_id)
+);
+CREATE INDEX IF NOT EXISTS album_link_entity ON album_link (entity_id, album_seq);
+
+-- Curated entity-to-entity facts (subject -> object); model -> studio: alias = her name there, roles = genre names.
+CREATE TABLE IF NOT EXISTS entity_link (
+    from_id INT          NOT NULL,
+    to_id   INT          NOT NULL,
+    alias   VARCHAR(256),
+    roles   VARCHAR(256),
+    PRIMARY KEY (from_id, to_id)
+);
+CREATE INDEX IF NOT EXISTS entity_link_to ON entity_link (to_id);
+
+-- Photo marks, sparse: only photos the user rated or listed, by entry name (stable across re-index, unlike the index).
+CREATE TABLE IF NOT EXISTS photo (
+    id        INT           AUTO_INCREMENT PRIMARY KEY,
+    album_seq INT           NOT NULL,
+    name      VARCHAR(4096) NOT NULL,
+    rating    TINYINT       NOT NULL,
+    UNIQUE (album_seq, name)
+);
+CREATE TABLE IF NOT EXISTS photo_link (
+    photo_id  INT NOT NULL,
+    entity_id INT NOT NULL,
+    PRIMARY KEY (photo_id, entity_id)
+);
+CREATE INDEX IF NOT EXISTS photo_link_entity ON photo_link (entity_id, photo_id);

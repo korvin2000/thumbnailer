@@ -8,7 +8,9 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.imageio.ImageIO;
 import net.sf.sevenzipjbinding.ArchiveFormat;
@@ -37,7 +39,7 @@ class GalleryTest {
         var gallery = new Gallery(() -> {
             opens.incrementAndGet();
             return Archives.open(file);
-        }, names, lane, new Limiter(), new Limiter(), Render.THUMBS, new Thumbnailer());
+        }, names, lane, new Limiter(), new Limiter(), Render.THUMBS, new Thumbnailer(), () -> {});
 
         var lastFirst = new ArrayList<>(images.keySet()).reversed(); // all asked before the pass starts: none passed over
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -63,15 +65,18 @@ class GalleryTest {
         var file = dir.resolve("solid2.7z");
         Archives.sevenZip(file, ArchiveFormat.SEVEN_ZIP, images, true);
         var lane = new Disks(1).lane(new Disks.Disk("u", false), Disks.Use.VIEW);
+        var ended = new CountDownLatch(1);
         var gallery = new Gallery(() -> Archives.open(file), new ArrayList<>(images.keySet()), lane, new Limiter(), new Limiter(),
-                Render.THUMBS, new Thumbnailer());
+                Render.THUMBS, new Thumbnailer(), ended::countDown);
         gallery.start();
         assertThat(gallery.take("q00.jpg")).isNotNull();
         Thread.sleep(500); // the pass parks LOOKAHEAD ahead, without the disk's turn
         try (var turn = lane.enter()) {
             assertThat(turn).isNotNull();
         }
+        assertThat(ended.getCount()).as("parked, not ended").isOne();
         gallery.close();
+        assertThat(ended.await(5, TimeUnit.SECONDS)).as("closing ends the pass, its archive closed").isTrue();
         assertThat(gallery.take("q%02d.jpg".formatted(Gallery.LOOKAHEAD * 2 - 1))).as("never reached: rendered alone").isNull();
     }
 

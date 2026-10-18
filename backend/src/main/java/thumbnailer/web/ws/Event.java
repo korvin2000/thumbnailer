@@ -1,15 +1,26 @@
 package thumbnailer.web.ws;
 
+import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.Entry;
 import thumbnailer.album.Facets;
+import thumbnailer.catalog.Card;
+import thumbnailer.catalog.Entity;
+import thumbnailer.catalog.EntityKind;
+import thumbnailer.catalog.PhotoMark;
 import thumbnailer.index.ScanProgress;
+import thumbnailer.ops.OpProgress;
+import thumbnailer.ops.OpResult;
+import thumbnailer.ops.Preflight;
 import thumbnailer.settings.Settings;
 import thumbnailer.source.Disks;
 
@@ -19,7 +30,8 @@ sealed interface Event {
 
     @JsonTypeName("results") record Results(List<Album> albums, int total) implements Event {}
 
-    @JsonTypeName("albumDetails") record AlbumDetails(Album album, List<Entry> entries) implements Event {}
+    /** {@code marks}: the album's marked photos by entry name. */
+    @JsonTypeName("albumDetails") record AlbumDetails(Album album, List<Entry> entries, Map<String, PhotoMark> marks) implements Event {}
 
     @JsonTypeName("albumChanged") record AlbumChanged(Album album) implements Event {}
 
@@ -33,7 +45,8 @@ sealed interface Event {
 
     @JsonTypeName("facets") record FacetCounts(@JsonUnwrapped Facets facets) implements Event {}
 
-    @JsonTypeName("ok") record Ok() implements Event {}
+    /** {@code count}: how many albums a bulk request changed. */
+    @JsonTypeName("ok") record Ok(@JsonInclude(NON_NULL) Integer count) implements Event {}
 
     @JsonTypeName("error") record Error(String message) implements Event {}
 
@@ -60,4 +73,38 @@ sealed interface Event {
                         long coversFile, long metadataBytes, long metadataFile, long settingsBytes) {}
 
     record About(String version, String java, String os) {}
+
+    /** {@code total}: entities matching, ignoring offset and limit. */
+    @JsonTypeName("entityList") record EntityList(List<Entity> items, int total) implements Event {}
+
+    @JsonTypeName("entityCard") record EntityCard(@JsonUnwrapped Card card) implements Event {}
+
+    /** Broadcast: views showing entities of these kinds (grid, viewer, trees, facets, open cards) reload. */
+    @JsonTypeName("catalogChanged") record CatalogChanged(List<EntityKind> kinds) implements Event {}
+
+    @JsonTypeName("opAccepted") record OpAccepted(String opId) implements Event {}
+
+    @JsonTypeName("opProgress") record OpProgressEvent(@JsonUnwrapped OpProgress progress) implements Event {}
+
+    @JsonTypeName("opResult") record OpResultEvent(@JsonUnwrapped OpResult result) implements Event {}
+
+    @JsonTypeName("photoMarks") record PhotoMarks(String albumId, Map<String, PhotoMark> marks) implements Event {}
+
+    @JsonTypeName("photoList") record PhotoList(List<Photo> items, int total) implements Event {
+        record Photo(String albumId, String name, int index, int rating, AlbumRef album) {}
+
+        record AlbumRef(String id, String name, long revision) {}
+    }
+
+    @JsonTypeName("photoMeta") record PhotoMetaRows(List<Row> rows) implements Event {
+        record Row(String dir, String tag, String value) {}
+    }
+
+    @JsonTypeName("text") record Text(String name, String text) implements Event {}
+
+    @JsonTypeName("copyList") record CopyList(List<Album> albums) implements Event {}
+
+    @JsonTypeName("comparison") record Comparison(boolean identical, List<String> differing) implements Event {}
+
+    @JsonTypeName("preflight") record PreflightEvent(@JsonUnwrapped Preflight preflight) implements Event {}
 }

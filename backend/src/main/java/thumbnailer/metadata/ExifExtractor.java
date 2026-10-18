@@ -23,6 +23,6 @@ class ExifExtractor implements MetadataExtractor {
                 .map(LocalDateTime::toLocalDate).orElse(null);
         String artist = null;
         if (!entries.isEmpty()) artist = ImageProbe.exif(container.head(entries.getFirst().name(), ImageProbe.HEAD)).artist();
-        return new AlbumMeta(null, null, null, artist, null, date, null);
+        return new AlbumMeta(null, null, null, artist, null, date, null, null);
     }
 }

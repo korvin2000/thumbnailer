@@ -28,6 +28,6 @@ public class Metadata {
                 log.warn("{} failed on {}: {}", extractor.getClass().getSimpleName(), container.name(), e.toString());
             }
         }
-        return meta.orElse(new AlbumMeta(container.name(), null, null, null, null, null, null));
+        return meta.orElse(new AlbumMeta(container.name(), null, null, null, null, null, null, null));
     }
 }

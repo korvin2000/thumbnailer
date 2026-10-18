@@ -3,6 +3,7 @@ package thumbnailer.source;
 import com.dynatrace.hash4j.hashing.HashStream64;
 import com.dynatrace.hash4j.hashing.Hashing;
 import java.io.Closeable;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 
 /** An opened album (a directory or an archive): lists its files and streams their bytes. */
 public interface AlbumContainer extends Closeable {
@@ -73,6 +75,24 @@ public interface AlbumContainer extends Closeable {
     }
 
     interface HeadSink { void accept(String name, byte[] head) throws IOException; }
+
+    /**
+     * Feeds {@code sink} every named file whole, in the order that reads the container fastest. Fail-closed, unlike
+     * {@link #heads}: a file that cannot be read fails the call. Containers that read only front to back override it
+     * with one pass.
+     */
+    default void extract(Collection<String> names, EntrySink sink) throws IOException {
+        var items = items().stream().collect(Collectors.toMap(Item::name, i -> i, (a, b) -> a));
+        for (var name : names) {
+            var item = items.get(name);
+            if (item == null) throw new FileNotFoundException(name);
+            try (var in = open(name)) {
+                sink.accept(item, in);
+            }
+        }
+    }
+
+    interface EntrySink { void accept(Item item, InputStream in) throws IOException; }
 
     /**
      * Whether reading one file costs a pass over every file packed before it (a solid archive, a compressed tar): read

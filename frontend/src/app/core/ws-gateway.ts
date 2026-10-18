@@ -1,13 +1,18 @@
 import { Subject } from 'rxjs';
 import { Gateway } from './gateway';
 import {
-  Album, AlbumDetails, AlbumPatch, AlbumQuery, Facets, Filters, Folder, GatewayEvent, LibraryInfo, Listing, SearchResult,
-  Settings, SettingsInfo,
+  Album, AlbumDetails, AlbumPatch, AlbumQuery, AlbumTarget, Comparison, EntityCard, EntityKind, EntityList, EntityQuery, EntitySave, Facets, Filters,
+  Folder, GatewayEvent, LibraryInfo, Listing, MetaRow, Op, PhotoList, PhotoMarks, Preflight, SearchResult, Settings, SettingsInfo,
 } from './model';
 
 interface Pending { resolve: (m: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const EVENTS = new Set(['albumChanged', 'albumRemoved', 'scanProgress', 'catalogChanged', 'opProgress', 'opResult']);
+/** Broadcasts whose `id` is the operation's, never a request's. */
+const OP_EVENTS = new Set(['opProgress', 'opResult']);
+/** A target's query goes out as an `AlbumQuery` under the server's 500-album cap. */
+const target = (t: AlbumTarget) => ({ albumIds: t.albumIds, query: t.query && { ...t.query, sort: 'NAME', offset: 0, limit: 500 } });
 
 /** JSON-over-WebSocket client with id correlation and exponential reconnect; images come over plain HTTP. */
 export class WsGateway extends Gateway {
@@ -41,6 +46,26 @@ export class WsGateway extends Gateway {
   switchLibrary = (dir: string) => this.request<void>('switchLibrary', { dir });
   forgetLibrary = (dir: string) => this.request<LibraryInfo>('forgetLibrary', { dir });
   optimize = () => this.request<void>('optimize', {});
+
+  entities = (kind: EntityKind, o: EntityQuery = {}) => this.request<EntityList>('entities', { kind, text: o.text, under: o.under, sort: o.byCount ? 'COUNT' : 'NAME', offset: o.offset ?? 0, limit: o.limit ?? 100 });
+  entity = (entityId: number) => this.request<EntityCard>('entity', { entityId });
+  saveEntity = (entity: EntitySave) => this.request<EntityCard>('saveEntity', { entity });
+  deleteEntities = (ids: number[]) => this.request<void>('deleteEntities', { ids });
+  mergeEntities = (from: number[], into: number) => this.request<EntityCard>('mergeEntities', { from, into });
+  confirmEntities = (ids: number[]) => this.request<void>('confirmEntities', { ids });
+  creditAs = (modelId: number, studioId: number, alias: string, roles?: string) => this.request<EntityCard>('creditAs', { modelId, studioId, alias, roles });
+  bulkUpdate = (t: AlbumTarget, patch: AlbumPatch) => this.request<{ count: number }>('bulkUpdate', { ...target(t), patch }).then(r => r.count);
+  link = (t: AlbumTarget, entityId: number) => this.request<{ count: number }>('link', { ...target(t), entityId }).then(r => r.count);
+  unlink = (t: AlbumTarget, entityId: number) => this.request<{ count: number }>('unlink', { ...target(t), entityId }).then(r => r.count);
+  copies = (albumId: string) => this.request<{ albums: Album[] }>('copies', { albumId }).then(r => r.albums);
+  compareCopies = (a: string, b: string) => this.request<Comparison>('compareCopies', { a, b });
+  markPhoto = (albumId: string, name: string, mark: { rating?: number; lists?: number[] }) => this.request<{ marks: PhotoMarks }>('markPhoto', { albumId, name, ...mark }).then(r => r.marks);
+  photos = (listId: number, offset: number, limit: number) => this.request<PhotoList>('photos', { listId, offset, limit });
+  photoMeta = (albumId: string, index: number) => this.request<{ rows: MetaRow[] }>('photoMeta', { albumId, index }).then(r => r.rows);
+  albumText = (albumId: string, name: string) => this.request<{ text: string }>('albumText', { albumId, name }).then(r => r.text);
+  preflight = (op: Op) => this.request<Preflight>('preflight', { op: { ...op, ...target(op) } });
+  runOp = (op: Op) => this.request<{ opId: string }>('op', { op: { ...op, ...target(op) } }).then(r => r.opId);
+  cancelOp = () => this.request<void>('cancelOp', {});
 
   coverUrl = (a: Album) => `/img/${a.id}/cover?v=${a.revision}${this.r()}`;
   thumbUrl = (a: Album, i: number) => `/img/${a.id}/${i}/thumb?v=${a.revision}${this.r()}`;
@@ -85,12 +110,12 @@ export class WsGateway extends Gateway {
   }
 
   private receive(m: { type: string; id?: string; message?: string } & Record<string, unknown>) {
-    const p = m.id ? this.pending.get(m.id) : undefined;
+    const p = m.id && !OP_EVENTS.has(m.type) ? this.pending.get(m.id) : undefined;
     if (p) {
       this.pending.delete(m.id!);
       clearTimeout(p.timer);
       m.type === 'error' ? p.reject(new Error(m.message ?? 'Request failed')) : p.resolve(m);
     }
-    if (m.type === 'albumChanged' || m.type === 'albumRemoved' || m.type === 'scanProgress') this.events.next(m as unknown as GatewayEvent);
+    if (EVENTS.has(m.type)) this.events.next(m as unknown as GatewayEvent);
   }
 }

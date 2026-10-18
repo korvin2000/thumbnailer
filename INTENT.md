@@ -7,9 +7,12 @@
 
 ## Who and what for
 
-Owners of large libraries of studio-made shoots (portrait, wedding, outdoor, sport, advertising…). The unit of work is
-the **album** (a shoot / gallery), never a single photo: users look for *a shoot* by model, studio, photographer,
-date, style tags, size or quality, then open it, rate it, fix its metadata or pick a better cover.
+Owners of large libraries of studio-made shoots (portrait, wedding, outdoor, sport, advertising…). The unit of search
+and layout is the **album** (a shoot / gallery): users look for *a shoot* by model, studio, photographer, date, style
+tags, size or quality, then open it, rate it, fix its metadata or pick a better cover. Around the albums grows a
+**catalog** of the people and places behind them — models, studios/agencies, photographers, genres — with cards,
+aliases, curated relationships and named favorites lists; single photos can be rated, listed as favorites and copied
+out, but never searched for across the library ([catalog_plan.md](catalog_plan.md)).
 
 ## Outcomes (in priority order)
 
@@ -19,9 +22,12 @@ date, style tags, size or quality, then open it, rate it, fix its metadata or pi
    hover meta, a floating details panel; configurable tiles per row; dark/light; responsive; keyboard driven.
 3. **Trust the index** — scanning is incremental (only added/changed/moved/removed albums are touched), survives
    restarts and unplugged disks, honours `*` exclusions, and never loses user edits.
-4. **Curate** — rating 1–10, editable name/model/studio/photographer/description/tags, user-chosen cover, reveal the
-   album in the OS file manager, browse its photos in a viewer.
-5. **Run anywhere, simply** — one jar serves backend and compiled UI; local only (binds 127.0.0.1, no auth).
+4. **Curate** — rating 1–10, editable name/model/studio/photographer/description/tags/genres, user-chosen cover,
+   reveal the album in the OS file manager, browse its photos in a viewer; link albums to catalog entities (auto from
+   the text, merged and confirmed by hand), group the library by studio, model, photographer, genre or list.
+5. **Organize the files** — explicit, confirmed, journaled operations on the library (move, delete, hide, pack/unpack/
+   repack, encrypt/decrypt, copy photos out) that verify every result byte for byte before a source goes.
+6. **Run anywhere, simply** — one jar serves backend and compiled UI; local only (binds 127.0.0.1, no auth).
 
 ## Quality bar
 
@@ -38,5 +44,6 @@ databases / KV stores.
 
 ## Non-goals
 
-Single-photo management or editing, multi-user / remote access / authentication, cloud sync, moving or rewriting the
-user's files (the library on disk is read-only to the app).
+Photo editing, a photo-level search across albums, multi-user / remote access / authentication, cloud sync. The
+library on disk changes only through the explicit operations of outcome 5 — never while scanning or browsing, and
+never without a confirm dialog; safe-delete is the `hidden` flag in the index and touches no file.

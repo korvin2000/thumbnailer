@@ -5,7 +5,30 @@
 Living document: update **State** and tick items when work lands; add a **Decisions** row when a choice is costly to
 undo. Reference SPEC IDs.
 
-## State (2026-10-14, v0.1.0, single initial commit + uncommitted tree)
+## State (2026-10-18, v0.1.0)
+
+- 2026-10-18 **catalog phase 0 (backbone) landed**, uncommitted: [catalog_plan.md](catalog_plan.md) §8 phase 0 —
+  schema (`entity`, `alias`, `album_link`, `entity_link`, `photo`, `photo_link`, `meta`; `album.seq/hidden/bio`;
+  `removed` PK `(content_id, id)` + `seq/hidden`, migrated on start), records (`AlbumMeta.genres`, `AlbumPatch`
+  date/genres/hidden/addTags/removeTags, `AlbumQuery` entities/missing/hidden/duplicates/genres, `Album`
+  hidden/bio/stamp/genres/links/copies + `Internal.seq`, `Entry.flags`, versioned `EntryCodec`), `catalog/`
+  (`Catalog` with read-write lock and `resolving` boundary, `CatalogRepository` + JDBC), `index/Gate` (one
+  admission gate: SCAN, OP, RESTART, SETTINGS), `index/Reindexer` (re-index with asserted identity + name map),
+  `AlbumService` quiesce/busy/relocate/rebase/removeBelow and `commit(prior, …, nameMap)`, `Containers.openRaw`,
+  `AlbumContainer.extract`, `Cry.encrypt/plainName`, `ops/` records + `FileOps` (admission only; every item "not
+  implemented"), every WS message of ARCHITECTURE §3's catalog table through `CatalogApi`/`OpsApi`/`PhotosApi`,
+  `/img` 503 for busy albums; frontend wire mirror, `MockGateway` split (`mock-catalog/ops/photos.ts`), `Selection`,
+  `CatalogStore`/`OpsStore`, shells `ContextMenu`/`Confirm`/`EntityPicker`, card badges, Operations settings page,
+  details-panel entity mode. Reviews: Opus parity pass (8 fixed), Codex gpt-6-astra (9 fixed: quiescence drain,
+  gate before settings snapshot, serialized settings saves, photo renames and count deltas inside the save
+  transaction, atomic entity save, favorites counts from actual changes, resolution boundary), Codex gpt-6.1-sol
+  re-check (two more closed: `remove` deletes under the catalog read lock, the scan's cancel token is published with the gate under one lock). Checks: `:backend:test` 100 (1 skipped), `ng build` 504 kB, `ng test` 35; live smoke on the packaged
+  jar (`backend-demo`): search fields, lists/links/marks, hide/unhide, date `2019`, copies, duplicates/entities/
+  missing filters, entity card counts, preflight, op admission, not-implemented errors, images 200.
+- Open after phase 0 (each owned by a track): `Catalog.resolve` returns no links (B1), merge/creditAs/compareCopies/
+  entities-under/genres filter/alias-resolved filters (B1), every operation item (B2), packers (B3), `Entry.flags`
+  always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4). `ops/Manifest`
+  and `Journal` records are B2's.
 
 - 2026-10-14 `.cry` password is session-only: the key lives in server memory (never in settings.json), forgotten on restart or 10 s after the last client leaves; clients see an 8-hex fingerprint only; albums indexed with a key survive a missing key (only their `.cry` reads fail); Folders page shows a masked set state and an eye toggle for a typed password.
 - 2026-10-14 UI polish: sort = field × direction (`ui/sort-menu.ts`, 4 reverse `Sort` orders + indexes), folder tree filter/collapse/expand, kind strip, light/dark toggle only, settings behind the brand button, zip-file archive icon, datalist arrows and Save icon fixed. Checks: backend 70 tests pass (1 skipped), frontend build + 15 tests pass.
@@ -54,13 +77,22 @@ undo. Reference SPEC IDs.
 
 ## Next (ordered)
 
+0. **Catalog, operations, viewer** — models/studios/photographers/genres/favorites as linked entities, confirmed and
+   journaled file operations (move, Recycle Bin delete, hide, pack/unpack/repack, `.cry` encrypt/decrypt, copy photos),
+   duplicate galleries by content stamp, multi-selection + context menus, grouped sidebar trees, entity cards, viewer
+   rework (sort/filter/scale/full screen/slideshow/photo marks/copy targets/bio/metadata), plugin contracts for
+   extraction and covers. Plan, data model, wire additions and the parallel track breakdown:
+   [catalog_plan.md](catalog_plan.md) (2026-10-18, under review). Changes INTENT (library writable through
+   operations only; photos can be marked). Subsumes items 1 (cover strategies as beans + ServiceLoader) and 4 (date
+   in `AlbumPatch`).
 1. **C2/N6 pluggable cover strategies** — `CoverSelector` takes ordered `List<CoverStrategy>` beans instead of the
-   hardcoded `List.of(NAME_HINT, SMALLEST)`; keep "pinned first, then all entries" fallback.
+   hardcoded `List.of(NAME_HINT, SMALLEST)`; keep "pinned first, then all entries" fallback. → part of Next 0 (§5).
 2. **Test gaps (backend)** — `ZipContainer`/`Containers` (nested entries, exclusions), `AlbumDiscovery`
    (min-images, AccessDenied, incomplete walk), `ImageController` (ETag/404/original stream, WebP thumbs), `MvStoreBlobStore`, `SettingsStore` round trip, WS `update`/`facets`/`scan`/`reveal`.
 3. **Test gaps (frontend)** — `AlbumStore` (generation guard, `loadMore` identity check, refresh max-wait),
    `MockGateway.matches/comparator` parity with server semantics, `Prefs` persistence.
-4. **M5 editable shot date** — add `date` to `AlbumPatch` → `AlbumMeta` edited layer → details panel.
+4. **M5 editable shot date** — add `date` to `AlbumPatch` → `AlbumMeta` edited layer → details panel. → part of Next 0
+   (bulk "Shot date…" assignment).
 5. **Q5 contextual facets** — call `gw.facets(filters)` so suggestions narrow to the current query (protocol and
    `WsGateway` already support it; the store calls it unfiltered).
 6. ~~More containers~~ — done 2026-10-14 through 7-Zip-JBinding (`SevenZipContainer`); open: multi-volume archives
@@ -112,6 +144,10 @@ undo. Reference SPEC IDs.
 
 | decision | reason |
 |---|---|
+| Catalog: one `entity` table for six kinds (model, studio, photographer, genre, tag, list), `album_link` keyed by an `INT` surrogate `album.seq`, text fields stay the truth and links are derived on every save, `TINYINT` codes, stored visible-album counts | one CRUD, one tree, one picker; compact keys (9 bytes instead of 41); re-index can never disagree with the catalog; trees open with one indexed read ([catalog_plan.md](catalog_plan.md) §2, §9) |
+| Safe-delete = `hidden` flag (index only); Delete = plain confirmed deletion; transformation sources deleted only after byte-for-byte verification; no Recycle Bin | owner's definition; a bin needs AWT (unusable under Spring's headless default) and fails on held zips; verification is the safety |
+| One admission gate (`index/Gate`: SCAN, OP, RESTART, SETTINGS) instead of `running()`/`frozen()` checks; operations snapshot settings and the `.cry` key at admission | two checks are not mutual exclusion; a scan under a root change or a move under a scan cannot be reasoned about |
+| Count deltas, photo renames and link replacement happen inside `JdbcAlbumRepository.save`'s transaction; the catalog read lock is held across resolution and that save (`Catalog.resolving`) | one transaction, one place for the delta rule, no double counting against `recount()` (Codex review 2026-10-18) |
 | Disk reads gated by a FIFO lane per physical disk (HDD/network/unknown: `hdd-readers` = 1 at once; SSD: no gate), not a dedicated reader thread + byte-bounded queue + worker pool | same disk schedule (one stream, arrival ≈ walk order) with the existing thread-per-album model; decode stays parallel because the turn ends with the read and a bounded queue (2 × threads) decouples reading from decoding; one lock order (turn → queue → slot) keeps it deadlock-free; reviewed by Codex and Fable 2026-10-14 ([plan](hdd_ssd_fix_goals.md)) |
 | Hot path native: libjpeg-turbo over FFM, libwebp via webp4j JNI (its DLL exports only `Java_*`), 7-Zip-JBinding JNI; zip stays on the JDK | FFM where the library has a C API, JNI where it does not; the JDK's zip is as fast for stored JPEGs and keeps its tested path |
 | Natives packed in the jar per platform, copied once into `~/.thumbnailer/natives/<platform>/<bundle>` (`LibraryLoader`) | no temp file per start (webp4j's extraction left undeletable DLLs on Windows), versions coexist, one `stat` per start |

@@ -9,18 +9,20 @@ import { FolderPickerDialog } from './folder-picker';
 import { FoldersPage } from './folders-page';
 import { KeyboardPage } from './keyboard-page';
 import { LibraryPage } from './library-page';
+import { OperationsPage } from './operations-page';
 import { ThumbnailsPage } from './thumbnails-page';
 
-type Page = 'library' | 'folders' | 'thumbnails' | 'appearance' | 'keyboard' | 'about';
+type Page = 'library' | 'folders' | 'thumbnails' | 'operations' | 'appearance' | 'keyboard' | 'about';
 const PAGES: { id: Page; label: string; icon: IconName }[] = [
   { id: 'library', label: 'Library', icon: 'database' }, { id: 'folders', label: 'Folders', icon: 'folder' }, { id: 'thumbnails', label: 'Thumbnails', icon: 'image' },
+  { id: 'operations', label: 'Operations', icon: 'archive' },
   { id: 'appearance', label: 'Appearance', icon: 'sun' }, { id: 'keyboard', label: 'Keyboard', icon: 'keyboard' }, { id: 'about', label: 'About', icon: 'info' },
 ];
 
 /** Native <dialog> with a page rail. One draft `Settings` is shared by Folders and Thumbnails and saved from the footer; Appearance applies instantly. */
 @Component({
   selector: 'app-settings-dialog',
-  imports: [Icon, LibraryPage, FoldersPage, ThumbnailsPage, AppearancePage, KeyboardPage, AboutPage, FolderPickerDialog],
+  imports: [Icon, LibraryPage, FoldersPage, ThumbnailsPage, OperationsPage, AppearancePage, KeyboardPage, AboutPage, FolderPickerDialog],
   template: `
     <dialog #dlg (cancel)="close()">
       <header>
@@ -42,6 +44,7 @@ const PAGES: { id: Page; label: string; icon: IconName }[] = [
               @case ('library') { <app-library-page /> }
               @case ('folders') { <app-folders-page [(draft)]="draft" /> }
               @case ('thumbnails') { <app-thumbnails-page [(draft)]="draft" /> }
+              @case ('operations') { <app-operations-page [(draft)]="draft" /> }
               @case ('appearance') { <app-appearance-page /> }
               @case ('keyboard') { <app-keyboard-page /> }
               @case ('about') { <app-about-page /> }

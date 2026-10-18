@@ -37,6 +37,6 @@ class CoverSelectorTest {
     }
 
     private static Entry entry(int index, String name, long bytes) {
-        return new Entry(index, name, bytes, 0, 100, 100, null);
+        return new Entry(index, name, bytes, 0, 100, 100, null, 0);
     }
 }

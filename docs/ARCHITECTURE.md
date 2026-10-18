@@ -46,8 +46,32 @@ a partial `AlbumMeta` where `""` / `[]` are explicit empties). Effective = `edit
 the effective values are what the columns, the search and the wire carry. Re-indexing therefore refreshes extracted
 values without touching user edits, and a tag the user removed does not come back.
 
-Entry (an image inside an album): `{ index, name, bytes, width, height, shotAt: ISO local datetime | null }`.
-`index` is the position in the container's sorted (by name, case-insensitive) image entry list.
+Entry (an image inside an album): `{ index, name, bytes, width, height, shotAt: ISO local datetime | null, flags }`.
+`index` is the position in the container's sorted (by name, case-insensitive) image entry list; `flags` bit 0
+`META_KNOWN`, bit 1 `META` (the file carries EXIF/XMP; 0 = not yet known, older stores).
+
+### 1.1 Catalog (in progress, [catalog_plan.md](../catalog_plan.md) phase 0)
+
+Models, studios, photographers, genres, hashtags and favorites lists are **entities** of one table, kind codes
+`1 MODEL · 2 STUDIO · 3 PHOTOGRAPHER · 4 GENRE · 5 TAG · 6 LIST` (wire: the names). An entity: `{ id: int, kind, name,
+rating 0..10, auto: boolean (created from text, unconfirmed), albums: int (visible linked albums, stored), profile:
+JSON | null (card-only fields), photos?: int (lists only, computed) }`; every name it is known by is an `alias (kind,
+norm → entity)` row, `norm` = trimmed, lower-case, whitespace collapsed, ≤ 256 chars (tags: `AlbumMeta.tag`). An
+album's text fields (`model`, `studio`, `photographer`, `tags`, `genres`) stay the source of truth; on every save they
+are resolved into `album_link (album seq, role = kind, entity, alias?)` rows (`Catalog.resolve`, roles 1–5
+replaced, 6 untouched), which the wire carries as `links: [{ entity, role, name, alias? }]`; favorites links (6) come
+only from `link/unlink`. Curated entity-to-entity facts are `entity_link (from, to, alias?, roles?)`. Photo marks:
+`photo (id, album seq, name, rating)` + `photo_link (photo, entity)`. Albums carry an internal surrogate `seq`
+(INT; link and mark tables key on it; a tombstone keeps it) and new fields `hidden` (safe-delete: excluded from
+every default query and count, never from reconciliation), `bio` (entry name of a `*bio*.txt`/`*model*.txt`),
+`genres: string[]`, `stamp` (= `contentId`), `copies` (albums sharing the stamp, itself included; per result page).
+`shotDate` is the effective date: `extracted.date` (what the indexer computed) overridden by `edited.date`.
+Tombstones (`removed`) are one per `(content_id, id)` and keep `seq` and `hidden`; `recall` returns the newest.
+Counts: `entity.albums` is adjusted inside every album save's transaction (`JdbcAlbumRepository.save`: over all
+roles, `(visibleAfter ? newLinks : ∅) − (visibleBefore ? oldLinks : ∅)`, `visibleBefore = false` for a new or
+revived album; the resolution runs and the save commits under the catalog read lock, `Catalog.resolving`), by
+`delete` (−1 per link of a visible album) and by favorites link changes that actually happened; suspended while a
+scan holds the gate and rebuilt by `Catalog.recount()` at its end and on optimize.
 
 Identity across scans (internal, not on the wire), both 64-bit wyhash (final 4) as 16 hex digits: `contentId` = hash of the
 sorted image `(name, bytes)` list; `signature` = hash of `(name, bytes, mtime)` over **all** container entries, sidecar text files included, so a
@@ -73,7 +97,7 @@ Framework-free domain in the middle, adapters at the edge. Package = feature, on
 | `album` (service) | `AlbumService` is the single owner of album mutation: commit of an indexed album (merges edits over extracted, bumps `revision`), user patches, removal, and event publishing after the store write. Per-album mutations are serialized so a scan cannot overwrite a concurrent edit. Covers are a regenerable cache: each stored value is tagged with the album state it shows (cover entry + signature + rendering), so a value of any other state is a miss and is re-rendered on request; entry thumbnails are rendered per request and never stored. Admission control lives here, as a producer-consumer pipeline per render kind (covers: indexing and HTTP cover misses share it; entry thumbnails): a file is read during a turn on its disk (the caller's `SCAN` turn, or a `VIEW` turn for HTTP) into a queue of `2 × threads` read files (`Limiter`), and decoded, resized and encoded by up to `threads` at once (`Limiter`), sized from `Settings.covers/thumbs.threads`; the turn ends with the read. Acquired only in the order turn → queue place → decode slot, so no holder waits for an earlier one. Entry thumbnails of an archive that reads only front to back (`sequential()`) come from one `Gallery` pass per album in packing order instead of a pass from the block start per thumbnail (Θ(N²) for a gallery): the pass is the reader of the same pipeline, runs while an asked entry is unread, otherwise stops 24 thumbnails ahead and frees its disk, and on its way to an asked entry renders no more than those 24 unasked ones (memory stays bounded whatever is asked first); a delivered thumbnail is forgotten (the browser caches it by revision), a later request for it renders alone. `commit` takes its prior state (id, revision, rating, edits, pin) from the stored album it matched or, for a new one, from a recalled tombstone; adoption is atomic with the save (the save consumes the tombstone, so a failed save keeps it), and a tombstone whose id is live again (a copy adopted it first) is ignored for a fresh id. `retainRoots(roots)`: a stored root that is no longer configured has its albums re-rooted to the configured root they lie in (widening `A:/pics/x` → `A:/pics` or narrowing keeps them, one `UPDATE`), the rest are removed. The tag is seeded by the epoch carried by the bytes (rendered or reused), never the spec current at commit time; reads validate against the current covers spec. |
 | `store` | Adapters: `jdbc/JdbcAlbumRepository` (Spring `JdbcClient`, H2 SQL, dynamic WHERE from `AlbumQuery`, `schema.sql`; one index per sort order over a generated `sort_name`, so a page is an index scan; `MERGE` upserts; entries packed one value per album; tuned URL in `application.yml`: 128 MiB split files, LZF-compressed 64 KiB pages, 128 MB cache, 10 s chunk retention, 1.2 s write delay, close-time compaction; table `removed` = tombstones by `content_id`; index `album_path` serves the prefix selections `path = ? OR path LIKE 'dir/%' ESCAPE '!'`; `stats` = one aggregate query + `DISK_SPACE_USED` of the three tables (live, written pages only) + sizes of `albums.mv.db*`; `compact()` makes `close()` run `SHUTDOWN COMPACT` instead of `SHUTDOWN`), `tupl/TuplBlobStore` (default cover store: no redo log, checkpoint every second, idle stepped compaction, also on demand through `compact()`, `stats` = count, used pages, `tupl.db` size, self-heal), `mvstore/MvStoreBlobStore` (alternative; `stats` from fill rate, `compact` = `compactFile`). Selected via `thumbnailer.store.*` properties; another database = another adapter + JDBC URL, no domain change. |
 | `settings` | **Libraries**: `thumbnailer.data-dir` is the *home*; it holds `libraries.json` `{active, known[]}` (`Libraries`: `switchTo` requires an absolute, writable dir whose `settings.json`, if present, parses as `Settings`; `forget` refuses the active one; `pinned` = `thumbnailer.library-pinned`, which `LibraryLocator` sets to whether `library-dir` came from the command line or environment; when pinned, `switchTo` and `forget` throw `Library is fixed by --thumbnailer.library-dir`). Every store (settings, H2 URL, covers) lives in `${thumbnailer.library-dir:${thumbnailer.data-dir}}`; `LibraryLocator` (an `ApplicationEnvironmentPreparedEvent` listener added by `ThumbnailerApplication.app()`) sets `library-dir` to the active library unless the command line or environment set it, and `library-pinned` either way. A switch or an optimize takes effect by an in-process restart: `ThumbnailerApplication.restart()` closes the context on a non-daemon `restart` thread (scans stop, stores close: H2 `SHUTDOWN [COMPACT]`, TuplDB `shutdown()`) and runs the application again with the same arguments; a restart asked for during start-up waits for it. If the new context fails to start, the previous library is written back as active and started once more (a second failure is logged and the process stays down). Once a switch or an optimize is accepted, `ScanService.freeze()` refuses every scan until the restart, and further switches/optimizes get `A restart is pending`. `Settings` record persisted as `settings.json` in the library dir; roots with per-root exclusions, global exclusions, scan-on-start, `pathMap` and the `covers`/`thumbs` render specs (absent fields of an older file → defaults). `locate(canonical)` is a pure function of the snapshot (longest `from` prefix, case-insensitive, stored case kept) and the only canonical → physical mapping: stored paths never change, every disk access (walk, render, original, reveal, moved/exists checks) goes through it. Validation: roots disjoint, no mapping `from` strictly inside a root. Root status (location, exists, album count, last scan) is derived at request time. |
-| `web` | `ws/` protocol records (sealed `Request`/`Event`, Jackson `@JsonTypeInfo(use = NAME, property = "type")` with the lower-case names below), `AlbumSocket` handler + session hub (broadcast; every session wrapped in `ConcurrentWebSocketSessionDecorator` with a buffer limit so a slow client cannot block a scan), `ImageController` (HTTP image bytes; content type from the `Thumb`, ETag = `revision-epoch`), `SpaFallback` (SPA forward), `UndertowServer` (the embedded server: Spring Boot 4 ships only Tomcat/Jetty, so this `ServletWebServerFactory` runs Undertow EE — Servlet 6.1, Jakarta WebSocket 2.2 — on undertow-core 2.4; WS messages dispatch to worker threads; `AlbumSocket` sends 1001 on context close, since Undertow does not track sockets Spring upgraded), `ws/Browse` (one directory of the local file system for the folder picker: drives, visible readable subfolders), `ws/Library` (library info, switch, forget, optimize; refused while a scan runs; a switch or optimize replies `ok`, then restarts after 300 ms), reveal folder (`AlbumSocket.reveal`: `explorer /select,` on Windows, else `java.awt.Desktop.open` of the parent). WS origins are restricted to `localhost`/`127.0.0.1`. The server binds to `127.0.0.1` by default (`server.address`); no authentication. |
+| `web` | `ws/` protocol records (sealed `Request`/`Event`, Jackson `@JsonTypeInfo(use = NAME, property = "type")` with the lower-case names below), `AlbumSocket` handler + session hub (broadcast; every session wrapped in `ConcurrentWebSocketSessionDecorator` with a buffer limit so a slow client cannot block a scan), `ImageController` (HTTP image bytes; content type from the `Thumb`, ETag = `revision-epoch`), `SpaFallback` (SPA forward), `UndertowServer` (the embedded server: Spring Boot 4 ships only Tomcat/Jetty, so this `ServletWebServerFactory` runs Undertow EE — Servlet 6.1, Jakarta WebSocket 2.2 — on undertow-core 2.4; WS messages dispatch to worker threads; `AlbumSocket` sends 1001 on context close, since Undertow does not track sockets Spring upgraded), `ws/Browse` (one directory of the local file system for the folder picker: drives, visible readable subfolders), `ws/Library` (library info, switch, forget, optimize; refused while the gate (`index/Gate`: SCAN, OP, RESTART, SETTINGS) is held; a switch or optimize replies `ok`, then restarts after 300 ms), reveal folder (`AlbumSocket.reveal`: `explorer /select,` on Windows, else `java.awt.Desktop.open` of the parent). WS origins are restricted to `localhost`/`127.0.0.1`. The server binds to `127.0.0.1` by default (`server.address`); no authentication. |
 | `demo` | `--thumbnailer.demo=true`: generates ~40 sample albums (dirs and zips, landscape/portrait covers, real-data-style file names plus a few sidecar files) under `<library-dir>/demo` and registers that root when none is configured. Used by the automated checks; real data lives in `C:/work/albums`. |
 
 Configuration (`application.yml`, overridable by CLI/env):
@@ -119,18 +143,67 @@ Client → server:
 | `search` | `query: AlbumQuery` | `results` |
 | `album` | `albumId` | `albumDetails` |
 | `update` | `albumId, patch: AlbumPatch` | `albumChanged` (also broadcast) |
-| `scan` | `paths: string[] \| null` (null = all roots; each entry a root or a folder below one, nested entries fold into the outer) | `ok`, then `scanProgress` broadcasts (`root` = the scope being walked); `error` while a scan is already running or for a path outside every root (`Not inside an indexed folder: …`). Only albums at or below a completely walked path are pruned |
+| `scan` | `paths: string[] \| null` (null = all roots; each entry a root or a folder below one, nested entries fold into the outer) | `ok`, then `scanProgress` broadcasts (`root` = the scope being walked); `error` with the gate's blocker while anything else holds it (`A scan is running`, `An operation is running`, `A restart is pending`, `Settings are being saved`) or for a path outside every root (`Not inside an indexed folder: …`). Only albums at or below a completely walked path are pruned |
 | `cancelScan` | – | `ok` |
 | `getSettings` | – | `settings` |
-| `setSettings` | `settings: Settings` | `settings`; `error` when two roots overlap, a `pathMap` `from` lies inside a root or a `Render` value is out of range, and `Stop the scan before changing folders` when a scan runs and the root paths or the `pathMap` differ (nothing saved; exclusions, scan-on-start, render specs and the `.cry` password still save during a scan: a container decrypts with the key current when it was opened). Albums of roots that were removed move to a configured root that covers them, else are deleted (`albumRemoved` each) |
+| `setSettings` | `settings: Settings` | `settings`; `error` when two roots overlap, a `pathMap` `from` lies inside a root or a `Render` value is out of range, and the gate's blocker (`A scan is running`, …) when the root paths or the `pathMap` differ while the gate is held (such a save holds it as `SETTINGS`; nothing saved; exclusions, scan-on-start, render specs and the `.cry` password still save during a scan: a container decrypts with the key current when it was opened). Albums of roots that were removed move to a configured root that covers them, else are deleted (`albumRemoved` each) |
 | `facets` | `query: AlbumQuery \| null` | `facets` |
 | `reveal` | `albumId` | `ok` / `error` (opens the containing folder in the OS file manager, selecting the album) |
 | `folders` | `path` | `folders` (child folders of a stored album path: the library tree, derived from album paths, not the disk) |
 | `browse` | `path: string \| null` (null = user home) | `listing` (the local file system, for the folder picker) |
 | `library` | – | `libraryInfo` |
-| `switchLibrary` | `dir` (absolute; created if missing; must be writable; its `settings.json`, if any, must parse) | `ok`, then the server restarts into that library (sockets close; the client reconnects; if it cannot start, the previous library starts again); `error` while a scan runs, when a restart is already pending (`A restart is pending`), when pinned (`Library is fixed by --thumbnailer.library-dir`) or `Cannot read <dir>/settings.json: …` |
-| `forgetLibrary` | `dir` | `libraryInfo`; `error` for the active library, while a scan runs or when pinned (files stay on disk) |
-| `optimize` | – | `ok` after the cover store compacted, then the server restarts and H2 runs `SHUTDOWN COMPACT` at close; `error` while a scan runs or when a restart is already pending (`A restart is pending`) |
+| `switchLibrary` | `dir` (absolute; created if missing; must be writable; its `settings.json`, if any, must parse) | `ok`, then the server restarts into that library (sockets close; the client reconnects; if it cannot start, the previous library starts again); `error` while the gate is held (`A scan is running`, `An operation is running`, `A restart is pending`; the switch holds it as `SETTINGS` and hands it to `RESTART`), when pinned (`Library is fixed by --thumbnailer.library-dir`) or `Cannot read <dir>/settings.json: …` |
+| `forgetLibrary` | `dir` | `libraryInfo`; `error` for the active library, while the gate is held (its blocker text) or when pinned (files stay on disk) |
+| `optimize` | – | `ok` after the cover store compacted (and tombstones older than 365 days purged), then the server restarts and H2 runs `SHUTDOWN COMPACT` at close; `error` while a scan runs or when a restart is already pending (`A restart is pending`) |
+
+Catalog, operations and photos (phase 0 of [catalog_plan.md](../catalog_plan.md): records, dispatch and the mock
+exist; the server answers `error: not implemented` where the plan's track has not landed — noted per row):
+
+| type | payload | reply |
+|---|---|---|
+| `entities` | `kind, text?: prefix over the normalized name or any alias, under?: int (B1), sort: 'NAME' \| 'COUNT' (albums desc, then name), offset, limit ≤ 500` (numbers are always sent) | `entityList { items: Entity[], total }` (counts exclude hidden) |
+| `entity` | `entityId` (never `id`: that is the envelope's correlation id) | `entityCard { entity, aliases: string[] (the other normalized names, primary excluded), links: [{ to: Entity, alias?, roles? }], derived?: { albums, models?: Entity[], studios?: [{ entity, aliases: string[], genres: string[], albums }], photographers?: Entity[], genres?: Entity[], tags?: string[] } }` (`derived` absent until B1) |
+| `saveEntity` | `entity: { id?, kind, name, rating, profile, aliases?: string[] (null keeps), links?: [{ to, alias?, roles? }] (null keeps) }` | `entityCard` (+ `catalogChanged` after every successful save, a rating-only one included; a rename keeps the old name as an alias; checked first, then written in one transaction: a refused or failed save changes nothing); `error` `"<name>" is <owner>; merge instead?` when the name or an alias belongs to another entity of the kind; self-links, unknown targets and a changed kind are refused |
+| `deleteEntities` | `ids: int[]` | `ok` + `catalogChanged` (the text rewrite with `albumChanged` per unlinked album: B1) |
+| `mergeEntities` | `from: int[], into: int` (same kind) | `entityCard` (into) + `catalogChanged` (B1) |
+| `confirmEntities` | `ids: int[]` | `ok` + `catalogChanged` |
+| `creditAs` | `modelId, studioId, alias, roles?` | `entityCard` + `albumChanged` per rewritten album (B1) |
+| `bulkUpdate` | `albumIds: string[] \| query: AlbumQuery` (`albumIds` win; more than 500 matches → `error` `N albums match, at most 500 at once`, an unknown id → `No album <id>`, neither → `albumIds or query is required`), `patch: AlbumPatch` | `ok { count }` (every targeted album), then `albumChanged` each |
+| `link` / `unlink` | `albumIds \| query, entityId` | `ok { count }` (albums actually changed); roles 1–5: the entity's name is added to / removed from the albums' edited text and the save resolves it (B1); role 6: a plain link row, no save, no `revision` bump, one `catalogChanged { kinds: ['LIST'] }` when anything changed |
+| `markPhoto` | `albumId, name, rating?, lists?: int[]` | `photoMarks { albumId, marks: { [name]: { rating, lists: int[] } } }` |
+| `photos` | `listId, offset, limit` | `photoList { items: [{ albumId, name, index, rating, album: { id, name, revision } }], total }` (B4) |
+| `photoMeta` | `albumId, index` | `photoMeta { rows: [{ dir, tag, value }] }` (B4) |
+| `albumText` | `albumId, name` | `text { name, text }` (B4) |
+| `copies` | `albumId` | `copyList { albums: Album[] }` (every album with the same stamp, this one included) |
+| `compareCopies` | `a, b` (album ids) | `comparison { identical, differing: string[] }` (B1) |
+| `preflight` | `op: Op` (`target` = destination parent folder for MOVE/COPY/FOLDER_MOVE/FOLDER_COPY, the new base name for FOLDER_RENAME; FOLDER_* act on `paths`; COPY_PHOTOS on `albumIds[0]` + `names`) | `preflight { items: [{ path, skip, reason?, note? }], bytes, free (-1 without a target), warnings: string[], consequences: string[] }`; items: one per target album, one per name for COPY_PHOTOS, every album below the folders for FOLDER_*; the only skip reasons today: `already packed`, `already unpacked` (B2 refines) |
+| `op` | `op: Op` (same selection rules and errors as `bulkUpdate`; nothing to act on → `Nothing to do`) | `opAccepted { opId }`, then `opProgress` broadcasts (`id` = the operation id, a UUID; `done` counts successes; a cancel ends with `running: false, message: 'Cancelled'`) and one `opResult`; `error` from the gate (`A scan is running`, `An operation is running`, `A restart is pending`) (B2: every item fails with `not implemented` today) |
+| `cancelOp` | – | `ok` |
+
+Broadcasts: `catalogChanged { kinds: EntityKind[] }` (grid, viewer, trees, facets and open cards reload),
+`opProgress { id, kind, running, total, done, current, skipped, failed, message, startedAt, finishedAt }` (≤ 4/s),
+`opResult { id, done, skipped: [{ item, reason }], failed: [{ item, reason }] }`.
+
+```ts
+Op          { kind: 'MOVE'|'COPY'|'DELETE'|'PACK'|'UNPACK'|'REPACK'|'CRYPT'|'COPY_PHOTOS'|'FOLDER_RENAME'|'FOLDER_MOVE'|'FOLDER_COPY'|'FOLDER_DELETE';
+              albumIds?: string[]; query?: AlbumQuery; paths?: string[]; target?: string; format?: 'AUTO'|'ZIP'|'SEVEN_ZIP';
+              encrypt?: boolean; names?: string[]; conflict: 'SKIP'|'RENAME'; password?: string }
+Entity      { id; kind: EntityKind; name; rating; auto; albums; profile?: string; photos?: number }   // profile absent when null; photos: lists only
+EntityKind  'MODEL'|'STUDIO'|'PHOTOGRAPHER'|'GENRE'|'TAG'|'LIST'
+Link        { entity: number; role: EntityKind; name: string; alias?: string }   // Album.links
+```
+
+Changed records: `Album` + `hidden, bio, stamp, genres, links, copies`; `albumDetails` + `marks` (as `photoMarks`);
+`AlbumQuery` + `entities: int[]` (all linked), `missing: EntityKind` (no link of that role), `hidden: boolean` (null/
+false = not hidden; true = only hidden), `duplicates: boolean`, `genres: string[]`; `AlbumPatch` + `date` (`YYYY-MM-DD`,
+`YYYY-MM` or `YYYY` → the first day; `""` removes the override; else `error` `Date must be YYYY-MM-DD, YYYY-MM or YYYY: …`),
+`genres`, `hidden`, `addTags`, `removeTags`; `Facets` + `genres` (B1: `[]` today, and the `AlbumQuery.genres` filter is
+refused until B1; `model`/`studio`/`photographer`/`tags` still match text, not aliases); `Settings` + `copyTargets:
+string[]` (≤ 10, normalized, duplicates dropped) and `ops: { packFormat }` (default `AUTO`); `Entry` + `flags`;
+`Album.links` includes favorites-list links (role `LIST`, `name` = the list), ordered by role code then name; every
+album read carries `links` and `copies`. `markPhoto`: `lists` replaces the set, an absent `rating`/`lists` is
+unchanged, rating 0 with no lists deletes the row; an unknown entry name or a non-list id is an `error`.
+HTTP: `/img/{id}/…` answers `503 Retry-After: 2` while an operation holds the album.
 
 Server → client:
 

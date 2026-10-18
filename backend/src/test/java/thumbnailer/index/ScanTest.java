@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import com.dynatrace.hash4j.hashing.Hashing;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -20,6 +21,7 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -28,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
+import java.util.stream.IntStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import javax.imageio.ImageIO;
@@ -42,13 +45,16 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.util.FileSystemUtils;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumPatch;
+import thumbnailer.catalog.Catalog;
 import thumbnailer.album.AlbumRepository;
+import thumbnailer.album.AlbumRepository.Tombstone;
 import thumbnailer.album.AlbumService;
 import thumbnailer.album.BlobStore;
 import thumbnailer.image.Render;
+import thumbnailer.ops.FileOps;
+import thumbnailer.ops.Op;
 import thumbnailer.settings.Settings;
 import thumbnailer.source.Cry;
-import thumbnailer.source.CryTest;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
@@ -73,6 +79,10 @@ class ScanTest {
     @Autowired AlbumService albums;
     @Autowired SettingsStore settings;
     @Autowired BlobStore blobs;
+    @Autowired Catalog catalog;
+    @Autowired Gate gate;
+    @Autowired Reindexer reindexer;
+    @Autowired FileOps ops;
     @LocalServerPort int port;
     @TempDir Path root;
     /** Distinct image sizes per test, so no test's album looks like another test's moved album. */
@@ -87,7 +97,7 @@ class ScanTest {
         assertThat(first.changed()).isEqualTo(3);
         var a = byName("A");
         var b = byName("B");
-        albums.patch(a.id(), new AlbumPatch(null, null, null, null, null, null, 7, null));
+        albums.patch(a.id(), new AlbumPatch(null, null, null, null, null, null, 7, null, null, null, null, null, null));
 
         assertThat(scan(() -> false).changed()).as("unchanged rescan").isZero();
 
@@ -122,7 +132,7 @@ class ScanTest {
         zip(old, "a.jpg", "b.jpg");
         scan(() -> false);
         var before = byName("CLS-2019-01-14 - Aurora - (vol-5)");
-        albums.patch(before.id(), new AlbumPatch(null, null, null, null, null, null, 6, null));
+        albums.patch(before.id(), new AlbumPatch(null, null, null, null, null, null, 6, null, null, null, null, null, null));
 
         Files.move(old, root.resolve("CLS-2020-02-02 - EL-Studio - Jeny - (vol-6).zip"));
         assertThat(scan(() -> false).changed()).isEqualTo(1);
@@ -167,7 +177,7 @@ class ScanTest {
         assertThat(e.model()).isEqualTo("Alice");
         assertThat(e.tags()).containsExactly("wedding", "outdoor");
 
-        albums.patch(e.id(), new AlbumPatch(null, "Bob", null, null, "", List.of("wedding"), null, "b.jpg"));
+        albums.patch(e.id(), new AlbumPatch(null, "Bob", null, null, "", List.of("wedding"), null, "b.jpg", null, null, null, null, null));
         Files.writeString(album.resolve("album.txt"), "model: Carol\nstudio: S2\ndescription: Second\n#wedding #outdoor #beach");
         assertThat(scan(() -> false).changed()).isEqualTo(1);
 
@@ -179,7 +189,7 @@ class ScanTest {
         assertThat(refreshed.cover()).isEqualTo("b.jpg");
         assertThat(refreshed.coverPinned()).isTrue();
 
-        var unpinned = albums.patch(e.id(), new AlbumPatch(null, null, null, null, null, null, null, ""));
+        var unpinned = albums.patch(e.id(), new AlbumPatch(null, null, null, null, null, null, null, "", null, null, null, null, null));
         assertThat(unpinned.coverPinned()).isFalse();
         assertThat(unpinned.revision()).isEqualTo(refreshed.revision() + 1);
     }
@@ -192,10 +202,10 @@ class ScanTest {
         assertThat(albums.storedCover(k)).as("rendered while indexing").isPresent();
 
         var other = k.cover().equals("a.jpg") ? "b.jpg" : "a.jpg";
-        var pinned = albums.patch(k.id(), new AlbumPatch(null, null, null, null, null, null, null, other));
+        var pinned = albums.patch(k.id(), new AlbumPatch(null, null, null, null, null, null, null, other, null, null, null, null, null));
         assertThat(albums.storedCover(pinned)).as("the previous cover's value is a miss").isEmpty();
         var rendered = albums.cover(pinned).orElseThrow().bytes();
-        var rated = albums.patch(k.id(), new AlbumPatch(null, null, null, null, null, null, 3, null));
+        var rated = albums.patch(k.id(), new AlbumPatch(null, null, null, null, null, null, 3, null, null, null, null, null, null));
         assertThat(albums.storedCover(rated).orElseThrow().bytes()).as("an edit keeps files and tag").isEqualTo(rendered);
 
         dir(root.resolve("K"), "c.jpg");
@@ -246,7 +256,7 @@ class ScanTest {
         assertThat(m.path()).isEqualTo(canonical + "/M");
         assertThat(byName(canonical, "N").imageCount()).isEqualTo(2);
         var pinned = albums.patch(m.id(), new AlbumPatch(null, null, null, null, null, null, null,
-                m.cover().equals("a.jpg") ? "b.jpg" : "a.jpg"));
+                m.cover().equals("a.jpg") ? "b.jpg" : "a.jpg", null, null, null, null, null));
         assertThat(albums.cover(pinned)).as("rendered from where the map points").isPresent();
 
         var received = new CopyOnWriteArrayList<String>();
@@ -283,7 +293,7 @@ class ScanTest {
     void aRemovedAlbumThatComesBackKeepsItsIdentity() throws IOException {
         dir(root.resolve("T"), "a.jpg", "b.jpg");
         scan(() -> false);
-        var t = albums.patch(byName("T").id(), new AlbumPatch(null, "Bob", null, null, null, null, 8, null));
+        var t = albums.patch(byName("T").id(), new AlbumPatch(null, "Bob", null, null, null, null, 8, null, null, null, null, null, null));
         FileSystemUtils.deleteRecursively(root.resolve("T"));
         assertThat(scan(() -> false).removed()).isEqualTo(1);
 
@@ -348,16 +358,16 @@ class ScanTest {
         await(received, m -> m.contains("\"id\":1"));
         var key = Cry.key("test");
         Files.createDirectories(root.resolve("E"));
-        Files.write(root.resolve("E/x1.cry"), CryTest.encrypt(jpeg(0), "a.jpg", key));
-        Files.write(root.resolve("E/x2.cry"), CryTest.encrypt(jpeg(1), "b.jpg", key));
+        Files.write(root.resolve("E/x1.cry"), Cry.encrypt(jpeg(0), "a.jpg", key));
+        Files.write(root.resolve("E/x2.cry"), Cry.encrypt(jpeg(1), "b.jpg", key));
         dir(root.resolve("M"), "a.jpg");
-        Files.write(root.resolve("M/x3.cry"), CryTest.encrypt(jpeg(2), "c.jpg", key));
+        Files.write(root.resolve("M/x3.cry"), Cry.encrypt(jpeg(2), "c.jpg", key));
         scan(() -> false);
         assertThat(repo.byRoot(normalizedRoot())).as("without the password .cry files are no images").extracting(Album::name).containsExactly("M");
         assertThat(byName("M").imageCount()).isEqualTo(1);
 
         var s = settings.get();
-        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, "test"));
+        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, null, null, "test"));
         assertThat(settings.get().cryKey()).isEqualTo(HexFormat.of().formatHex(key));
         assertThat(settings.get().cryPassword()).as("never kept").isNull();
         assertThat(Files.readString(settings.file())).as("session only").doesNotContain("cryKey");
@@ -374,15 +384,15 @@ class ScanTest {
         assertThat(albums.thumb(e, repo.entry(e.id(), 1).orElseThrow())).as("rendered on demand").isPresent();
         assertThat(byName("M").imageCount()).isEqualTo(2);
         assertThat(scans.scan(null, () -> false).changed()).as("same key: unchanged").isZero();
-        albums.patch(e.id(), new AlbumPatch(null, null, null, null, null, null, 4, null));
+        albums.patch(e.id(), new AlbumPatch(null, null, null, null, null, null, 4, null, null, null, null, null, null));
 
-        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, null));
+        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, null, null, null));
         var locked = scans.scan(null, () -> false);
         assertThat(locked.changed() + " changed, " + locked.removed() + " removed").as("no key: kept as indexed").isEqualTo("0 changed, 0 removed");
         assertThat(byName("E").imageCount()).isEqualTo(2);
         assertThat(albums.thumb(e, repo.entry(e.id(), 1).orElseThrow())).as("cannot decrypt").isEmpty();
 
-        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, "test"));
+        settings.set(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, null, null, "test"));
         assertThat(scans.scan(null, () -> false).changed()).as("the same key again: unchanged").isZero();
         var back = byName("E");
         assertThat(albums.thumb(back, repo.entry(e.id(), 1).orElseThrow())).isPresent();
@@ -391,7 +401,7 @@ class ScanTest {
         var echoed = settings.masked();
         settings.forgetKey();
         assertThat(settings.set(echoed).cryKey()).as("a stale fingerprint resurrects nothing").isNull();
-        assertThat(new Settings(s.roots(), s.exclusions(), false, null, null, null, "0A1B2C3D", null).cryKey()).isEqualTo("0a1b2c3d");
+        assertThat(new Settings(s.roots(), s.exclusions(), false, null, null, null, null, null, "0A1B2C3D", null).cryKey()).isEqualTo("0a1b2c3d");
         socket.abort();
     }
 
@@ -422,6 +432,168 @@ class ScanTest {
         await(received, m -> m.equals("{\"type\":\"albumRemoved\",\"albumId\":\"" + w.id() + "\"}"));
         assertThat(repo.byRoot(normalizedRoot())).isEmpty();
         socket.abort();
+    }
+
+    @Test
+    void catalogOperationAndPhotoMessagesRoundTripThroughTheSocket() throws Exception {
+        dir(root.resolve("L"), "a.jpg", "b.jpg");
+        scan(() -> false);
+        var l = byName("L");
+        var received = new CopyOnWriteArrayList<String>();
+        var socket = connect(received);
+        socket.sendText("{\"type\":\"saveEntity\",\"id\":1,\"entity\":{\"kind\":\"LIST\",\"name\":\"Best\",\"rating\":0,\"aliases\":[\" Top  Ten \"]}}", true).join();
+        var card = await(received, m -> m.contains("\"id\":1"));
+        assertThat(card).startsWith("{\"type\":\"entityCard\",\"entity\":{\"id\":").contains("\"name\":\"Best\"", "\"aliases\":[\"top ten\"]");
+        var list = card.replaceFirst(".*?\"entity\":\\{\"id\":(\\d+).*", "$1");
+        await(received, m -> m.equals("{\"type\":\"catalogChanged\",\"kinds\":[\"LIST\"]}"));
+        var other = String.valueOf(Integer.parseInt(list) + 100); // the envelope id is not the entity's
+        socket.sendText("{\"type\":\"entity\",\"id\":\"" + other + "\",\"entityId\":" + list + "}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":\"" + other + "\""))).startsWith("{\"type\":\"entityCard\"")
+                .contains("\"entity\":{\"id\":" + list + ",", "\"name\":\"Best\"");
+        socket.sendText("{\"type\":\"link\",\"id\":2,\"albumIds\":[\"" + l.id() + "\"],\"entityId\":" + list + "}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":2"))).isEqualTo("{\"type\":\"ok\",\"count\":1,\"id\":2}");
+        socket.sendText("{\"type\":\"entities\",\"id\":3,\"kind\":\"LIST\",\"text\":\"BE\",\"sort\":\"COUNT\",\"offset\":0,\"limit\":10}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":3"))).startsWith("{\"type\":\"entityList\"")
+                .contains("\"albums\":1,", "\"photos\":0", "\"total\":1");
+        socket.sendText("{\"type\":\"markPhoto\",\"id\":4,\"albumId\":\"" + l.id() + "\",\"name\":\"a.jpg\",\"rating\":7,\"lists\":[" + list + "]}", true).join();
+        var marks = "{\"a.jpg\":{\"rating\":7,\"lists\":[" + list + "]}}";
+        assertThat(await(received, m -> m.contains("\"id\":4"))).startsWith("{\"type\":\"photoMarks\"").contains(marks);
+        socket.sendText("{\"type\":\"search\",\"id\":5,\"query\":{\"roots\":[\"" + normalizedRoot() + "\"],\"offset\":0,\"limit\":10}}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":5"))).contains("\"hidden\":false",
+                "\"links\":[{\"entity\":" + list + ",\"role\":\"LIST\",\"name\":\"Best\"}]", "\"copies\":1",
+                "\"stamp\":\"" + l.internal().contentId() + "\"").doesNotContain("seq");
+
+        socket.sendText("{\"type\":\"bulkUpdate\",\"id\":6,\"query\":{\"roots\":[\"" + normalizedRoot() + "\"],\"offset\":0,\"limit\":10},"
+                + "\"patch\":{\"hidden\":true,\"addTags\":[\"#Best Of\"],\"date\":\"2001\"}}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":6"))).isEqualTo("{\"type\":\"ok\",\"count\":1,\"id\":6}");
+        var hidden = repo.find(l.id()).orElseThrow();
+        assertThat(hidden).extracting(Album::hidden, Album::tags, Album::shotDate).containsExactly(true, List.of("best-of"), LocalDate.of(2001, 1, 1));
+        socket.sendText("{\"type\":\"search\",\"id\":10,\"query\":{\"roots\":[\"" + normalizedRoot() + "\"],\"offset\":0,\"limit\":10}}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":10"))).as("hidden").contains("\"total\":0");
+        socket.sendText("{\"type\":\"album\",\"id\":7,\"albumId\":\"" + l.id() + "\"}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":7"))).contains("\"marks\":" + marks, "\"flags\":0");
+        socket.sendText("{\"type\":\"compareCopies\",\"id\":8,\"a\":\"x\",\"b\":\"y\"}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":8"))).isEqualTo("{\"type\":\"error\",\"message\":\"not implemented: compareCopies\",\"id\":8}");
+
+        socket.sendText("{\"type\":\"op\",\"id\":9,\"op\":{\"kind\":\"PACK\",\"albumIds\":[\"" + l.id() + "\"],\"password\":\"s3cret\"}}", true).join();
+        assertThat(await(received, m -> m.contains("\"id\":9"))).startsWith("{\"type\":\"opAccepted\",\"opId\":\"");
+        assertThat(await(received, m -> m.startsWith("{\"type\":\"opResult\"")))
+                .contains("\"failed\":[{\"item\":\"" + l.path() + "\",\"reason\":\"not implemented\"}]");
+        assertThat(received).noneMatch(m -> m.contains("s3cret"));
+        socket.abort();
+    }
+
+    @Test
+    void theGateAdmitsOneActivityAtATime() throws Exception {
+        useRoot(root.toString());
+        var received = new CopyOnWriteArrayList<String>();
+        var socket = connect(received);
+        try (var op = gate.tryEnter(Gate.Activity.OP).orElseThrow()) {
+            assertThat(gate.tryEnter(Gate.Activity.SCAN)).isEmpty();
+            assertThat(scans.start(null)).isFalse();
+            assertThat(scans.start(List.of(normalizedRoot() + "-outside"))).as("the gate before the paths").isFalse();
+            assertThat(scans.running()).isFalse();
+            socket.sendText("{\"type\":\"scan\",\"id\":1}", true).join();
+            assertThat(await(received, m -> m.contains("\"id\":1"))).contains("\"message\":\"An operation is running\"");
+            socket.sendText("{\"type\":\"setSettings\",\"id\":2,\"settings\":{\"roots\":[{\"path\":\"" + normalizedRoot()
+                    + "/elsewhere\"}],\"exclusions\":[],\"scanOnStart\":false}}", true).join();
+            assertThat(await(received, m -> m.contains("\"id\":2"))).contains("\"message\":\"An operation is running\"");
+            assertThat(settings.get().roots()).noneMatch(r -> r.path().endsWith("/elsewhere"));
+            socket.sendText("{\"type\":\"setSettings\",\"id\":3,\"settings\":{\"roots\":[{\"path\":\"" + normalizedRoot()
+                    + "\"}],\"exclusions\":[\"*.tmp\"],\"scanOnStart\":false}}", true).join();
+            assertThat(await(received, m -> m.contains("\"id\":3"))).as("same folders: no gate needed").startsWith("{\"type\":\"settings\"");
+            assertThat(settings.get().exclusions()).containsExactly("*.tmp");
+        }
+        assertThat(gate.current()).isNull();
+        assertThatThrownBy(() -> scans.start(List.of(normalizedRoot() + "-outside"))).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("Not inside an indexed folder");
+        assertThat(gate.current()).as("a refused scan lets the gate go").isNull();
+        socket.abort();
+    }
+
+    @Test
+    void quiesceWaitsForReadsInFlightAndRefusesEveryNewOne() throws Exception {
+        dir(root.resolve("Q"), "a.jpg", "b.jpg");
+        scan(() -> false);
+        var q = byName("Q");
+        var reading = albums.read(q.id());
+        var quiesced = CompletableFuture.runAsync(() -> albums.quiesce(List.of(q.id())));
+        Thread.sleep(300);
+        assertThat(quiesced).as("waits for the read that began before").isNotDone();
+        assertThatThrownBy(() -> albums.read(q.id())).hasMessage(AlbumService.BUSY);
+        assertThatThrownBy(() -> albums.thumb(q, repo.entry(q.id(), 0).orElseThrow())).hasMessage(AlbumService.BUSY);
+        assertThatThrownBy(() -> albums.cover(q)).hasMessage(AlbumService.BUSY);
+        reading.close();
+        reading.close(); // harmless
+        quiesced.get(2, TimeUnit.SECONDS);
+        for (var path : List.of("/0", "/0/thumb", "/cover")) {
+            var busy = HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/img/"
+                    + q.id() + path)).build(), HttpResponse.BodyHandlers.discarding());
+            assertThat(busy.statusCode()).as(path).isEqualTo(503);
+            assertThat(busy.headers().firstValue("Retry-After")).hasValue("2");
+        }
+        albums.release(List.of(q.id()));
+        var original = HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/img/"
+                + q.id() + "/0")).build(), HttpResponse.BodyHandlers.ofByteArray());
+        assertThat(original.statusCode()).isEqualTo(200);
+        var again = CompletableFuture.runAsync(() -> albums.quiesce(List.of(q.id())));
+        again.get(2, TimeUnit.SECONDS); // the streamed original closed its read
+        albums.release(List.of(q.id()));
+    }
+
+    @Test
+    void preflightMeasuresFreeSpaceWhereThePathMapPutsTheTarget() throws IOException {
+        var rename = new Op(Op.Kind.FOLDER_RENAME, null, null, List.of(normalizedRoot()), "Renamed", null, null, null, null, null);
+        assertThat(ops.preflight(rename).free()).as("a rename's target is a name").isEqualTo(-1);
+        var delete = new Op(Op.Kind.FOLDER_DELETE, null, null, List.of(normalizedRoot()), normalizedRoot(), null, null, null, null, null);
+        assertThat(ops.preflight(delete).free()).isEqualTo(-1);
+        var drive = IntStream.rangeClosed('M', 'Z').mapToObj(c -> (char) c + ":/").filter(d -> Files.notExists(Path.of(d))).findFirst();
+        assumeTrue(File.separatorChar == '\\' && drive.isPresent(), "needs a drive letter that does not exist");
+        settings.set(new Settings(List.of(new Settings.Root(root.toString(), List.of())), List.of(), false,
+                List.of(new Settings.Mapping(drive.get() + "library", root.toString())), null, null));
+        var move = new Op(Op.Kind.MOVE, List.of(), null, null, drive.get() + "library/sub", null, null, null, null, null);
+        assertThat(ops.preflight(move).free()).as("measured on the disk the mapping leads to").isPositive();
+    }
+
+    @Test
+    void reindexKeepsTheIdentityOfAnAlbumAnOperationRewrote() throws Exception {
+        dir(root.resolve("R"), "a.jpg", "b.jpg");
+        scan(() -> false);
+        var r = albums.patch(byName("R").id(), new AlbumPatch(null, null, null, null, null, null, 6, "a.jpg", "2001-05", null, null, null, null));
+        assertThat(r.shotDate()).isEqualTo(LocalDate.of(2001, 5, 1));
+        catalog.mark(r.internal().seq(), "a.jpg", 9, null);
+        Files.move(root.resolve("R"), root.resolve("S"));
+        Files.move(root.resolve("S/a.jpg"), root.resolve("S/x.jpg"));
+
+        var s = reindexer.reindex(r.id(), normalizedRoot() + "/S", Kind.DIRECTORY, Map.of("a.jpg", "x.jpg"));
+        assertThat(s).extracting(Album::id, Album::path, Album::rating, Album::revision, Album::cover, Album::coverPinned, Album::shotDate)
+                .containsExactly(r.id(), normalizedRoot() + "/S", 6, r.revision() + 1, "x.jpg", true, LocalDate.of(2001, 5, 1));
+        assertThat(catalog.marks(s.internal().seq())).containsOnlyKeys("x.jpg");
+        assertThat(scan(() -> false).changed()).as("a later scan finds it unchanged").isZero();
+        var cleared = albums.patch(r.id(), new AlbumPatch(null, null, null, null, null, null, null, null, "", null, null, null, null));
+        assertThat(cleared.shotDate()).as("back to the indexed date").isNotEqualTo(LocalDate.of(2001, 5, 1)).isNotNull();
+        assertThatThrownBy(() -> albums.patch(r.id(), new AlbumPatch(null, null, null, null, null, null, null, null, "May", null, null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        albums.quiesce(List.of(r.id()));
+        var busy = HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/img/"
+                + r.id() + "/cover")).build(), HttpResponse.BodyHandlers.discarding());
+        assertThat(busy.statusCode()).isEqualTo(503);
+        assertThat(busy.headers().firstValue("Retry-After")).hasValue("2");
+        assertThatThrownBy(() -> albums.cover(cleared)).hasMessage("busy");
+        albums.release(List.of(r.id()));
+        assertThat(albums.cover(cleared)).isPresent();
+
+        var stale = Tombstone.of(cleared); // an edit lands while an operation indexes: the commit keeps it
+        var edited = albums.patch(r.id(), new AlbumPatch(null, null, null, null, null, null, 3, null, null, null, null, null, null));
+        assertThat(albums.commit(stale, cleared, repo.entries(r.id()), null, Map.of()))
+                .extracting(Album::rating, Album::revision).containsExactly(3, edited.revision() + 1);
+
+        Files.createDirectories(root.resolve("T"));
+        Files.move(root.resolve("S"), root.resolve("T/S"));
+        assertThat(albums.rebase(normalizedRoot() + "/S", normalizedRoot() + "/T/S", normalizedRoot())).isEqualTo(1);
+        assertThat(repo.find(r.id()).orElseThrow()).extracting(Album::path, Album::root, Album::rating, Album::revision)
+                .containsExactly(normalizedRoot() + "/T/S", normalizedRoot(), 3, edited.revision() + 2);
     }
 
     private ScanProgress scan(BooleanSupplier cancelled, String... exclusions) throws IOException {

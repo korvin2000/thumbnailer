@@ -51,6 +51,6 @@ class FileNameExtractor implements MetadataExtractor {
         description.addAll(vols);
         return new AlbumMeta(name.isEmpty() ? baseName : name, model, studio, null,
                 description.isEmpty() ? null : String.join(", ", description), date,
-                tags.stream().map(t -> t.toLowerCase(Locale.ROOT)).toList());
+                tags.stream().map(t -> t.toLowerCase(Locale.ROOT)).toList(), null);
     }
 }

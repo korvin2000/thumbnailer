@@ -62,6 +62,39 @@ public class Cry {
         }
     }
 
+    /**
+     * xanderView's file for image bytes {@code plain} under its original {@code name} (the format's reference writer;
+     * whole files in memory).
+     */
+    public static byte[] encrypt(byte[] plain, String name, byte[] key) {
+        var n = name.getBytes(UTF_8);
+        int p = (16 - (plain.length + 2 + n.length) % 16) % 16, l = n.length + p;
+        var body = ByteBuffer.allocate(2 + l + plain.length).putShort((short) (Math.min(l, 32767) - 32768)).put(n)
+                .put(new byte[p]).put(plain).array();
+        try {
+            return ByteBuffer.allocate(HEADER + body.length).putInt(plain.length).put((byte) 1)
+                    .put(aes(Cipher.ENCRYPT_MODE, key).doFinal(body)).array();
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The original name a {@code .cry} file embeds, from its leading bytes (the header and the blocks holding the name). */
+    public static String plainName(byte[] head, byte[] key) throws IOException {
+        int blocks = (head.length - HEADER) & ~15;
+        if (blocks <= 0) throw new IOException("Not a .cry file");
+        byte[] plain;
+        try {
+            plain = aes(Cipher.DECRYPT_MODE, key).doFinal(head, HEADER, blocks);
+        } catch (GeneralSecurityException e) {
+            throw new IOException(e);
+        }
+        int end = 2, stop = 2 + nameLength(plain);
+        while (end < Math.min(stop, blocks) && plain[end] != 0) end++;
+        if (end == blocks && end < stop) throw new IOException("The head ends inside the name");
+        return new String(plain, 2, end - 2, UTF_8);
+    }
+
     /** Decrypts with the configured key ({@code cryKey}, hex), captured now: a later change does not reach this container. */
     public AlbumContainer wrap(AlbumContainer in) {
         var hex = settings.get().cryKey();
@@ -218,7 +251,7 @@ public class Cry {
 
         /** The bytes before the image (length field and name) once the header predicts L; a wrong key fails here. */
         private int skip(String name, int f, long size, byte[] plain) throws IOException {
-            int l = ((plain[0] & 0xFF) << 8 | plain[1] & 0xFF) ^ 0x8000;
+            int l = nameLength(plain);
             boolean ok = f >= 0 && (size < 0 ? l <= 32767 : (size - HEADER) % 16 == 0 && l == size - HEADER - 2 - f);
             if (!ok) throw refuse(name);
             return 2 + l;
@@ -231,13 +264,20 @@ public class Cry {
 
         private Cipher cipher(String name) throws IOException {
             if (key == null) throw new IOException("No password for " + name);
-            try {
-                var c = Cipher.getInstance("AES/ECB/NoPadding");
-                c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"));
-                return c;
-            } catch (GeneralSecurityException e) {
-                throw new IllegalStateException(e);
-            }
+            return aes(Cipher.DECRYPT_MODE, key);
+        }
+    }
+
+    /** The padded name's length, from the first two plaintext bytes (biased by 32768). */
+    private static int nameLength(byte[] plain) { return ((plain[0] & 0xFF) << 8 | plain[1] & 0xFF) ^ 0x8000; }
+
+    private static Cipher aes(int mode, byte[] key) {
+        try {
+            var c = Cipher.getInstance("AES/ECB/NoPadding");
+            c.init(mode, new SecretKeySpec(key, "AES"));
+            return c;
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
         }
     }
 }

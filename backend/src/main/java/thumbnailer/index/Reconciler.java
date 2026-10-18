@@ -80,7 +80,7 @@ class Reconciler {
                 // Only changed albums load in full; a moved one is relocated by the commit below only.
                 var base = (stamp != null ? repo.find(stamp.id()) : moved(container.contentId(), path)).orElse(null);
                 if (base != null) seen.add(base.id());
-                var indexed = indexer.index(container, root, path, found.kind(), base, turn, lane);
+                var indexed = indexer.index(container, root, path, found.kind(), base, turn, lane, Map.of());
                 if (indexed.isEmpty() || cancelled.getAsBoolean()) return false; // cancelled workers publish nothing
                 var x = indexed.get();
                 seen.add(albums.commit(base, x.album(), x.entries(), x.cover()).id());

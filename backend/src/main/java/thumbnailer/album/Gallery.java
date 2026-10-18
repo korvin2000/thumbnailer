@@ -49,8 +49,12 @@ final class Gallery {
     private long lastAsk = System.nanoTime();
     private boolean closed;
 
-    /** Ready to {@link #start}; {@code spec} must be the current thumbnail spec (its threads too). */
-    Gallery(Source source, List<String> names, Disks.Lane lane, Limiter queue, Limiter slots, Render spec, Thumbnailer thumbnailer) {
+    /**
+     * Ready to {@link #start}; {@code spec} must be the current thumbnail spec (its threads too); {@code ended} runs on
+     * the pass once it has stopped and closed the container.
+     */
+    Gallery(Source source, List<String> names, Disks.Lane lane, Limiter queue, Limiter slots, Render spec, Thumbnailer thumbnailer,
+            Runnable ended) {
         names.forEach(n -> thumbs.put(n, new CompletableFuture<>()));
         unread.addAll(names);
         pass = Thread.ofVirtual().name("gallery").unstarted(() -> {
@@ -92,6 +96,7 @@ final class Gallery {
                 var t = turn.get();
                 if (t != null) t.close();
                 unread.forEach(n -> thumbs.getOrDefault(n, new CompletableFuture<>()).completeExceptionally(new CancellationException("not reached")));
+                ended.run();
             }
         });
     }

@@ -25,8 +25,18 @@ public class Containers {
 
     /** Every container comes {@linkplain Cry#wrap wrapped}: {@code .cry} members decrypt with the key configured now. */
     public AlbumContainer open(Kind kind, Path path, Exclusions exclusions) throws IOException {
-        return cry.wrap(factories.stream().filter(f -> f.kind() == kind).findFirst()
-                .orElseThrow(() -> new IllegalStateException("No container factory for " + kind)).open(path, exclusions));
+        return cry.wrap(openRaw(kind, path, exclusions));
+    }
+
+    /**
+     * Every file as it is on disk, {@code .cry} members as ciphertext: what a lossless move, pack or compare copies.
+     * The one exception to wrapped containers, for file operations only.
+     */
+    public AlbumContainer openRaw(Kind kind, Path path) throws IOException { return openRaw(kind, path, Exclusions.NONE); }
+
+    private AlbumContainer openRaw(Kind kind, Path path, Exclusions exclusions) throws IOException {
+        return factories.stream().filter(f -> f.kind() == kind).findFirst()
+                .orElseThrow(() -> new IllegalStateException("No container factory for " + kind)).open(path, exclusions);
     }
 
     /** The canonical form of every path the application stores or sends: absolute, normalized, '/' separators. */

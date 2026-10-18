@@ -15,6 +15,7 @@ symbols, so open code only after the map points to it.
 | [README.md](README.md) | user-facing build/run/config/keyboard | user-visible changes |
 | [goal.md](goal.md) | original brief (RU/EN), source of INTENT | never |
 | [hdd_ssd_fix_goals.md](hdd_ssd_fix_goals.md) | HDD vs SSD scan and viewer strategy: problem, design (lanes, detection, gallery pass), plan, test rigs (RU) | the plan is refined or lands |
+| [catalog_plan.md](catalog_plan.md) | catalog (models, studios, photographers, genres, favorites), file operations, duplicates, viewer rework, plugin contracts: data model, flows, wire, UI, parallel tracks; source: [todo/goals.txt](todo/goals.txt), [todo/ModelCard.md](todo/ModelCard.md), [todo/StudioCard.md](todo/StudioCard.md) | the plan is refined or a track lands |
 
 ## L1 — source maps
 
@@ -57,3 +58,7 @@ symbols, so open code only after the map points to it.
 | server-side setting (settings.json) | F `core/model.ts` `Settings` · F `ui/settings/folders-page.ts` / `thumbnails-page.ts` (draft in `settings-dialog.ts`) · F `core/mock-gateway.ts` defaults · B `settings/` |
 | config key | `application.yml` · `@Value` site · README table · ARCH §2 |
 | disk read strategy (SSD/HDD) | B `source/Disks` (detection, lanes) · B `album/AlbumService.render` (turn → queue → decode slots) · B `index/Reconciler` + `AlbumIndexer` (album turn) · B `settings/Settings.Root.storage` · F `ui/settings/folders-page.ts` · [hdd_ssd_fix_goals.md](hdd_ssd_fix_goals.md) |
+| catalog entity / link / alias | B `catalog/*` (`Catalog`, `CatalogRepository`, `EntityKind`, `Names`) · B `store/jdbc/JdbcCatalogRepository` · B `album/Link` · B `AlbumService.commit` (resolution) · B `web/ws/CatalogApi` · F `core/catalog-store.ts` · F `ui/entity-card.ts`, `ui/entity-tree.ts` · F mock `core/mock-catalog.ts` · [catalog_plan.md](catalog_plan.md) §2 · ARCH §1.1 |
+| file operation (move, pack, crypt, …) | B `ops/FileOps` (+ `Op`, `Preflight`, journal) · B `ops/pack/*` · B `index/Reindexer`, `index/Gate` · B `AlbumService.quiesce/relocate/rebase` · B `web/ws/OpsApi` · F `core/ops-store.ts` · F `ui/shared/confirm.ts` · F mock `core/mock-ops.ts` · [catalog_plan.md](catalog_plan.md) §4 |
+| photo marks / metadata / bio | B `catalog/CatalogRepository.marks` · B `web/ws/PhotosApi` · F `ui/album-viewer.ts` · F mock `core/mock-photos.ts` |
+| selection / context menu / confirm | F `core/selection.ts` · F `ui/shared/context-menu.ts`, `confirm.ts`, `entity-picker.ts` · [catalog_plan.md](catalog_plan.md) §7.1 |

@@ -1,6 +1,7 @@
 import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, viewChild } from '@angular/core';
 import { Router, RouterOutlet } from '@angular/router';
+import { CatalogStore } from './core/catalog-store';
 import { BasenamePipe } from './core/format';
 import { Tile } from './core/layout';
 import { Album } from './core/model';
@@ -11,6 +12,9 @@ import { AlbumCard } from './ui/album-card';
 import { DetailsPanel } from './ui/details-panel';
 import { LocationBar } from './ui/location-bar';
 import { SettingsDialog } from './ui/settings/settings-dialog';
+import { ConfirmDialog } from './ui/shared/confirm';
+import { ContextMenuView } from './ui/shared/context-menu';
+import { EntityPickerDialog } from './ui/shared/entity-picker';
 import { Icon } from './ui/shared/icon';
 import { Sidebar } from './ui/sidebar';
 import { TileGrid } from './ui/tile-grid';
@@ -19,7 +23,7 @@ import { Topbar } from './ui/topbar';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, Topbar, Sidebar, LocationBar, TileGrid, AlbumCard, DetailsPanel, SettingsDialog, Icon, BasenamePipe, DecimalPipe],
+  imports: [RouterOutlet, Topbar, Sidebar, LocationBar, TileGrid, AlbumCard, DetailsPanel, SettingsDialog, ContextMenuView, ConfirmDialog, EntityPickerDialog, Icon, BasenamePipe, DecimalPipe],
   templateUrl: './app.html',
   styleUrl: './app.scss',
   host: { '(document:keydown)': 'onKey($event)' },
@@ -27,6 +31,7 @@ import { Topbar } from './ui/topbar';
 })
 export class App {
   protected readonly store = inject(AlbumStore);
+  protected readonly catalog = inject(CatalogStore);
   protected readonly prefs = inject(Prefs);
   protected readonly toasts = inject(Toasts);
   private readonly router = inject(Router);

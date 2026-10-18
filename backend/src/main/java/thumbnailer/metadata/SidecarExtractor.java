@@ -50,7 +50,7 @@ class SidecarExtractor implements MetadataExtractor {
         LINE.matcher(text).results().forEach(m -> fields.putIfAbsent(m.group(1).toLowerCase(Locale.ROOT), m.group(2)));
         return new AlbumMeta(fields.get("name"), fields.get("model"), fields.get("studio"), fields.get("photographer"),
                 fields.get("description"), MetadataExtractor.date(fields.get("date")),
-                TAG.matcher(text).results().map(m -> m.group(1)).toList());
+                TAG.matcher(text).results().map(m -> m.group(1)).toList(), null);
     }
 
     private static Optional<String> find(List<String> names, String file) {

@@ -12,8 +12,9 @@
                    [hasMore]="store.albums().length < store.total()" [empty]="emptyState"
                    (select)="store.selectedId.set($event)" (open)="open($event)" (reachedEnd)="store.loadMore()">
       <ng-template let-a>
-        <app-album-card [album]="a" [selected]="a.id === store.selectedId()" [showTags]="prefs.showTags()"
-                        (select)="store.selectedId.set(a.id)" (open)="open(a.id)" (info)="showInfo(a.id)" (hover)="store.hoveredId.set($event)" />
+        <app-album-card [album]="a" [selected]="a.id === store.selectedId()" [checked]="store.selection.has(a.id)" [showTags]="prefs.showTags()"
+                        (select)="store.selectedId.set(a.id)" (open)="open(a.id)" (info)="showInfo(a.id)" (hover)="store.hoveredId.set($event)"
+                        (copies)="catalog.copiesOf.set(a.id)" />
       </ng-template>
     </app-tile-grid>
 
@@ -70,6 +71,9 @@
 </footer>
 
 <app-settings-dialog />
+<app-context-menu />
+<app-confirm />
+<app-entity-picker />
 
 <div class="toasts">
   @for (t of toasts.list(); track t.id) {

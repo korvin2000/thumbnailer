@@ -3,21 +3,30 @@ import { ChangeDetectionStrategy, Component, inject, input, linkedSignal, output
 import { RouterLink } from '@angular/router';
 import { BytesPipe, MegapixelsPipe } from '../core/format';
 import { Gateway } from '../core/gateway';
-import { Album, AlbumPatch } from '../core/model';
+import { Album, AlbumPatch, EntityKind } from '../core/model';
 import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
+import { EntityCardView } from './entity-card';
 import { Icon } from './shared/icon';
 import { Rating } from './shared/rating';
 
 type TextField = 'name' | 'model' | 'studio' | 'photographer' | 'description';
+/** The credit inputs: each edits the raw text, its chips show the entities that text resolved to. */
+const CREDITS = [
+  { role: 'MODEL', field: 'model', label: 'Model', icon: 'user', list: 'dl-models' },
+  { role: 'STUDIO', field: 'studio', label: 'Studio', icon: 'building', list: 'dl-studios' },
+  { role: 'PHOTOGRAPHER', field: 'photographer', label: 'Photographer', icon: 'camera', list: 'dl-photographers' },
+] as const;
 
 /** Floating panel with everything about one album; every field saves itself on change. */
 @Component({
   selector: 'app-details-panel',
-  imports: [Icon, Rating, RouterLink, BytesPipe, MegapixelsPipe, DatePipe, DecimalPipe],
+  imports: [Icon, Rating, RouterLink, BytesPipe, MegapixelsPipe, DatePipe, DecimalPipe, EntityCardView],
   template: `
     <header>
-      <span class="label">{{ hovering() ? 'Hovering' : 'Selected' }}</span>
+      @if (mode() === 'entity') {
+        <button class="btn icon-btn sm ghost" title="Back to the album" (click)="mode.set('album')"><app-icon name="arrowLeft" /></button><span class="label">Catalog</span>
+      } @else { <span class="label">{{ hovering() ? 'Hovering' : 'Selected' }}</span> }
       <span class="state">
         @if (saving()) { <span class="spinner"></span> Saving }
         @else if (saved()) { <app-icon name="check" [size]="13" /> Saved }
@@ -25,7 +34,9 @@ type TextField = 'name' | 'model' | 'studio' | 'photographer' | 'description';
       <button class="btn icon-btn sm ghost" title="Close (I)" (click)="close.emit()"><app-icon name="x" /></button>
     </header>
 
-    @if (album(); as a) {
+    @if (mode() === 'entity' && entityId() !== null) {
+      <div class="body"><app-entity-card [entityId]="entityId()!" /></div>
+    } @else if (album(); as a) {
       <div class="body">
         <a class="cover" [class.portrait]="a.coverPortrait" [routerLink]="['/album', a.id]" title="Open album">
           <img [src]="gw.coverUrl(a)" [alt]="a.name" />
@@ -57,9 +68,13 @@ type TextField = 'name' | 'model' | 'studio' | 'photographer' | 'description';
         </section>
 
         <section class="fields">
-          <label><span><app-icon name="user" [size]="13" /> Model</span><input class="input sm" [value]="a.model ?? ''" (change)="save('model', $any($event.target).value)" list="dl-models" /></label>
-          <label><span><app-icon name="building" [size]="13" /> Studio</span><input class="input sm" [value]="a.studio ?? ''" (change)="save('studio', $any($event.target).value)" list="dl-studios" /></label>
-          <label><span><app-icon name="camera" [size]="13" /> Photographer</span><input class="input sm" [value]="a.photographer ?? ''" (change)="save('photographer', $any($event.target).value)" list="dl-photographers" /></label>
+          @for (c of credits; track c.role) {
+            <label><span><app-icon [name]="c.icon" [size]="13" /> {{ c.label }}</span><input class="input sm" [value]="a[c.field] ?? ''" (change)="save(c.field, $any($event.target).value)" [attr.list]="c.list" /></label>
+            @let linked = links(a, c.role);
+            @if (linked.length) {
+              <div class="links">@for (l of linked; track l.entity) { <button class="chip" [title]="l.alias ? 'Written as ' + l.alias : 'Show ' + l.name" (click)="showEntity(l.entity)">{{ l.name }}</button> }</div>
+            }
+          }
           <label class="col"><span>Description</span><textarea class="input" rows="3" [value]="a.description ?? ''" (change)="save('description', $any($event.target).value)"></textarea></label>
           <datalist id="dl-models">@for (x of store.facets()?.models; track x.value) { <option [value]="x.value"></option> }</datalist>
           <datalist id="dl-studios">@for (x of store.facets()?.studios; track x.value) { <option [value]="x.value"></option> }</datalist>
@@ -105,6 +120,7 @@ type TextField = 'name' | 'model' | 'studio' | 'photographer' | 'description';
     .fields label { display: grid; grid-template-columns: 108px 1fr; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
     .fields label.col { grid-template-columns: 1fr; gap: 4px; }
     .fields label > span { display: inline-flex; align-items: center; gap: 6px; }
+    .links { display: flex; flex-wrap: wrap; gap: 4px; margin: -2px 0 2px 116px; }
     .tags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
     .tags .t { font: inherit; color: inherit; }
     .tag-input { width: 110px; }
@@ -120,6 +136,10 @@ export class DetailsPanel {
   protected readonly gw = inject(Gateway);
   protected readonly store = inject(AlbumStore);
   private readonly toasts = inject(Toasts);
+  protected readonly credits = CREDITS;
+  /** The panel shows the album, or a catalog entity opened from one of its chips (back arrow returns). */
+  readonly mode = signal<'album' | 'entity'>('album');
+  readonly entityId = signal<number | null>(null);
   protected readonly saving = signal(false);
   protected readonly saved = linkedSignal<Album | null, boolean>({ source: this.album, computation: () => false });
   /** Local tag list so quick successive edits build on each other instead of on the last acknowledged album. */
@@ -129,6 +149,10 @@ export class DetailsPanel {
     const a = this.album();
     if (a && (a[field] ?? '') !== value.trim()) this.patch({ [field]: value.trim() });
   }
+
+  showEntity(id: number) { this.entityId.set(id); this.mode.set('entity'); }
+
+  protected links(a: Album, role: EntityKind) { return (a.links ?? []).filter(l => l.role === role); }
 
   protected setTags(tags: string[]) { this.tags.set(tags); this.patch({ tags }); }
 

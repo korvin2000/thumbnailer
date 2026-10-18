@@ -22,7 +22,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
@@ -33,6 +32,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import thumbnailer.catalog.Catalog;
 import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
@@ -43,7 +43,8 @@ import thumbnailer.source.Exclusions;
  * Runs one scan at a time, of every root or of folders at or below roots (scopes): discovery on the scan thread, one
  * virtual thread per album; the walk waits while {@code index-threads} albums are in flight, so memory and open files
  * stay bounded at any library size. Albums take turns on their disk ({@link Disks}): one after another on a disk that
- * pays for seeks, all at once on an SSD.
+ * pays for seeks, all at once on an SSD. A scan holds the {@link Gate} while it runs; the catalog counts it suspended
+ * are rebuilt when it ends.
  */
 @Service
 public class ScanService implements AutoCloseable {
@@ -55,58 +56,78 @@ public class ScanService implements AutoCloseable {
     private final Reconciler reconciler;
     private final ApplicationEventPublisher events;
     private final Disks disks;
+    private final Gate gate;
+    private final Catalog catalog;
     private final ExecutorService pool;
     private final int width; // albums indexed at once
-    private final AtomicReference<AtomicBoolean> running = new AtomicReference<>(); // the running scan's cancel flag
     private final Map<String, Instant> lastScans = new ConcurrentHashMap<>();
+    private final Object cancelLock = new Object(); // taking the gate and publishing the flag are one step to cancel()
+    private AtomicBoolean cancelled = new AtomicBoolean(); // the last started scan's cancel flag (guarded by cancelLock)
     private volatile Thread coordinator;
-    private volatile boolean frozen; // a restart is pending: no scan may start
 
-    ScanService(SettingsStore settings, AlbumDiscovery discovery, Reconciler reconciler,
-                ApplicationEventPublisher events, Disks disks, @Value("${thumbnailer.index-threads:0}") int threads) {
+    ScanService(SettingsStore settings, AlbumDiscovery discovery, Reconciler reconciler, ApplicationEventPublisher events,
+                Disks disks, Gate gate, Catalog catalog, @Value("${thumbnailer.index-threads:0}") int threads) {
         this.settings = settings;
         this.discovery = discovery;
         this.reconciler = reconciler;
         this.events = events;
         this.disks = disks;
+        this.gate = gate;
+        this.catalog = catalog;
         this.width = threads > 0 ? threads : Runtime.getRuntime().availableProcessors();
         this.pool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("index-", 1).factory());
     }
 
     /**
-     * Starts scanning the given paths ({@code null} = every root) in the background; false if a scan is running. Each
-     * path must be a root or lie below one. Also false once {@link #freeze frozen}.
+     * Starts scanning the given paths ({@code null} = every root) in the background; false if the {@link Gate} is held
+     * (a scan, an operation, a pending restart, a settings save). Each path must be a root or lie below one. The gate
+     * comes first, so the settings it reads cannot change under it (a roots save holds the gate); it is let go again if
+     * the paths are refused or the thread does not start. The scan's cancel flag is published in the same step as the
+     * gate, before the scopes are resolved, so a {@link #cancel} that sees the scan running reaches it.
      */
     public boolean start(List<String> paths) {
-        var s = settings.get();
-        var scopes = scopes(s, paths);
         var cancel = new AtomicBoolean();
-        if (frozen || !running.compareAndSet(null, cancel)) return false;
-        coordinator = Thread.ofPlatform().name("scan").daemon(true).start(() -> {
-            ScanProgress last;
-            try {
-                last = scan(s, scopes, cancel::get);
-            } finally {
-                running.set(null);
-            }
-            events.publishEvent(last);
-        });
-        return true;
+        Gate.Hold hold;
+        synchronized (cancelLock) {
+            hold = gate.tryEnter(Gate.Activity.SCAN).orElse(null);
+            if (hold == null) return false;
+            cancelled = cancel;
+        }
+        try {
+            var s = settings.get();
+            var scopes = scopes(s, paths);
+            coordinator = Thread.ofPlatform().name("scan").daemon(true).start(() -> {
+                ScanProgress last;
+                try (hold) {
+                    last = scan(s, scopes, cancel::get);
+                }
+                try {
+                    catalog.recount();
+                } catch (RuntimeException e) {
+                    log.warn("Cannot recount the catalog: {}", e.toString());
+                }
+                events.publishEvent(last);
+            });
+            return true;
+        } catch (Throwable e) {
+            synchronized (cancelLock) { cancelled = new AtomicBoolean(); } // before the gate opens: no other start has published
+            hold.close();
+            throw e;
+        }
     }
 
-    public boolean running() { return running.get() != null; }
+    public boolean running() { return gate.current() == Gate.Activity.SCAN; }
 
     /**
-     * Refuses every later {@link #start}, for the restart a library operation scheduled; the new context starts thawed.
-     * A scan that started just before is stopped by the restart's close like any other.
+     * Takes the gate for the restart a library operation schedules, refusing every later {@link #start}; the new
+     * context starts thawed. False if the gate is held (a scan, an operation, a settings save, a restart).
      */
-    public void freeze() { frozen = true; }
+    public boolean freeze() { return gate.tryEnter(Gate.Activity.RESTART).isPresent(); }
 
-    public boolean frozen() { return frozen; }
+    public boolean frozen() { return gate.current() == Gate.Activity.RESTART; }
 
     public void cancel() {
-        var cancel = running.get();
-        if (cancel != null) cancel.set(true);
+        synchronized (cancelLock) { cancelled.set(true); }
     }
 
     public Optional<Instant> lastScan(String root) { return Optional.ofNullable(lastScans.get(root)); }

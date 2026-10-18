@@ -48,8 +48,16 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   `MAX_SCALE` 0.15. Keep it Angular-free.
 - `Icon` uses `bypassSecurityTrustHtml` on its static map only — never pass user input.
 - New layout mode → also add it to `LAYOUT_MODES` (Prefs validates stored values against it).
+- Catalog/ops state lives beside `AlbumStore`, not in it: `CatalogStore` (entities, card, `version` bumped on its own save/delete/merge/confirm and on
+  `catalogChanged`), `OpsStore` (progress, last result); `AlbumStore.onEvent` only routes the events. Display names
+  come from `Album.links`; the inputs edit the raw text (`model`, `studio`, …) — never write link names back into it.
+- One `Selection` class (`core/selection.ts`, cap `SELECT_CAP` = 500) for albums, photos and entity rows; plain click
+  = only this id, Ctrl toggles, Shift ranges over the grid order.
+- Dialog-style services return promises: `FolderPicker.pick()`, `Confirm.ask()`, `EntityPicker.pick()`; the context
+  menu is `ContextMenu.open(x, y, items)` with data-only `MenuEntry`s built per subject on every open. Their
+  components are mounted once in `app.html`.
 
 ## Tests
 
 Plain Vitest specs next to the code (`*.spec.ts`, explicit `import { describe, it, expect } from 'vitest'`), no
-TestBed so far; pure logic in `core/` is the place to test. Covered: `layout.ts`, `search-syntax.ts`, `paths.ts`.
+TestBed so far; pure logic in `core/` is the place to test. Covered: `layout.ts`, `search-syntax.ts`, `paths.ts`, `selection.ts`, the mock catalog (over a `MockGateway`); a root service is built with `Injector.create` and a fake `Gateway` (`catalog-store.spec.ts`).

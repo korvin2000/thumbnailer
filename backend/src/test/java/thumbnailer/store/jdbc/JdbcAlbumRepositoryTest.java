@@ -1,12 +1,14 @@
 package thumbnailer.store.jdbc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -23,9 +25,14 @@ import thumbnailer.album.AlbumMeta;
 import thumbnailer.album.AlbumQuery;
 import thumbnailer.album.AlbumQuery.Sort;
 import thumbnailer.album.AlbumRepository.Folder;
+import thumbnailer.album.AlbumRepository.Save;
 import thumbnailer.album.AlbumRepository.Stats;
 import thumbnailer.album.AlbumRepository.Tombstone;
 import thumbnailer.album.Entry;
+import thumbnailer.album.Link;
+import thumbnailer.catalog.Entity;
+import thumbnailer.catalog.EntityKind;
+import thumbnailer.catalog.Resolution;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Kind;
 import tools.jackson.databind.json.JsonMapper;
@@ -46,11 +53,11 @@ class JdbcAlbumRepositoryTest {
 
     @Test
     void entriesRoundTripPackedAndSurviveMetadataSaves() {
-        var entries = List.of(new Entry(0, "IMG_0001.jpg", 4_000_000, 1_700_000_000_123L, 6000, 4000, LocalDateTime.of(2019, 5, 1, 10, 0, 7)),
-                new Entry(1, "IMG_0002.jpg", 1, -5, 1, 1, null),
-                new Entry(2, "nested/Ünïcode фото.png", 0, 0, 16383, 2, LocalDateTime.of(1969, 12, 31, 23, 59, 59)),
-                new Entry(3, "nested/Ünïcode фото😀.png", 0, 0, 1, 1, null),
-                new Entry(4, "nested/Ünïcode фото😁.png", 0, 0, 1, 1, null)); // shares the high surrogate only
+        var entries = List.of(new Entry(0, "IMG_0001.jpg", 4_000_000, 1_700_000_000_123L, 6000, 4000, LocalDateTime.of(2019, 5, 1, 10, 0, 7), 3),
+                new Entry(1, "IMG_0002.jpg", 1, -5, 1, 1, null, 1),
+                new Entry(2, "nested/Ünïcode фото.png", 0, 0, 16383, 2, LocalDateTime.of(1969, 12, 31, 23, 59, 59), 0),
+                new Entry(3, "nested/Ünïcode фото😀.png", 0, 0, 1, 1, null, 0),
+                new Entry(4, "nested/Ünïcode фото😁.png", 0, 0, 1, 1, null, 0)); // shares the high surrogate only
         repo.save(album("1", "A", null, List.of(), 1, null, 0), entries);
         repo.save(album("1", "A edited", null, List.of(), 1, null, 0), null);
         assertThat(repo.entries("1")).isEqualTo(entries);
@@ -68,7 +75,7 @@ class JdbcAlbumRepositoryTest {
         t.update("INSERT INTO entry VALUES ('a', 1, 'b.jpg', 2, 3, 4, 5, NULL), ('a', 0, 'a.jpg', 1, 2, 3, 4, NULL), ('b', 0, 'c.jpg', 1, 1, 1, 1, NULL)");
         var upgraded = new JdbcAlbumRepository(t, JSON, Path.of("build"));
         assertThat(upgraded.entries("a")).extracting(Entry::name).containsExactly("a.jpg", "b.jpg");
-        assertThat(upgraded.entry("b", 0)).hasValue(new Entry(0, "c.jpg", 1, 1, 1, 1, null));
+        assertThat(upgraded.entry("b", 0)).hasValue(new Entry(0, "c.jpg", 1, 1, 1, 1, null, 0));
         assertThat(t.queryForObject("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'ENTRY'", Integer.class)).isZero();
     }
 
@@ -116,10 +123,13 @@ class JdbcAlbumRepositoryTest {
     @Test
     void roundTripsTheInternalLayers() {
         var a = album("x", "Name", "Model", List.of("tag"), 1, null, 0);
-        var edited = new AlbumMeta(null, "", null, null, null, null, List.of());
+        var edited = new AlbumMeta(null, "", null, null, null, null, List.of(), List.of("Glamour"));
         repo.save(a.withEdits(edited), List.of());
         var stored = repo.find("x").orElseThrow();
-        assertThat(stored.internal()).isEqualTo(a.withEdits(edited).internal());
+        assertThat(stored.internal()).isEqualTo(new Album.Internal("cx", "sx", a.internal().extracted(), edited, stored.internal().seq()));
+        assertThat(stored.internal().seq()).isPositive();
+        assertThat(stored.genres()).containsExactly("Glamour");
+        assertThat(stored.copies()).isEqualTo(1);
         assertThat(stored.model()).isNull();
         assertThat(stored.tags()).isEmpty();
     }
@@ -153,15 +163,118 @@ class JdbcAlbumRepositoryTest {
 
     @Test
     void deleteLeavesATombstoneThatTheNextSaveOfItsIdConsumes() {
-        var edited = new AlbumMeta(null, "Bob", null, null, null, null, List.of("x"));
-        var t = at("t", ROOT + "/T", Kind.DIRECTORY).withEdits(edited).with("t", 4, 7).withCover("b.jpg", true, false);
+        var edited = new AlbumMeta(null, "Bob", null, null, null, null, List.of("x"), null);
+        var t = at("t", ROOT + "/T", Kind.DIRECTORY).withEdits(edited).with("t", 4, 7).withCover("b.jpg", true, false).withHidden(true);
         repo.save(t, List.of());
+        int seq = repo.find("t").orElseThrow().internal().seq();
         repo.delete("t");
         assertThat(repo.find("t")).isEmpty();
-        assertThat(repo.recall("ct")).hasValue(new Tombstone("t", 4, 7, "b.jpg", true, edited));
+        assertThat(repo.recall("ct")).hasValue(new Tombstone("t", 4, 7, "b.jpg", true, edited, seq, true));
         assertThat(repo.recall("ct")).as("a peek").isPresent();
-        repo.save(t.with("t", 5, 7), List.of());
+        repo.save(at("u", ROOT + "/U", Kind.DIRECTORY), List.of());
+        repo.save(t.adopt(repo.recall("ct").orElseThrow()), List.of());
         assertThat(repo.recall("ct")).isEmpty();
+        assertThat(repo.find("t").orElseThrow().internal().seq()).as("the revived album has its seq again").isEqualTo(seq);
+    }
+
+    @Test
+    void tombstonesAreKeptPerAlbumAndPurgedWithTheirRows() {
+        var catalog = new JdbcCatalogRepository(new JdbcTemplate(db));
+        int list = catalog.insert(new Entity(0, EntityKind.LIST, "Best", 0, false, 0, null, null), "best");
+        for (var id : List.of("d1", "d2")) repo.save(at(id, ROOT + "/" + id, Kind.DIRECTORY, "cd"), List.of());
+        int seq1 = repo.find("d1").orElseThrow().internal().seq();
+        catalog.setListLink(seq1, list, true);
+        catalog.mark(seq1, "001.jpg", 4, List.of(list));
+        assertThat(catalog.find(list).orElseThrow().albums()).isEqualTo(1);
+        repo.delete("d1");
+        repo.delete("d2");
+        assertThat(catalog.find(list).orElseThrow().albums()).as("a visible album's removal drops its counts").isZero();
+        new JdbcTemplate(db).update("UPDATE removed SET removed_at = 1000 WHERE id = 'd1'");
+        assertThat(repo.recall("cd").orElseThrow().id()).as("one per album, the newest wins").isEqualTo("d2");
+        assertThat(catalog.albumLinks(seq1)).as("kept for a revival").hasSize(1);
+
+        assertThat(repo.purge(Instant.ofEpochMilli(2000))).isEqualTo(1);
+        assertThat(repo.recall("cd").orElseThrow().id()).isEqualTo("d2");
+        assertThat(catalog.albumLinks(seq1)).isEmpty();
+        assertThat(catalog.marks(seq1)).isEmpty();
+        assertThat(new JdbcTemplate(db).queryForObject("SELECT COUNT(*) FROM photo_link", Integer.class)).isZero();
+    }
+
+    @Test
+    void anUpgradedLibraryNumbersItsAlbumsAndKeysTombstonesPerAlbum() {
+        for (var id : List.of("a", "b", "c")) repo.save(at(id, ROOT + "/" + id, Kind.DIRECTORY), List.of());
+        var t = new JdbcTemplate(db); // back to the shapes before the catalog: no seq/hidden/bio, tombstones by content
+        t.execute("DROP INDEX album_seq");
+        for (var column : List.of("seq", "hidden", "bio")) t.execute("ALTER TABLE album DROP COLUMN " + column);
+        t.execute("DROP TABLE removed");
+        t.execute("CREATE TABLE removed (content_id VARCHAR(64) PRIMARY KEY, id VARCHAR(36) NOT NULL, revision BIGINT NOT NULL, "
+                + "rating INT NOT NULL, cover VARCHAR(4096), cover_pinned BOOLEAN NOT NULL, edited_json CLOB NOT NULL, removed_at BIGINT NOT NULL)");
+        t.update("INSERT INTO removed VALUES ('cx', 'x', 3, 5, NULL, FALSE, '{}', 1)");
+        new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(db);
+
+        var upgraded = new JdbcAlbumRepository(t, JSON, Path.of("build"));
+        assertThat(t.queryForList("SELECT seq FROM album", Integer.class)).as("H2 numbers existing rows").doesNotContainNull()
+                .doesNotHaveDuplicates().hasSize(3);
+        assertThat(upgraded.recall("cx")).hasValue(new Tombstone("x", 3, 5, null, false, AlbumMeta.EMPTY, 0, false));
+        upgraded.save(at("y", ROOT + "/y", Kind.DIRECTORY, "cx"), List.of());
+        upgraded.delete("y");
+        assertThat(t.queryForObject("SELECT COUNT(*) FROM removed WHERE content_id = 'cx'", Integer.class)).isEqualTo(2);
+        assertThat(upgraded.find("a").orElseThrow().hidden()).isFalse();
+    }
+
+    @Test
+    void hiddenAlbumsLeaveEveryViewAndCountButNotReconciliation() {
+        repo.save(at("v", ROOT + "/x/v", Kind.DIRECTORY), List.of());
+        repo.save(at("h", ROOT + "/x/h", Kind.DIRECTORY).withHidden(true), List.of());
+        repo.save(at("o", ROOT + "/only", Kind.DIRECTORY).withHidden(true), List.of());
+        assertThat(repo.search(AlbumQuery.ALL)).extracting(Album::id).containsExactly("v");
+        assertThat(repo.search(hidden())).extracting(Album::id).containsExactlyInAnyOrder("h", "o");
+        assertThat(repo.count(AlbumQuery.ALL)).isEqualTo(1);
+        assertThat(repo.folders(ROOT)).containsExactly(new Folder("x", ROOT + "/x", 1, true));
+        assertThat(repo.stats().albums()).isEqualTo(1);
+        assertThat(repo.rootStats().get(ROOT).albums()).isEqualTo(1);
+        assertThat(repo.stamps(ROOT)).hasSize(3);
+        assertThat(repo.byRoot(ROOT + "/only")).extracting(Album::id).containsExactly("o");
+    }
+
+    @Test
+    void linksFilterAndCopiesComeWithEveryAlbumRead() {
+        var catalog = new JdbcCatalogRepository(new JdbcTemplate(db));
+        int nikka = catalog.insert(new Entity(0, EntityKind.MODEL, "Ariell van Hoover", 0, true, 0, null, null), "ariell van hoover");
+        catalog.addAlias(nikka, EntityKind.MODEL, "nikka");
+        int studio = catalog.insert(new Entity(0, EntityKind.STUDIO, "EL-Studio", 0, true, 0, null, null), "el-studio");
+        var links = new Resolution(List.of(new Link(nikka, EntityKind.MODEL, null, "Nikka"), new Link(studio, EntityKind.STUDIO, null, null)),
+                "nikka ariell van hoover");
+        repo.save(at("a", ROOT + "/a", Kind.DIRECTORY, "same"), List.of(), links, new Save(false, true, false, Map.of()));
+        repo.save(at("b", ROOT + "/b", Kind.DIRECTORY, "same"), List.of());
+        repo.save(at("c", ROOT + "/c", Kind.DIRECTORY), List.of());
+
+        var a = repo.find("a").orElseThrow();
+        assertThat(a.links()).containsExactly(new Link(nikka, EntityKind.MODEL, "Ariell van Hoover", "Nikka"),
+                new Link(studio, EntityKind.STUDIO, "EL-Studio", null));
+        assertThat(a.copies()).isEqualTo(2);
+        assertThat(a.stamp()).isEqualTo("same");
+        assertThat(catalog.find(nikka).orElseThrow().albums()).isEqualTo(1);
+        assertThat(repo.search(query("ariell", null, null, null, Sort.NAME, 0, 10))).as("aliases are searchable")
+                .extracting(Album::id).containsExactly("a");
+        assertThat(repo.search(filter(List.of(nikka, studio), null, null))).extracting(Album::id).containsExactly("a");
+        assertThat(repo.search(filter(null, EntityKind.MODEL, null))).extracting(Album::id).containsExactly("b", "c");
+        assertThat(repo.search(filter(null, null, true))).extracting(Album::id, Album::copies)
+                .containsExactly(tuple("a", 2), tuple("b", 2));
+        assertThat(repo.byRoot(ROOT).stream().filter(x -> x.id().equals("c")).findFirst().orElseThrow().copies()).isEqualTo(1);
+
+        repo.save(a, null); // text links are replaced by every save (none here); favorites are not
+        assertThat(repo.find("a").orElseThrow().links()).isEmpty();
+    }
+
+    @Test
+    void relocateBumpsTheRevisionAndByRootMatchesALiteralPrefix() {
+        for (var path : List.of("A_%", "A_%/x", "AB_%", "Ab")) repo.save(at(path, ROOT + "/" + path, Kind.DIRECTORY), List.of());
+        repo.save(at("r", ROOT + "/A_%/x/r", Kind.DIRECTORY), List.of());
+        repo.relocate("Ab", DRIVE + "elsewhere/Ab", DRIVE + "elsewhere");
+        assertThat(repo.find("Ab").orElseThrow()).extracting(Album::path, Album::root, Album::revision)
+                .containsExactly(DRIVE + "elsewhere/Ab", DRIVE + "elsewhere", 2L);
+        assertThat(repo.byRoot(ROOT + "/A_%")).as("_ and % are literal").extracting(Album::id).containsExactlyInAnyOrder("A_%", "A_%/x", "r");
     }
 
     @Test
@@ -193,27 +306,40 @@ class JdbcAlbumRepositoryTest {
     }
 
     /** A plain album at {@code path}: 10 images, 100 bytes, indexed at epoch + hash of the id. */
-    private static Album at(String id, String path, Kind kind) {
-        var extracted = new AlbumMeta(path.substring(path.lastIndexOf('/') + 1), null, null, null, null, null, List.of());
+    private static Album at(String id, String path, Kind kind) { return at(id, path, kind, "c" + id); }
+
+    private static Album at(String id, String path, Kind kind, String contentId) {
+        var extracted = new AlbumMeta(path.substring(path.lastIndexOf('/') + 1), null, null, null, null, null, List.of(), null);
         return new Album(id, ROOT, path, kind, null, "001.jpg", false, 1, false, 10, 100, 2_000_000, 1800, 1200, null,
-                Instant.EPOCH, Instant.ofEpochMilli(id.hashCode()), null, null, null, null, List.of(), 0,
-                new Album.Internal("c" + id, "s" + id, extracted, AlbumMeta.EMPTY)).withEdits(AlbumMeta.EMPTY);
+                Instant.EPOCH, Instant.ofEpochMilli(id.hashCode()), null, null, null, null, List.of(), 0, false, null,
+                List.of(), List.of(), 0, new Album.Internal(contentId, "s" + id, extracted, AlbumMeta.EMPTY, 0)).withEdits(AlbumMeta.EMPTY);
     }
 
     private static AlbumQuery query(String text, List<String> tags, Long minBytes, LocalDate from, Sort sort, int offset, int limit) {
         return new AlbumQuery(text, tags, null, null, null, List.of(ROOT), null, minBytes, null, null, null, null,
-                null, from, null, null, null, sort, offset, limit);
+                null, from, null, null, null, null, null, null, null, null, sort, offset, limit);
     }
 
     private static AlbumQuery inRoot(String root) {
         return new AlbumQuery(null, null, null, null, null, List.of(root), null, null, null, null, null, null, null,
-                null, null, null, null, null, 0, 10);
+                null, null, null, null, null, null, null, null, null, null, 0, 10);
+    }
+
+    private static AlbumQuery filter(List<Integer> entities, EntityKind missing, Boolean duplicates) {
+        return new AlbumQuery(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, entities, missing, null, duplicates, Sort.NAME, 0, 10);
+    }
+
+    private static AlbumQuery hidden() {
+        return new AlbumQuery(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, true, null, Sort.NAME, 0, 10);
     }
 
     private static Album album(String id, String name, String model, List<String> tags, long bytes, LocalDate date, int rating) {
-        var extracted = new AlbumMeta(name, model, null, null, null, date, tags);
+        var extracted = new AlbumMeta(name, model, null, null, null, date, tags, null);
         return new Album(id, ROOT, ROOT + "/" + name, Kind.DIRECTORY, null, "001.jpg", false, 1, false, 10,
                 bytes, 2_000_000, 1800, 1200, date, Instant.EPOCH, Instant.EPOCH, null, null, null, null, List.of(),
-                rating, new Album.Internal("c" + id, "s" + id, extracted, AlbumMeta.EMPTY)).withEdits(AlbumMeta.EMPTY);
+                rating, false, null, List.of(), List.of(), 0, new Album.Internal("c" + id, "s" + id, extracted, AlbumMeta.EMPTY, 0))
+                .withEdits(AlbumMeta.EMPTY);
     }
 }

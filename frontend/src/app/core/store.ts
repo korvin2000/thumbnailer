@@ -1,9 +1,12 @@
 import { computed, effect, inject, Injectable, signal, untracked } from '@angular/core';
+import { CatalogStore } from './catalog-store';
 import { Gateway } from './gateway';
 import {
-  activeFilterCount, Album, AlbumPatch, AlbumQuery, Facets, Filters, GatewayEvent, LibraryInfo, RootStatus, ScanProgress, Settings, SettingsInfo, Sort,
+  activeFilterCount, Album, AlbumPatch, AlbumQuery, ENTITY_KINDS, Facets, Filters, GatewayEvent, LibraryInfo, RootStatus, ScanProgress, Settings, SettingsInfo, Sort,
 } from './model';
+import { OpsStore } from './ops-store';
 import { parseSearch } from './search-syntax';
+import { Selection } from './selection';
 import { Toasts } from './toasts';
 
 const PAGE = 120;
@@ -15,6 +18,8 @@ const REFRESH_MAX_WAIT = 1500;
 export class AlbumStore {
   private readonly gw = inject(Gateway);
   private readonly toasts = inject(Toasts);
+  private readonly catalog = inject(CatalogStore);
+  private readonly ops = inject(OpsStore);
 
   readonly text = signal('');
   readonly filters = signal<Filters>({});
@@ -25,6 +30,8 @@ export class AlbumStore {
   readonly loading = signal(false);
   readonly selectedId = signal<string | null>(null);
   readonly hoveredId = signal<string | null>(null);
+  /** The grid's multi-selection (bulk actions, operations); `selectedId` stays the one album the details panel shows. */
+  readonly selection = new Selection();
   readonly facets = signal<Facets | null>(null);
   readonly scan = signal<ScanProgress | null>(null);
   readonly settings = signal<SettingsInfo | null>(null);
@@ -225,6 +232,7 @@ export class AlbumStore {
       case 'albumRemoved':
         if (this.byId().has(e.albumId)) { this.albums.update(l => l.filter(a => a.id !== e.albumId)); this.total.update(t => Math.max(0, t - 1)); }
         if (this.selectedId() === e.albumId) this.selectedId.set(null);
+        if (this.selection.has(e.albumId)) this.selection.set([...this.selection.ids()].filter(id => id !== e.albumId));
         this.refresh(600);
         break;
       case 'scanProgress': {
@@ -236,7 +244,20 @@ export class AlbumStore {
       }
       case 'connection':
         this.connected.set(e.connected);
-        if (e.connected) { this.loadSettings(); this.loadFacets(0); this.refresh(0); this.treeVersion.update(v => v + 1); }
+        if (e.connected) { this.loadSettings(); this.loadFacets(0); this.refresh(0); this.treeVersion.update(v => v + 1); this.catalog.onChanged(ENTITY_KINDS); }
+        break;
+      // catalog and operation state live in their own stores; this only routes
+      case 'catalogChanged':
+        this.catalog.onChanged(e.kinds);
+        this.refresh(600);
+        this.loadFacets(2000);
+        break;
+      case 'opProgress':
+        this.ops.onProgress(e);
+        break;
+      case 'opResult': // paths, roots and folders may have moved
+        this.ops.onResult(e);
+        this.loadSettings(); this.treeVersion.update(v => v + 1); this.refresh(600);
         break;
     }
   }
