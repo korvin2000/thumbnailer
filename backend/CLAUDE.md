@@ -102,6 +102,13 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   of a name and fails closed on a name listed twice or a link entry, never picking one silently; an entry's byte count
   must equal its listing. `ops/pack` writers create their target new (`CREATE_NEW`, `createFile`, `createDirectory`):
   a file, directory or link already at a `.part` path is never written through, truncated or adopted.
+  `/img` request (its album and entry lookup included) runs inside an `AlbumService.read` (counted; refused once busy) and `quiesce` waits ≤ 5 s for those
+  in flight, gallery passes included. An operation deletes a source only after its verified result exists and only
+  while the source's `Trees.stamp` (names, sizes, mtimes, in the manifest) is unchanged; it never writes over or
+  deletes a staging file (`.part`, `.spill`) it did not create (the `Planner` refuses items where one exists); a
+  journal it cannot read is never rewritten (`Journal` refuses every write until a read succeeds); containment is
+  checked on real paths too (links resolved); `Reindexer.reindex` is idempotent (a replay maps no names twice) and
+  never indexes `.cry` entries with a key that does not open them.
 - The `root` column is informational: scans, pruning, folders and the root filter select by path prefix
   (`path = dir OR path LIKE 'dir/%' ESCAPE '!'`, index `album_path`); `retainRoots` (on `setSettings` and at every scan
   start) re-roots the albums of a removed root that lie under a configured one and removes the rest.

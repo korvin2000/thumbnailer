@@ -1,6 +1,7 @@
 package thumbnailer.ops;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.awt.image.BufferedImage;
@@ -8,8 +9,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +42,7 @@ import thumbnailer.album.AlbumPatch;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
 import thumbnailer.catalog.Catalog;
+import thumbnailer.catalog.PhotoMark;
 import thumbnailer.index.Reindexer;
 import thumbnailer.ops.Journal.Phase;
 import thumbnailer.settings.Settings;
@@ -375,17 +380,209 @@ class FileOpsTest {
         assertThat(root.resolve("other/G/empty")).as("empty folders travel too").isDirectory();
     }
 
+    @Test
+    void recoveryKeepsTheSourceAndTheLineWhileAResultIsMissing() throws Exception {
+        dir("lib/V", "a.jpg", "b.jpg");
+        dir("lib/I", "a.jpg", "b.jpg");
+        scan(null);
+        planner.sameVolume = (x, y) -> false;
+        var v = at("lib/V");
+        Path part = root.resolve("other/V.part"), aside = root.resolve("aside");
+        var id = crash(Phase.DISPOSING, 1, op(Op.Kind.MOVE, List.of(v.id()), null, "other", Op.Conflict.SKIP), () -> Files.move(part, aside));
+        assertThat(root.resolve("lib/V/b.jpg")).as("no verified result, no disposal").exists();
+        assertThat(results.future(id)).as("an Error still ends the operation for the client").isDone();
+        assertThat(journal()).contains(id);
+        Files.move(aside, part);
+        steps.recover();
+        assertThat(root.resolve("other/V/b.jpg")).exists();
+        assertThat(root.resolve("lib/V")).doesNotExist();
+        assertThat(repo.find(v.id()).orElseThrow().path()).isEqualTo(path("other/V"));
+
+        var i = at("lib/I"); // a result gone at indexing is not a missing manifest: the line waits for it
+        var zip = root.resolve("lib/I.zip");
+        id = crash(Phase.INDEXING, 1, op(Op.Kind.PACK, List.of(i.id()), null, null, Op.Conflict.SKIP), () -> Files.move(zip, aside));
+        assertThat(journal()).contains(id);
+        Files.move(aside, zip);
+        steps.recover();
+        assertThat(repo.find(i.id()).orElseThrow()).extracting(Album::path, Album::kind).containsExactly(path("lib/I.zip"), Kind.ZIP);
+        assertThat(journal()).isBlank();
+    }
+
+    @Test
+    void aSourceThatChangesWhileItIsCopiedIsKeptAndTheResultGoes() throws Exception {
+        dir("lib/Ch", "a.jpg", "b.jpg");
+        scan(null);
+        planner.sameVolume = (x, y) -> false;
+        var ch = at("lib/Ch");
+        steps.crash = p -> { // another program writes into the folder after it was copied and verified
+            if (p == Phase.VERIFIED) try {
+                Files.write(root.resolve("lib/Ch/new.jpg"), new byte[] {1, 2, 3});
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        };
+        var result = run(op(Op.Kind.MOVE, List.of(ch.id()), null, "other", Op.Conflict.SKIP));
+        assertThat(result.failed()).containsExactly(new OpResult.Issue(ch.path(), "changed during the operation"));
+        assertThat(root.resolve("lib/Ch/new.jpg")).exists();
+        assertThat(root.resolve("lib/Ch/a.jpg")).exists();
+        assertThat(root.resolve("other/Ch.part")).doesNotExist();
+        assertThat(root.resolve("other/Ch")).doesNotExist();
+        assertThat(repo.find(ch.id()).orElseThrow().path()).isEqualTo(ch.path());
+        assertThat(journal()).isBlank();
+    }
+
+    @Test
+    void stagingFilesThatExistAreNeitherWrittenOverNorDeleted() throws Exception {
+        dir("lib/Y", "a.jpg", "b.jpg");
+        Files.write(root.resolve("lib/Y/a.jpg.cry.part"), new byte[] {9, 9});
+        zip("lib/Z.zip", "a.jpg", "b.jpg");
+        Files.write(root.resolve("lib/Z.zip.part"), new byte[] {7});
+        dir("lib/Rn", "a.jpg", "b.jpg");
+        Files.write(root.resolve("lib/rn.part"), new byte[] {5});
+        scan("pw");
+        assertThat(run(new Op(Op.Kind.CRYPT, List.of(at("lib/Y").id()), null, null, null, null, true, null, null, null)).done()).isEqualTo(1);
+        assertThat(root.resolve("lib/Y/a.jpg.cry.part")).hasBinaryContent(new byte[] {9, 9});
+        assertThat(root.resolve("lib/Y/a (2).jpg.cry")).exists();
+        var z = new Op(Op.Kind.CRYPT, List.of(at("lib/Z.zip").id()), null, null, null, null, true, null, null, null);
+        assertThat(ops.preflight(z).items()).extracting(Preflight.Item::reason).containsExactly("staging file exists: Z.zip.part");
+        assertThat(run(z).skipped()).hasSize(1);
+        assertThat(root.resolve("lib/Z.zip.part")).hasBinaryContent(new byte[] {7});
+        var rename = new Op(Op.Kind.FOLDER_RENAME, null, null, List.of(path("lib/Rn")), "rn", null, null, null, null, null);
+        assertThat(ops.preflight(rename).items()).extracting(Preflight.Item::reason).containsExactly("staging file exists: rn.part");
+    }
+
+    @Test
+    void aSourceOrTargetReachedThroughALinkIsRefused() throws Exception {
+        dir("outside/victim", "a.jpg", "b.jpg");
+        dir("lib/Src", "a.jpg", "b.jpg");
+        scan(null);
+        var link = root.resolve("lib/j");
+        link(link, root.resolve("outside"));
+        try {
+            var delete = new Op(Op.Kind.FOLDER_DELETE, null, null, List.of(path("lib/j/victim")), null, null, null, null, null, null);
+            assertThat(run(delete).skipped()).containsExactly(new OpResult.Issue(path("lib/j/victim"), "reached through a link"));
+            assertThat(root.resolve("outside/victim/a.jpg")).exists();
+            var copy = new Op(Op.Kind.FOLDER_COPY, null, null, List.of(path("lib/Src")), path("lib/j/victim"), null, null, null, null, null);
+            assertThat(ops.preflight(copy).items()).extracting(Preflight.Item::reason).containsExactly("the target is reached through a link");
+        } finally {
+            Files.delete(link);
+        }
+    }
+
+    @Test
+    void aTargetInsideTheSourceIsRefusedWhicheverPathNamesIt() throws Exception {
+        dir("lib/A4/sub", "a.jpg");
+        var stored = path("virtual/lib"); // the root as stored; on disk it is lib (a mapped drive, a moved folder)
+        var s = new Settings(List.of(new Settings.Root(stored, List.of())), List.of(), false,
+                List.of(new Settings.Mapping(stored, root.resolve("lib").toString())), null, null);
+        var copy = new Op(Op.Kind.FOLDER_COPY, null, null, List.of(stored + "/A4"), path("lib/A4/sub"), null, null, null, null, null);
+        assertThat(planner.preflight(copy, s, null).items()).extracting(Preflight.Item::reason).containsExactly("the target is inside it");
+    }
+
+    @Test
+    void anArchiveListingANameTwiceIsRefused() throws Exception {
+        zip("lib/Dup.zip", "a.jpg", "b.jpg", "c.jpX");
+        scan("pw");
+        var ids = List.of(at("lib/Dup.zip").id());
+        var file = root.resolve("lib/Dup.zip");
+        var bytes = Files.readAllBytes(file); // c.jpX becomes a second b.jpg, in the local and the central header
+        byte[] from = "c.jpX".getBytes(StandardCharsets.US_ASCII), to = "b.jpg".getBytes(StandardCharsets.US_ASCII);
+        for (int i = 0; i + from.length <= bytes.length; i++)
+            if (Arrays.equals(bytes, i, i + from.length, from, 0, from.length)) System.arraycopy(to, 0, bytes, i, to.length);
+        Files.write(file, bytes);
+        for (var op : List.of(op(Op.Kind.UNPACK, ids, null, null, Op.Conflict.SKIP), op(Op.Kind.REPACK, ids, "SEVEN_ZIP", null, Op.Conflict.SKIP),
+                new Op(Op.Kind.CRYPT, ids, null, null, null, null, true, null, null, null)))
+            assertThat(ops.preflight(op).items()).as(op.kind().name()).extracting(Preflight.Item::reason).containsExactly("duplicate names in archive");
+    }
+
+    @Test
+    void anUnreadableJournalStopsEveryItemAndStaysAsItIs() throws Exception {
+        dir("lib/J", "a.jpg", "b.jpg");
+        scan(null);
+        var file = settings.dataDir().resolve("ops.journal");
+        Files.writeString(file, "not json\n");
+        try {
+            var j = at("lib/J");
+            assertThat(run(op(Op.Kind.DELETE, List.of(j.id()), null, null, Op.Conflict.SKIP)).failed())
+                    .containsExactly(new OpResult.Issue(j.path(), "The operations journal cannot be read"));
+            assertThat(root.resolve("lib/J/a.jpg")).exists();
+            assertThat(Files.readString(file)).isEqualTo("not json\n");
+        } finally {
+            Files.delete(file);
+            steps.recover();
+        }
+    }
+
+    @Test
+    void aReplayedReindexKeepsPhotoMarksAndAKeylessOneWaitsForThePassword() throws Exception {
+        dir("lib/R", "a.jpg", "b.jpg");
+        scan("pw");
+        var r = albums.patch(at("lib/R").id(), patch(null, "b.jpg"));
+        catalog.mark(r.internal().seq(), "a.jpg", 8, null);
+        assertThat(run(new Op(Op.Kind.CRYPT, List.of(r.id()), null, null, null, null, true, null, null, null)).done()).isEqualTo(1);
+        reindexer.reindex(r.id(), r.path(), Kind.DIRECTORY, Map.of("a.jpg", "a.jpg.cry", "b.jpg", "b.jpg.cry")); // a recovery replays it
+        assertThat(catalog.marks(r.internal().seq())).containsOnlyKeys("a.jpg.cry").extractingByKey("a.jpg.cry")
+                .extracting(PhotoMark::rating).isEqualTo(8);
+        assertThat(repo.find(r.id()).orElseThrow()).extracting(Album::cover, Album::coverPinned).containsExactly("b.jpg.cry", true);
+
+        Files.write(root.resolve("lib/R/c.jpg"), jpeg(2)); // without the key only this one would be indexed, the pin lost
+        settings.forgetKey();
+        assertThatThrownBy(() -> reindexer.reindex(r.id(), r.path(), Kind.DIRECTORY, Map.of())).hasMessage("waits for the password");
+        assertThat(repo.find(r.id()).orElseThrow()).extracting(Album::cover, Album::coverPinned, Album::imageCount)
+                .containsExactly("b.jpg.cry", true, 2);
+    }
+
+    @Test
+    void repackNeedsTheSpaceOfItsOutputNotOfTheCompressedSource() throws Exception {
+        var file = root.resolve("lib/Big.zip");
+        Files.createDirectories(file.getParent());
+        try (var out = new ZipOutputStream(Files.newOutputStream(file))) {
+            for (var n : List.of("a.jpg", "b.jpg", "notes.txt")) {
+                out.putNextEntry(new ZipEntry(n));
+                out.write(n.endsWith(".jpg") ? jpeg(n.charAt(0) - 'a') : new byte[200_000]);
+            }
+        }
+        scan(null);
+        long plain;
+        try (var z = new ZipFile(file.toFile())) {
+            plain = Collections.list(z.entries()).stream().mapToLong(ZipEntry::getSize).sum();
+        }
+        var preflight = ops.preflight(op(Op.Kind.REPACK, List.of(at("lib/Big.zip").id()), "SEVEN_ZIP", null, Op.Conflict.SKIP));
+        assertThat(preflight.bytes()).isEqualTo(plain).isGreaterThan(Files.size(file));
+    }
+
     // --- helpers
 
     /** Runs the operation with a crash at the {@code nth} line of {@code phase}, then recovers like a restart would. */
-    private void crash(Phase phase, int nth, Op op) throws Exception {
+    private void crash(Phase phase, int nth, Op op) throws Exception { crash(phase, nth, op, () -> {}); }
+
+    /** {@link #crash(Phase, int, Op)}, {@code meanwhile} done right before the crash; returns the operation's id. */
+    private String crash(Phase phase, int nth, Op op, Trees.Io meanwhile) throws Exception {
         var seen = new AtomicInteger();
-        steps.crash = p -> { if (p == phase && seen.incrementAndGet() == nth) throw new Crash(); };
-        ops.submit(op);
+        steps.crash = p -> {
+            if (p != phase || seen.incrementAndGet() != nth) return;
+            try {
+                meanwhile.run();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            throw new Crash();
+        };
+        var id = ops.submit(op);
         ops.await();
         steps.crash = p -> {};
         assertThat(seen.get()).as("crashed").isEqualTo(nth);
         steps.recover();
+        return id;
+    }
+
+    private String journal() throws IOException { return Files.readString(settings.dataDir().resolve("ops.journal")); }
+
+    /** A directory link: an NTFS junction on Windows (no privilege needed), else a symbolic link. */
+    private static void link(Path link, Path target) throws Exception {
+        if (File.separatorChar == '\\') new ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(), target.toString()).start().waitFor();
+        else Files.createSymbolicLink(link, target);
+        assumeTrue(Files.isDirectory(link), "no directory link here");
     }
 
     private OpResult run(Op op) throws Exception { return results.future(ops.submit(op)).get(30, TimeUnit.SECONDS); }

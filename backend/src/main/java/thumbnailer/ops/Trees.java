@@ -6,6 +6,7 @@ import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardOpenOption.CREATE_NEW;
 import static java.nio.file.StandardOpenOption.WRITE;
 
+import com.dynatrace.hash4j.hashing.Hashing;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.channels.FileChannel;
@@ -18,6 +19,9 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -83,6 +87,19 @@ final class Trees {
         });
     }
 
+    /**
+     * The names, sizes and mtimes of the files below {@code root} (only {@code names} when given), hashed: a source is
+     * deleted only while it still reads as when its copy began.
+     */
+    static long stamp(Path root, Collection<String> names) throws IOException {
+        var files = new TreeMap<String, BasicFileAttributes>();
+        if (names == null) walk(root, (name, f, a) -> files.put(name, a));
+        else for (var n : names) files.put(n, Files.readAttributes(root.resolve(n), BasicFileAttributes.class, NOFOLLOW_LINKS));
+        var h = Hashing.wyhashFinal4().hashStream();
+        files.forEach((n, a) -> h.putString(n).putLong(a.size()).putLong(a.lastModifiedTime().toMillis()));
+        return h.getAsLong();
+    }
+
     static long size(Path root) throws IOException {
         long[] size = {0};
         walk(root, (name, f, a) -> size[0] += a.size());
@@ -131,6 +148,17 @@ final class Trees {
     static Path part(Path p) { return p.resolveSibling(p.getFileName() + ".part"); }
 
     static String part(String canonical) { return canonical + ".part"; }
+
+    /** What a 7z pack into {@code tmp} spilled beside it: {@code <tmp>.<n>.spill}. */
+    static List<Path> spills(Path tmp) throws IOException {
+        var prefix = tmp.getFileName() + ".";
+        var out = new ArrayList<Path>();
+        try (var all = Files.newDirectoryStream(tmp.getParent(), f -> // no glob: names hold [ ]
+                f.getFileName().toString().startsWith(prefix) && f.getFileName().toString().endsWith(".spill"))) {
+            all.forEach(out::add);
+        }
+        return out;
+    }
 
     interface Io { void run() throws IOException; }
 
