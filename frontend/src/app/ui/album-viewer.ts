@@ -78,7 +78,7 @@ const slot = (key: string) => /^[0-9]$/.test(key) ? (+key + 9) % 10 : -1;
           @let m = marks()[e.name];
           <div class="photo" [class.cover]="e.name === a.cover" [class.selected]="e.index === selected()" [class.checked]="sel.has(e.name)"
                (click)="selected.set(e.index)" (dblclick)="openLightbox(e.index)" (contextmenu)="photoMenu(e, $event)">
-            <img [src]="gw.thumbUrl(a, e.index)" [alt]="e.name" loading="lazy" decoding="async" draggable="false" />
+            <img [src]="gw.thumbUrl(a, e.index)" [alt]="e.name" loading="lazy" decoding="async" draggable="false" (load)="$any($event.target).classList.add('loaded')" />
             <div class="badges">
               @if (e.name === a.cover) { <span class="badge"><app-icon name="cover" [size]="11" /> Cover</span> }
               @if (m?.rating) { <span class="badge soft">★ {{ m.rating }}</span> }
@@ -145,7 +145,11 @@ const slot = (key: string) => /^[0-9]$/.test(key) ? (+key + 9) % 10 : -1;
     .photo.checked { outline-color: var(--accent); outline-offset: -2px; }
     .photo.checked img { opacity: 0.85; }
     .photo.cover { box-shadow: 0 0 0 2px var(--accent) inset; }
-    .photo img { width: 100%; height: 100%; object-fit: cover; }
+    .photo img { position: relative; width: 100%; height: 100%; object-fit: cover; }
+    /* a thumbnail still rendering (a disk spinning up): a spinner under the image after a moment, hidden once it loaded */
+    .photo::before { content: ''; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px; border-radius: 50%; border: 2.5px solid var(--border-strong); border-top-color: var(--accent); opacity: 0; animation: spin 0.8s linear infinite, busy-in 0.3s var(--ease) 0.7s forwards; }
+    .photo:has(img.loaded)::before { display: none; }
+    @keyframes busy-in { to { opacity: 1; } }
     .badges { position: absolute; top: 6px; left: 6px; display: flex; gap: 4px; }
     .badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 5px; background: var(--accent); color: var(--on-accent); font-size: 10.5px; font-weight: 700; }
     .badge.soft { background: oklch(10% 0.01 260 / 0.6); color: #fff; backdrop-filter: blur(6px); }

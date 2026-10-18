@@ -405,7 +405,7 @@ function matches(a: Album, q: Filters, find: Resolver): boolean {
   return (!t || has(a.name, t) || has(a.model, t) || has(a.studio, t) || has(a.photographer, t) || has(a.description, t) || a.tags.some(x => x.includes(t)))
     && (q.tags ?? []).every(x => linked('TAG', x))
     && linked('MODEL', q.model) && linked('STUDIO', q.studio) && linked('PHOTOGRAPHER', q.photographer)
-    && (!q.roots?.length || q.roots.some(r => a.path === r || a.path.startsWith(r.endsWith('/') ? r : r + '/'))) && (!q.kind || a.kind === q.kind)
+    && (!q.roots?.length || q.roots.some(r => a.path === r || a.path.startsWith(r.endsWith('/') ? r : r + '/'))) && (!q.kind || (q.kind === 'ARCHIVE' ? a.kind !== 'DIRECTORY' : a.kind === q.kind))
     && (q.minBytes == null || a.bytes >= q.minBytes) && (q.maxBytes == null || a.bytes <= q.maxBytes)
     && (q.minCount == null || a.imageCount >= q.minCount) && (q.maxCount == null || a.imageCount <= q.maxCount)
     && (q.minMegapixels == null || mp >= q.minMegapixels) && (q.maxMegapixels == null || mp <= q.maxMegapixels)

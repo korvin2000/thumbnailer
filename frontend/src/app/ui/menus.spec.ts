@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Album, Entity } from '../core/model';
 import type { EntityTreeContext } from './entity-tree';
-import { AlbumActions, albumMenu, albumsSubmenu, allHidden, assignItems, canvasMenu, EntityActions, entityMenu, favoritesItems, FolderActions, folderMenu, opsItems, Target } from './menus';
+import { AlbumActions, albumMenu, albumsSubmenu, allHidden, archiveItems, assignItems, canvasMenu, EntityActions, entityMenu, favoritesItems, fileItems, FolderActions, folderMenu, opsItems, Target } from './menus';
 import type { MenuEntry, MenuItem } from './shared/context-menu';
 
 const album = (id: string, o: Partial<Album> = {}): Album => ({ id, root: 'D:/P', path: `D:/P/${id}`, kind: 'DIRECTORY', name: id, cover: '1.jpg', coverPinned: false, coverPortrait: false, revision: 1, imageCount: 3, bytes: 1, avgPixels: 1, maxWidth: 1, maxHeight: 1, shotDate: null, modifiedAt: '', indexedAt: '', model: null, studio: null, photographer: null, description: null, tags: [], rating: 0, hidden: false, bio: null, stamp: '0', genres: [], links: [], copies: 1, ...o });
@@ -9,10 +9,10 @@ const entity = (id: number, name: string, kind: Entity['kind'] = 'MODEL', auto =
 const sel = (...albums: Album[]): Target => ({ albumIds: albums.map(a => a.id), albums, complete: true, label: `${albums.length} albums` });
 const query: Target = { query: { roots: ['D:/P'] }, label: 'albums below P', albums: [], complete: false };
 
-/** Every callback records its name and arguments (`lists` and `packFormat` answer as the app's state would). */
-const spy = () => {
+/** Every callback records its name and arguments (`lists`, `packFormat` and `hasKey` answer as the app's state would). */
+const spy = (hasKey = true) => {
   const calls: unknown[][] = [];
-  const a = new Proxy({}, { get: (_, name) => name === 'lists' ? async () => [entity(9, 'Best', 'LIST')] : name === 'packFormat' ? () => 'SEVEN_ZIP' : (...args: unknown[]) => { calls.push([name, ...args]); } }) as AlbumActions & FolderActions & EntityActions;
+  const a = new Proxy({}, { get: (_, name) => name === 'lists' ? async () => [entity(9, 'Best', 'LIST')] : name === 'packFormat' ? () => 'SEVEN_ZIP' : name === 'hasKey' ? () => hasKey : (...args: unknown[]) => { calls.push([name, ...args]); } }) as AlbumActions & FolderActions & EntityActions;
   return { a, calls };
 };
 const items = (m: MenuEntry[]) => m.filter((e): e is MenuItem => !('sep' in e));
@@ -24,30 +24,36 @@ describe('album menu (§7.4)', () => {
   it('has the plan order, a header for several albums, and runs the actions on the target', () => {
     const { a, calls } = spy(), t = sel(album('a'), album('b'));
     const m = albumMenu(t, a, t.albums[0]);
-    expect(labels(m).map(l => l.replace(/ \(\d.*\)$/, ''))).toEqual(['2 albums selected', '—', 'Open', 'Details', 'Show in folder', 'Copy path', '—', 'Assign', 'Favorites', '—', 'Pack', 'Unpack', 'Repack', 'Encrypt (.cry)', 'Decrypt', '—',
-      'Move to…', 'Copy to…', 'Hide', 'Delete…', '—', 'Select all', 'Select first N…', 'Deselect']);
-    expect(item(m, 'Delete…').danger).toBe(true);
-    item(m, 'Open').run!(); item(m, 'Delete…').run!(); item(m, 'Hide').run!();
+    expect(labels(m)).toEqual(['2 albums selected', '—', 'Open', 'Details', 'Show in folder', 'Copy path', '—', 'Assign', 'Favorites', '—', 'Archive', 'Encryption', 'Files', '—', 'Select all', 'Select first N…', 'Deselect']);
+    expect(labels(kids(item(m, 'Archive'))).map(l => l.replace(/ \(\d.*\)$/, ''))).toEqual(['Pack', 'Unpack', 'Repack']);
+    expect(labels(kids(item(m, 'Encryption')))).toEqual(['Encrypt (.cry)', 'Decrypt']);
+    const files = kids(item(m, 'Files'));
+    expect(labels(files)).toEqual(['Move to…', 'Copy to…', 'Hide', 'Delete…']);
+    expect(item(files, 'Delete…').danger).toBe(true);
+    item(m, 'Open').run!(); item(files, 'Delete…').run!(); item(files, 'Hide').run!();
     expect(calls).toEqual([['open', 'a'], ['delete', t], ['hide', t, true]]);
+    expect(labels(albumMenu(t, spy(false).a, null))).not.toContain('Encryption'); // no session key: no encryption offered
     expect(labels(albumMenu(sel(album('a')), a, null)).slice(0, 2)).toEqual(['Open', 'Details']);
     expect(item(albumMenu(sel(album('a')), a, null), 'Open').disabled).toBe(true);
   });
 
   it('counts the albums an operation skips and disables it when every one is skipped', () => {
     const { a } = spy(), mixed = sel(album('a'), album('b', { kind: 'ZIP' }), album('c', { kind: 'ZIP' }));
-    expect(item(opsItems(mixed, a), 'Pack').label).toBe('Pack (2 of 3 already packed)');
-    expect(item(opsItems(mixed, a), 'Unpack').label).toBe('Unpack (1 of 3 already unpacked)');
-    expect(item(opsItems(mixed, a), 'Repack').label).toBe('Repack (1 of 3 not packed)');
+    expect(item(archiveItems(mixed, a), 'Pack').label).toBe('Pack (2 of 3 already packed)');
+    expect(item(archiveItems(mixed, a), 'Unpack').label).toBe('Unpack (1 of 3 already unpacked)');
+    expect(item(archiveItems(mixed, a), 'Repack').label).toBe('Repack (1 of 3 not packed)');
     const zips = sel(album('b', { kind: 'ZIP' }));
-    expect(item(opsItems(zips, a), 'Pack')).toMatchObject({ label: 'Pack (1 of 1 already packed)', disabled: true });
-    expect(item(opsItems(zips, a), 'Unpack').disabled).toBeUndefined();
-    expect(item(opsItems(query, a), 'Pack').label).toBe('Pack'); // a query target: nothing known
-    expect(labels(kids(item(opsItems(zips, a), 'Pack')))).toEqual(['Default (7z)', '—', 'zip (auto)', 'zip', '7z']);
+    expect(item(archiveItems(zips, a), 'Pack')).toMatchObject({ label: 'Pack (1 of 1 already packed)', disabled: true });
+    expect(item(archiveItems(zips, a), 'Unpack').disabled).toBeUndefined();
+    expect(item(archiveItems(query, a), 'Pack').label).toBe('Pack'); // a query target: nothing known
+    expect(labels(kids(item(archiveItems(zips, a), 'Pack')))).toEqual(['Default (7z)', '—', 'zip (auto)', 'zip', '7z']);
+    expect(labels(opsItems(zips, a))).toEqual(['Archive', 'Encryption']);
+    expect(labels(opsItems(zips, spy(false).a))).toEqual(['Archive']);
   });
 
   it('Pack offers the saved default format first (no explicit format: the action reads the setting) and every format as an override', () => {
     const { a, calls } = spy(), t = sel(album('a'));
-    const pack = kids(item(opsItems(t, a), 'Pack'));
+    const pack = kids(item(archiveItems(t, a), 'Pack'));
     (pack[0] as MenuItem).run!(); (pack[4] as MenuItem).run!();
     expect(calls).toEqual([['pack', t], ['pack', t, 'SEVEN_ZIP']]);
   });
@@ -57,7 +63,8 @@ describe('album menu (§7.4)', () => {
     expect(allHidden(hidden)).toBe(true);
     expect(allHidden(sel(album('a', { hidden: true }), album('b')))).toBe(false);
     expect(allHidden({ ...query, query: { hidden: true } })).toBe(true);
-    item(albumMenu(hidden, a, null), 'Unhide').run!();
+    item(fileItems(hidden, a, false), 'Unhide').run!();
+    expect(labels(fileItems(hidden, a, false))).not.toContain('Delete…');
     expect(calls).toEqual([['hide', hidden, false]]);
   });
 
@@ -81,7 +88,8 @@ describe('album menu (§7.4)', () => {
   it('the canvas menu is the selection part; the node submenu has no Open, Delete or selection items', () => {
     const { a } = spy();
     expect(labels(canvasMenu(a))).toEqual(['Select all', 'Select first N…', 'Deselect']);
-    expect(labels(albumsSubmenu(query, a))).toEqual(['Pack', 'Unpack', 'Repack', 'Encrypt (.cry)', 'Decrypt', '—', 'Move to…', 'Copy to…', 'Hide', '—', 'Assign', 'Favorites']);
+    expect(labels(albumsSubmenu(query, a))).toEqual(['Archive', 'Encryption', 'Files', '—', 'Assign', 'Favorites']);
+    expect(labels(kids(item(albumsSubmenu(query, a), 'Files')))).toEqual(['Move to…', 'Copy to…', 'Hide']);
   });
 });
 

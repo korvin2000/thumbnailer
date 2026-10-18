@@ -151,6 +151,10 @@ class JdbcAlbumRepositoryTest {
                 new Folder("a", ROOT + "/a", 1, false), new Folder("B", ROOT + "/B", 1, true), new Folder("C", ROOT + "/C", 3, true));
         assertThat(repo.folders(ROOT + "/C")).containsExactly(new Folder("x", ROOT + "/C/x", 1, false));
         assertThat(repo.folders(DRIVE)).containsExactly(new Folder("albums", ROOT, 7, true));
+        var all = query(null, null, null, null, Sort.NAME, 0, 10);
+        assertThat(repo.search(withKind(all, Kind.ARCHIVE))).as("ARCHIVE = every archive kind").extracting(Album::id).containsExactlyInAnyOrder("1", "4", "7");
+        assertThat(repo.search(withKind(all, Kind.ZIP))).extracting(Album::id).containsExactlyInAnyOrder("1", "4");
+        assertThat(repo.search(withKind(all, Kind.DIRECTORY))).extracting(Album::id).containsExactlyInAnyOrder("2", "3", "5", "6");
     }
 
     @Test
@@ -359,6 +363,11 @@ class JdbcAlbumRepositoryTest {
         return new Album(id, ROOT, path, kind, null, "001.jpg", false, 1, false, 10, 100, 2_000_000, 1800, 1200, null,
                 Instant.EPOCH, Instant.ofEpochMilli(id.hashCode()), null, null, null, null, List.of(), 0, false, null,
                 List.of(), List.of(), 0, new Album.Internal(contentId, "s" + id, extracted, AlbumMeta.EMPTY, 0)).withEdits(AlbumMeta.EMPTY);
+    }
+
+    private static AlbumQuery withKind(AlbumQuery q, Kind kind) {
+        return new AlbumQuery(q.text(), q.tags(), null, null, null, q.roots(), kind, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, q.sort(), q.offset(), q.limit());
     }
 
     private static AlbumQuery query(String text, List<String> tags, Long minBytes, LocalDate from, Sort sort, int offset, int limit) {

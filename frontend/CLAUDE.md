@@ -39,7 +39,7 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   stacks above it. Folder choice goes through `FolderPicker.pick()` (promise), never a typed path alone.
 - The settings draft belongs to the library it was seeded from (`SettingsDialog.seededDir`): a `dataDir` change reseeds
   it, so Save can never push one library's roots into another (the server would drop that library's albums).
-- Sidebar state is one pref, `Prefs.sidebar` (`'folders' | 'refine' | 'none'`; `folders` is the Browse tab, whose tree is picked by `Prefs.groupBy`), not a boolean; the tree owns
+- Sidebar state is one pref, `Prefs.sidebar` (`'folders' | 'refine' | 'none'`; `folders` is the Browse tab, whose tree is picked by `Prefs.groupBy`), not a boolean; `Prefs.lastTab` remembers the tab shown last so `toggleSidebar()` (the one topbar button) reopens it; the tree owns
   `filters.roots` (always one path, read via `store.folder()`, set via `store.goTo()`), so Refine's badge/Reset use
   `store.refining()`/`resetRefine()` and never count or clear the folder. `store.treeVersion` tells the tree to reload.
 - `TileGrid` needs exactly one projected `<ng-template>` for tiles; the empty state is an input `TemplateRef`.
@@ -93,6 +93,10 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   `OpsStore.issues`, which the app turns into a `Confirm` without Cancel.
 - Synthetic key events in tests or the browser pane must target an element (`document.body`), not `document`: the key
   handlers call `e.target.closest(...)`.
+- `WsGateway` queues a request made while the socket is down and sends it on the next `onopen` (a restart after optimize
+  or a library switch would otherwise fail every timed refresh with "Not connected"); only a request already sent is
+  rejected with "Connection lost". A "this menu is mine" `computed` must read `ContextMenu.state()` before its own
+  non-signal field, or it never re-evaluates.
 
 ## Tests
 

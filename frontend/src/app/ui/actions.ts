@@ -138,6 +138,7 @@ export class Actions implements AlbumActions, FolderActions, EntityActions {
   /** The format is sent explicitly even for the default, so the dialog's title names it. */
   pack(t: Target, format = this.packFormat()) { return this.operate({ kind: 'PACK', ...this.sel(t), format, conflict: 'RENAME' }, t.label); }
   packFormat(): PackFormat { return this.store.settings()?.settings.ops?.packFormat ?? 'AUTO'; }
+  hasKey(): boolean { return !!this.store.settings()?.settings.cryKey; }
   unpack(t: Target) { return this.operate({ kind: 'UNPACK', ...this.sel(t), conflict: 'RENAME' }, t.label); }
   repack(t: Target, format: PackFormat) { return this.operate({ kind: 'REPACK', ...this.sel(t), format, conflict: 'RENAME' }, t.label); }
 

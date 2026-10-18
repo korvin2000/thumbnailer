@@ -7,6 +7,15 @@ undo. Reference SPEC IDs.
 
 ## State (2026-10-18, v0.1.0)
 
+- 2026-10-18 **post-review UI fixes**: topbar = one sidebar toggle (last tab, `Prefs.lastTab`), Catalog ▾ → entity picker → card
+  (⋯ merge/delete on the card), compact columns stepper, one bricks ⇄ grid toggle; sidebar header fits the panel (Browse segment
+  shows the group + caret); album menu grouped Archive ▸ / Encryption ▸ (key only) / Files ▸; Refine kind strip All · Folders ·
+  Archives (`ARCHIVE` = every archive on the server, mock and chip); entity tree without the selection strip, chevrons only on rows
+  with albums, "No models" under a childless one; `WsGateway` queues requests across the optimize/switch restart (no more
+  "Search failed: Not connected"); busy spinner on covers and thumbnails still rendering. Checks: `ng test` 92, `ng build` under
+  budget, `JdbcAlbumRepositoryTest`, browser pass on `frontend-demo` + `backend-demo` (optimize restart included). Open: the
+  second level's chevron is a heuristic (albums > 0); a server-side "has related" flag on `Entity` would make it exact.
+
 - 2026-10-18 **catalog phase 2, track B5 (integration)** on its branch: the real packers run inside `FileOps` (the
   test stand-in is gone; `Steps` takes `Packer`/`Unpacker` beans), `Unpacker.unpack` returns the hashes of the bytes
   read from the archive by written name and `Steps` reads the forced tree back as the only verification, `Packer.pack`

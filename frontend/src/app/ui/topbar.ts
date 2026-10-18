@@ -2,15 +2,21 @@ import { ChangeDetectionStrategy, Component, computed, effect, ElementRef, injec
 import { CatalogStore } from '../core/catalog-store';
 import { EntityKind } from '../core/model';
 import { formatBytes, formatMegapixels } from '../core/format';
-import { Prefs, SidebarTab } from '../core/prefs';
+import { Prefs } from '../core/prefs';
 import { AlbumStore } from '../core/store';
+import { Actions } from './actions';
+import { KIND_ICON, KIND_LABEL, NOUN as KIND_NOUN } from './kinds';
+import { ContextMenu, MenuEntry } from './shared/context-menu';
+import { EntityPicker } from './shared/entity-picker';
 import { Icon, IconName } from './shared/icon';
 import { SortMenu } from './sort-menu';
 
 interface Chip { key: string; label: string; icon?: IconName; remove: () => void }
 /** Scope chip prefix and icon per entity kind (`entities` filter); tags read `#name`. */
 const SCOPE: Record<EntityKind, [string, IconName]> = { MODEL: ['model:', 'user'], STUDIO: ['studio:', 'building'], PHOTOGRAPHER: ['by:', 'camera'], GENRE: ['genre:', 'sparkles'], TAG: ['#', 'hash'], LIST: ['list:', 'heart'] };
-const NOUN: Record<EntityKind, string> = { MODEL: 'model', STUDIO: 'studio', PHOTOGRAPHER: 'photographer', GENRE: 'genre', TAG: 'tag', LIST: 'list' };
+const NOUN = KIND_NOUN;
+/** The Catalog menu: the kinds with profiles to edit, then the favorites lists. */
+const CATALOG: EntityKind[] = ['MODEL', 'STUDIO', 'PHOTOGRAPHER', 'GENRE', 'LIST'];
 /** A tag as a regex literal: tags may hold `+` or `.` (the server only strips `#` and whitespace), and a token ends where `search-syntax.ts`'s `[\w-]+` ends. */
 const tagPattern = (t: string) => `#${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`;
 
@@ -20,11 +26,11 @@ const tagPattern = (t: string) => `#${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(
   template: `
     <button class="brand" title="Thumbnailer — settings" (click)="settings.emit()"><span class="logo"><app-icon name="images" [size]="18" /></span><span class="name">Thumbnailer</span></button>
 
-    <button class="btn icon-btn" [class.active]="prefs.sidebar() === 'folders'" title="Folders (E)" (click)="toggleTab('folders')"><app-icon name="folder" /></button>
-    <button class="btn icon-btn" [class.active]="prefs.sidebar() === 'refine'" title="Refine (F)" (click)="toggleTab('refine')">
-      <app-icon name="filter" />
+    <button class="btn icon-btn" [class.active]="prefs.sidebar() !== 'none'" [title]="(prefs.sidebar() === 'none' ? 'Show' : 'Hide') + ' the sidebar: Browse (E) · Refine (F)'" (click)="prefs.toggleSidebar()">
+      <app-icon name="panelLeft" />
       @if (store.refining()) { <span class="count">{{ store.refining() }}</span> }
     </button>
+    <button class="btn icon-btn" [class.active]="catalogOpen()" title="Catalog: edit or create models, studios, photographers, genres" (click)="openCatalogMenu($event)"><app-icon name="contact" /></button>
 
     <div class="search" [class.focused]="focused()">
       <app-icon name="search" [size]="16" />
@@ -44,15 +50,12 @@ const tagPattern = (t: string) => `#${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(
     <app-sort-menu />
 
     <div class="stepper" title="Albums per row ( [ and ] )">
-      <button class="btn icon-btn sm ghost" (click)="prefs.setColumns(prefs.columns() - 1)" [disabled]="prefs.columns() <= 1"><app-icon name="minus" [size]="14" /></button>
-      <span class="val"><app-icon name="columns" [size]="14" />{{ prefs.columns() }}</span>
-      <button class="btn icon-btn sm ghost" (click)="prefs.setColumns(prefs.columns() + 1)" [disabled]="prefs.columns() >= 12"><app-icon name="plus" [size]="14" /></button>
+      <button class="btn icon-btn sm ghost" (click)="prefs.setColumns(prefs.columns() - 1)" [disabled]="prefs.columns() <= 1"><app-icon name="minus" [size]="13" /></button>
+      <span class="val">{{ prefs.columns() }}</span>
+      <button class="btn icon-btn sm ghost" (click)="prefs.setColumns(prefs.columns() + 1)" [disabled]="prefs.columns() >= 12"><app-icon name="plus" [size]="13" /></button>
     </div>
 
-    <div class="segmented">
-      <button [class.active]="prefs.layoutMode() === 'bricks'" (click)="prefs.layoutMode.set('bricks')" title="Bricks: portrait covers grouped in their own rows"><app-icon name="bricks" [size]="15" /></button>
-      <button [class.active]="prefs.layoutMode() === 'grid'" (click)="prefs.layoutMode.set('grid')" title="Grid: strict order, one tile per cell"><app-icon name="grid" [size]="15" /></button>
-    </div>
+    <button class="btn icon-btn" [title]="prefs.layoutMode() === 'bricks' ? 'Bricks layout: portrait covers in their own rows — switch to the grid' : 'Grid layout: strict order, one tile per cell — switch to bricks'" (click)="prefs.toggleLayout()"><app-icon [name]="prefs.layoutMode() === 'bricks' ? 'bricks' : 'grid'" /></button>
 
     <button class="btn icon-btn" [title]="(prefs.theme() === 'dark' ? 'Light' : 'Dark') + ' theme (T)'" (click)="prefs.toggleTheme()"><app-icon [name]="prefs.theme() === 'dark' ? 'sun' : 'moon'" /></button>
     <button class="btn icon-btn" [class.active]="prefs.detailsOpen()" title="Details panel (I)" (click)="prefs.detailsOpen.set(!prefs.detailsOpen())"><app-icon name="panelRight" /></button>
@@ -74,10 +77,11 @@ const tagPattern = (t: string) => `#${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(
     .chips { display: flex; gap: 4px; max-width: 45%; overflow: hidden; }
     .chips .chip { height: 24px; }
     .clear { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 50%; color: var(--text-2); &:hover { background: var(--surface-2); color: var(--text); } }
-    .stepper { display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 2px; border-radius: var(--radius-s); border: 1px solid var(--border); background: var(--surface); }
-    .val { display: inline-flex; align-items: center; gap: 4px; min-width: 38px; justify-content: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .stepper { display: flex; align-items: center; height: 32px; padding: 0 1px; border-radius: var(--radius-s); border: 1px solid var(--border); background: var(--surface); }
+    .stepper .btn { width: 24px; }
+    .val { display: inline-flex; min-width: 18px; justify-content: center; font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
     @media (max-width: 1100px) { .brand .name, .chips { display: none; } }
-    @media (max-width: 760px) { :host { flex-wrap: wrap; height: auto; padding: 8px 10px; } .search { order: 10; flex-basis: 100%; } .stepper, .segmented { display: none; } }
+    @media (max-width: 760px) { :host { flex-wrap: wrap; height: auto; padding: 8px 10px; } .search { order: 10; flex-basis: 100%; } .stepper { display: none; } }
   `,
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -86,7 +90,13 @@ export class Topbar {
   protected readonly store = inject(AlbumStore);
   protected readonly prefs = inject(Prefs);
   private readonly catalog = inject(CatalogStore);
+  private readonly actions = inject(Actions);
+  private readonly menu = inject(ContextMenu);
+  private readonly picker = inject(EntityPicker);
   protected readonly focused = signal(false);
+  /** The Catalog menu is the one the service shows (its entries are this instance's). */
+  private catalogItems: MenuEntry[] | null = null;
+  protected readonly catalogOpen = computed(() => { const s = this.menu.state(); return !!s && s.items === this.catalogItems; });
   private readonly input = viewChild.required<ElementRef<HTMLInputElement>>('q');
 
   /** Active structured criteria as removable chips; tags typed as `#tag` are removed from the text itself. */
@@ -99,7 +109,7 @@ export class Topbar {
       if (q[key]) out.push({ key, label: `${prefix} ${q[key]}`, remove: () => { s.setFilter(key, null); strip(new RegExp(`\\b(${keys}):("[^"]*"|\\S+)`, 'ig')); } });
     };
     facet('model', 'model:', 'model|m'); facet('studio', 'studio:', 'studio|s'); facet('photographer', 'by:', 'by|photographer|p');
-    if (q.kind) out.push({ key: 'kind', label: q.kind === 'ZIP' ? 'zip archives' : q.kind === 'ARCHIVE' ? 'archives' : 'folders', remove: () => { s.setFilter('kind', null); strip(/\bkind:\S+/ig); } });
+    if (q.kind) out.push({ key: 'kind', label: q.kind === 'ZIP' ? 'zips only' : q.kind === 'ARCHIVE' ? 'archives' : 'folders', remove: () => { s.setFilter('kind', null); strip(/\bkind:\S+/ig); } });
     if (q.roots?.length) out.push({ key: 'roots', label: 'in: ' + q.roots[0].split('/').filter(Boolean).slice(-2).join('/'), icon: 'folder', remove: () => s.goTo(null) });
     if (q.minBytes != null || q.maxBytes != null) out.push({ key: 'bytes', label: `size ${q.minBytes != null ? formatBytes(q.minBytes, 0) : '0'} – ${q.maxBytes != null ? formatBytes(q.maxBytes, 0) : '∞'}`, remove: () => { s.setFilter('minBytes', null); s.setFilter('maxBytes', null); } });
     if (q.minCount != null || q.maxCount != null) out.push({ key: 'count', label: `${q.minCount ?? 0} – ${q.maxCount ?? '∞'} photos`, remove: () => { s.setFilter('minCount', null); s.setFilter('maxCount', null); } });
@@ -132,6 +142,15 @@ export class Topbar {
     if (input.value) { this.store.text.set(''); e.stopPropagation(); } else input.blur();
   }
 
-  /** Opens the tab, or closes the sidebar when that tab is already showing. */
-  protected toggleTab(tab: SidebarTab) { this.prefs.sidebar.update(v => v === tab ? 'none' : tab); }
+  /** Catalog ▾: pick a kind, then an existing entity (searchable, recents first) or "Create …" in the picker; the card opens in the details panel. */
+  protected openCatalogMenu(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    this.catalogItems = CATALOG.map(kind => ({ label: `${KIND_LABEL[kind]}…`, icon: KIND_ICON[kind], run: () => void this.editEntity(kind) }));
+    this.menu.open(r.left, r.bottom + 6, this.catalogItems);
+  }
+
+  private async editEntity(kind: EntityKind) {
+    const e = await this.picker.pick({ kind, title: `Open or create a ${NOUN[kind]}`, allowCreate: true });
+    if (e) this.actions.openCard(e.id);
+  }
 }

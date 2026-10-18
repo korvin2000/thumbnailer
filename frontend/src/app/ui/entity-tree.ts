@@ -21,7 +21,7 @@ export { KIND_ICON, KIND_LABEL, NOUN } from './kinds';
 export interface EntityTreeContext { kind: EntityKind; entity: Entity | null; missing: boolean; scope: number[] | null; selected: number[]; x: number; y: number }
 
 /** One visible line; `scope` = what a plain click narrows the grid to (entity ids: all must match, so a child row carries its parent too). */
-interface Row { key: string; /** The selection id (the entity's id as text); empty on All / Unassigned. */ sid: string; kind: EntityKind; entity: Entity | null; label: string; count: number | null; depth: number; icon: IconName; nested: boolean; open: boolean; scope: number[] | 'all' | 'missing' }
+interface Row { key: string; /** The selection id (the entity's id as text); empty on All / Unassigned. */ sid: string; kind: EntityKind; entity: Entity | null; label: string; count: number | null; depth: number; icon: IconName; nested: boolean; open: boolean; scope: number[] | 'all' | 'missing'; /** The "No models" line under an opened row without children: shown, never picked. */ empty?: boolean }
 
 /** The second level under a row (`entities {under}`): a studio's models, a model's studios…; lists have none. */
 const UNDER: Partial<Record<EntityKind, EntityKind>> = { STUDIO: 'MODEL', MODEL: 'STUDIO', PHOTOGRAPHER: 'MODEL', GENRE: 'MODEL' };
@@ -29,7 +29,10 @@ const PAGE = 100, INDENT = 14;
 const EMPTY: EntityList = { items: [], total: 0 };
 const same = (a: number[], b: number[]) => a.length === b.length && a.every(x => b.includes(x));
 
-/** The Browse tree of one entity kind: All · Unassigned · entities (paged, filterable, sortable, multi-selectable) with a second level where the server answers `under`. */
+/**
+ * The Browse tree of one entity kind: All · Unassigned · entities (paged, filterable, sortable, multi-selectable) with a second level where the
+ * server answers `under`. Batch actions live in the row's context menu (`Actions.openEntityMenu` over the selected rows) and on the Delete key.
+ */
 @Component({
   selector: 'app-entity-tree',
   imports: [Icon, DecimalPipe],
@@ -44,18 +47,9 @@ const same = (a: number[], b: number[]) => a.length === b.length && a.every(x =>
       <button class="btn icon-btn sm ghost" type="button" [class.active]="byCount()" [title]="byCount() ? 'Sorted by album count — sort by name' : 'Sorted by name — sort by album count'" (click)="byCount.set(!byCount())"><app-icon [name]="byCount() ? 'sortDesc' : 'sortAsc'" [size]="15" /></button>
       @if (kind() !== 'LIST') { <button class="btn icon-btn sm ghost" type="button" [title]="'Delete unused ' + noun[kind()] + 's (unconfirmed, no albums)…'" (click)="deleteUnused()"><app-icon name="trash" [size]="14" /></button> }
     </div>
-    @if (selection.size(); as n) {
-      <div class="strip">
-        <span class="n">{{ n }} selected</span>
-        <button class="btn sm ghost" type="button" [disabled]="mixed()" [title]="mixed() ? 'Select rows of one kind' : 'Mark as confirmed'" (click)="confirmSelected()"><app-icon name="check" [size]="13" /> Confirm</button>
-        <button class="btn sm ghost" type="button" [disabled]="mixed()" [title]="mixed() ? 'Select rows of one kind' : 'Merge the selected rows into another one'" (click)="mergeSelected()"><app-icon name="layers" [size]="13" /> Merge…</button>
-        <button class="btn sm ghost danger" type="button" [disabled]="mixed()" [title]="mixed() ? 'Select rows of one kind' : 'Delete the selected rows'" (click)="deleteSelected()"><app-icon name="trash" [size]="13" /></button>
-        <button class="btn icon-btn sm ghost" type="button" title="Deselect (Esc)" (click)="selection.clear()"><app-icon name="x" [size]="13" /></button>
-      </div>
-    }
     @for (r of rows(); track r.key) {
-      <div class="row" [class.selected]="isScope(r)" [class.checked]="r.entity && selection.has(r.sid)" [class.auto]="r.entity?.auto"
-           [style.padding-left.px]="6 + indent * r.depth" [title]="r.entity?.auto ? r.label + ' — from album text, not confirmed' : r.label"
+      <div class="row" [class.selected]="isScope(r)" [class.checked]="r.entity && selection.has(r.sid)" [class.auto]="r.entity?.auto" [class.empty]="r.empty"
+           [style.padding-left.px]="6 + indent * r.depth" [title]="r.empty ? '' : r.entity?.auto ? r.label + ' — from album text, not confirmed' : r.label"
            (click)="pick(r, $event)" (dblclick)="r.nested && toggle(r.entity!.id)" (contextmenu)="onContext($event, r)">
         <span class="chev" [class.open]="r.open" [class.none]="!r.nested" (click)="r.nested && toggle(r.entity!.id); $event.stopPropagation()" (dblclick)="$event.stopPropagation()">
           @if (r.entity && loadingIds().has(r.entity.id)) { <span class="spinner"></span> } @else if (r.nested) { <app-icon name="chevronRight" [size]="14" /> }
@@ -79,15 +73,12 @@ const same = (a: number[], b: number[]) => a.length === b.length && a.every(x =>
     .filter input::placeholder { color: var(--text-3); }
     .clear { display: inline-flex; flex: none; width: 18px; height: 18px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text-3); cursor: pointer; }
     .clear:hover { color: var(--text); background: var(--surface-2); }
-    .strip { position: sticky; top: 36px; z-index: 1; display: flex; align-items: center; gap: 2px; margin: 0 8px 4px; padding: 3px 4px 3px 8px; border-radius: var(--radius-s); background: var(--accent-soft); color: var(--accent-strong); font-size: 12px; animation: fade-up 0.15s var(--ease); }
-    .strip .n { flex: 1; font-weight: 600; white-space: nowrap; }
-    .strip .btn { color: inherit; padding: 0 6px; }
-    .strip .danger:hover:not(:disabled) { color: var(--danger); }
     .row { display: flex; align-items: center; gap: 5px; height: 28px; margin: 0 6px; padding-right: 10px; border-radius: var(--radius-s); color: var(--text-2); cursor: pointer; white-space: nowrap; }
     .row:hover { background: var(--surface-2); color: var(--text); }
     .row.checked { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--accent); color: var(--text); }
     .row.selected { background: var(--accent-soft); color: var(--accent-strong); }
     .row.auto .name { opacity: 0.7; }
+    .row.empty { pointer-events: none; color: var(--text-3); font-style: italic; font-size: 12px; }
     .chev { display: inline-flex; flex: none; width: 18px; height: 18px; align-items: center; justify-content: center; border-radius: 4px; color: var(--text-3); transition: transform 0.15s var(--ease); }
     .chev:hover { color: var(--text); background: var(--surface-2); }
     .chev.open { transform: rotate(90deg); }
@@ -154,9 +145,12 @@ export class EntityTree {
       out.push({ key: 'missing', sid: '', kind, entity: null, label: `Unassigned`, count: this.missingCount(), depth: 0, icon: 'alert', nested: false, open: false, scope: 'missing' });
     }
     for (const e of this.list()) {
-      const isOpen = nested && open.has(e.id), list = kids.get(e.id);
-      out.push({ key: String(e.id), sid: String(e.id), kind, entity: e, label: e.name, count: e.albums, depth: q ? 0 : 1, icon: KIND_ICON[kind], nested: nested && list?.length !== 0, open: isOpen, scope: [e.id] });
-      if (isOpen) for (const c of list ?? []) out.push({ key: e.id + '/' + c.id, sid: String(c.id), kind: child!, entity: c, label: c.name, count: c.albums, depth: (q ? 0 : 1) + 1, icon: KIND_ICON[child!], nested: false, open: false, scope: [e.id, c.id] });
+      // children share an album with the row: a row with no album has none, so no chevron; an opened row that turns out childless keeps its chevron and says so
+      const canNest = nested && e.albums > 0, isOpen = canNest && open.has(e.id), list = kids.get(e.id), depth = q ? 0 : 1;
+      out.push({ key: String(e.id), sid: String(e.id), kind, entity: e, label: e.name, count: e.albums, depth, icon: KIND_ICON[kind], nested: canNest, open: isOpen, scope: [e.id] });
+      if (!isOpen) continue;
+      if (list && !list.length) out.push({ key: e.id + '/none', sid: '', kind: child!, entity: null, label: `No ${NOUN[child!]}s`, count: null, depth: depth + 1, icon: KIND_ICON[child!], nested: false, open: false, scope: [e.id], empty: true });
+      for (const c of list ?? []) out.push({ key: e.id + '/' + c.id, sid: String(c.id), kind: child!, entity: c, label: c.name, count: c.albums, depth: depth + 1, icon: KIND_ICON[child!], nested: false, open: false, scope: [e.id, c.id] });
     }
     return out;
   });
@@ -238,6 +232,7 @@ export class EntityTree {
 
   /** Plain click: this row scopes the grid and is the only selected row; Ctrl / Shift only change the selection. */
   protected pick(r: Row, e?: MouseEvent) {
+    if (r.empty) return;
     const mods = { ctrl: !!(e?.ctrlKey || e?.metaKey), shift: !!e?.shiftKey };
     if (r.entity) this.selection.click(r.sid, this.rows().filter(x => x.entity).map(x => x.sid), mods);
     else if (!mods.ctrl && !mods.shift) this.selection.clear();
@@ -261,14 +256,13 @@ export class EntityTree {
     this.contextMenu.emit({ kind: r.kind, entity: r.entity, missing: r.scope === 'missing', scope: Array.isArray(r.scope) ? r.scope : null, selected: this.selectedIds(r.kind), x: e.clientX, y: e.clientY });
   }
 
-  // ---- batch actions on the selection (the flows live in `Actions`; a done one clears the rows) ----
+  // ---- batch actions on the selection (the flows live in `Actions`, reached through the context menu; a done one clears the rows) ----
 
   /** The selected ids of one kind (the tree's unless given): a batch never mixes parents with children of the other kind. */
   private selectedIds(kind = this.kind()) { return this.rows().filter(r => r.entity && r.kind === kind && this.selection.has(r.sid)).map(r => r.entity!.id); }
 
-  protected async confirmSelected() { if (await this.actions.confirmEntities(this.kind(), this.selectedIds())) this.selection.clear(); }
-  protected async mergeSelected() { if (await this.actions.mergeInto(this.kind(), this.selectedIds())) this.selection.clear(); }
-  protected async deleteSelected() { if (await this.actions.deleteEntities(this.kind(), this.selectedIds())) this.selection.clear(); }
+  /** The Delete key over the selected rows of the tree's kind. */
+  private async deleteSelected() { if (await this.actions.deleteEntities(this.kind(), this.selectedIds())) this.selection.clear(); }
 
   /** Unconfirmed entities of the kind no album links to, hidden albums included: the server's `unused` filter, every page of it. */
   protected async deleteUnused() {
@@ -285,7 +279,7 @@ export class EntityTree {
 
   protected onKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return;
-    const rows = this.rows(), i = rows.findIndex(r => this.isScope(r)), cur = rows[i];
+    const rows = this.rows().filter(r => !r.empty), i = rows.findIndex(r => this.isScope(r)), cur = rows[i];
     const go = (r?: Row) => { if (r) { this.pick(r); requestAnimationFrame(() => this.host.querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' })); } };
     if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) { this.selection.selectAll(rows.filter(r => r.entity).map(r => r.sid)); e.preventDefault(); e.stopPropagation(); return; }
     switch (e.key) {

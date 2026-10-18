@@ -6,8 +6,10 @@ import { Gateway } from '../core/gateway';
 import { Album, Derived, Entity, EntityCard, EntityKind, EntityLinkIn, EntitySave } from '../core/model';
 import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
-import { KIND_ICON, NOUN } from './entity-tree';
+import { Actions } from './actions';
+import { KIND_ICON, NOUN } from './kinds';
 import { Confirm } from './shared/confirm';
+import { ContextMenu, MenuEntry } from './shared/context-menu';
 import { EntityPicker } from './shared/entity-picker';
 import { Icon } from './shared/icon';
 import { Rating } from './shared/rating';
@@ -45,6 +47,7 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
       <div class="namerow">
         <input class="input title" [value]="e.name" (change)="rename($any($event.target).value)" title="Name — a renamed entity keeps the old name as an alias" />
         @if (e.auto) { <button class="btn sm" title="Mark as confirmed" (click)="confirmIt()"><app-icon name="check" [size]="13" /> Confirm</button> }
+        <button class="btn icon-btn sm ghost" title="More: merge, delete" (click)="more($event, e)"><app-icon name="more" [size]="16" /></button>
       </div>
 
       @if (e.kind !== 'TAG') {
@@ -203,6 +206,8 @@ export class EntityCardView {
   private readonly toasts = inject(Toasts);
   private readonly picker = inject(EntityPicker);
   private readonly confirm = inject(Confirm);
+  private readonly actions = inject(Actions);
+  private readonly menu = inject(ContextMenu);
   private readonly host: HTMLElement = inject(ElementRef).nativeElement;
   protected readonly kindName = KIND;
   protected readonly icon = KIND_ICON;
@@ -298,6 +303,18 @@ export class EntityCardView {
       const id = found?.id ?? (await this.catalog.trySave({ kind: 'TAG', name, rating: 0, profile: null, aliases: [], links: [] })).entity.id;
       void this.save(x => x.links.some(l => l.to.id === id) ? null : { links: [...this.links(x), { to: id }] });
     } catch (e) { this.toasts.error(e, 'Tag failed: '); }
+  }
+
+  /** ⋯: the entity-level flows of the tree's context menu (`Actions`); a merge or delete closes or replaces the card through the store. */
+  protected more(ev: MouseEvent, e: Entity) {
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    this.menu.open(r.right, r.bottom + 4, [
+      { label: 'Show albums', icon: 'images', disabled: !e.albums, run: () => this.showAlbums() },
+      ...(e.kind === 'MODEL' ? [{ label: 'Credited as…', icon: 'building', run: () => void this.actions.creditAs(e) } as MenuEntry] : []),
+      { sep: true },
+      { label: 'Merge into…', icon: 'layers', run: () => void this.actions.mergeInto(e.kind, [e.id]) },
+      { label: `Delete ${NOUN[e.kind]}…`, icon: 'trash', danger: true, run: () => void this.actions.deleteEntities(e.kind, [e.id]) },
+    ]);
   }
 
   protected async confirmIt() { const c = this.catalog.card(); if (c && await this.catalog.confirm([c.entity.id])) this.flash(); }

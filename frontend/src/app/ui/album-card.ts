@@ -11,7 +11,11 @@ import { Icon } from './shared/icon';
   imports: [Icon, BytesPipe, MegapixelsPipe, DatePipe],
   template: `
     @let a = album();
-    <img [src]="gw.coverUrl(a)" [alt]="a.name" loading="lazy" decoding="async" draggable="false" [class.loaded]="loaded()" (load)="loaded.set(true)" />
+    <img [src]="gw.coverUrl(a)" [alt]="a.name" loading="lazy" decoding="async" draggable="false" [class.loaded]="loaded()" (load)="loaded.set(true); failed.set(false)" (error)="failed.set(true)" />
+    @if (!loaded()) {
+      @if (failed()) { <span class="busy failed" title="No cover yet"><app-icon name="image" [size]="22" /></span> }
+      @else { <span class="busy"><span class="spinner"></span></span> }
+    }
     <div class="badges">
       <span class="badge" [title]="a.kind === 'DIRECTORY' ? 'Folder' : a.kind === 'ZIP' ? 'Zip archive' : 'Archive'"><app-icon [name]="a.kind === 'DIRECTORY' ? 'folder' : 'archive'" [size]="12" /></span>
       @if (a.rating) { <span class="badge rating"><app-icon name="star" [size]="10" />{{ a.rating }}</span> }
@@ -52,6 +56,11 @@ import { Icon } from './shared/icon';
     img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.4s, transform 0.6s var(--ease); }
     img.loaded { opacity: 1; }
     :host(:hover) img { transform: scale(1.035); }
+    /* the cover is still rendering (a disk spinning up, a long queue): shown only after a moment, so a quick load never flickers */
+    .busy { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: oklch(97% 0 0 / 0.55); opacity: 0; animation: busy-in 0.3s var(--ease) 0.7s forwards; }
+    .busy .spinner { width: 22px; height: 22px; border-width: 2.5px; border-color: oklch(100% 0 0 / 0.18); border-top-color: oklch(100% 0 0 / 0.85); }
+    .busy.failed { animation-delay: 0s; color: oklch(97% 0 0 / 0.35); }
+    @keyframes busy-in { to { opacity: 1; } }
     .badges { position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; gap: 4px; } /* above the hover actions: the ×N button stays clickable on narrow tiles */
     .badge {
       display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px; border-radius: 6px;
@@ -106,6 +115,7 @@ export class AlbumCard {
 
   protected readonly gw = inject(Gateway);
   protected readonly loaded = signal(false);
+  protected readonly failed = signal(false);
   /** Display names per role from the album's links (primary names; the raw text is the fallback). */
   protected readonly names = computed(() => {
     const by: Partial<Record<EntityKind, string>> = {};

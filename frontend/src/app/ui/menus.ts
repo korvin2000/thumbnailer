@@ -18,6 +18,8 @@ export interface AlbumActions {
   lists(): Promise<Entity[]>; favorite(t: Target, listId: number, on: boolean): void; newList(t: Target): void;
   /** `pack` without a format uses the saved default (`settings.ops.packFormat`, which `packFormat()` reads for the label). */
   pack(t: Target, format?: PackFormat): void; packFormat(): PackFormat; unpack(t: Target): void; repack(t: Target, format: PackFormat): void; crypt(t: Target, encrypt: boolean): void;
+  /** A session key (`.cry` password) is set: the Encryption submenu shows only then. */
+  hasKey(): boolean;
   moveTo(t: Target): void; copyTo(t: Target): void; hide(t: Target, hidden: boolean): void; delete(t: Target): void;
   selectAll(): void; selectFirst(): void; deselect(): void;
 }
@@ -41,14 +43,31 @@ function counted(label: string, t: Target, skips: (a: Album) => boolean, reason:
 /** True when every known album is hidden (the Hidden view's query counts too): the menu offers Unhide. */
 export function allHidden(t: Target): boolean { return !!t.query?.hidden || (t.albums.length > 0 && t.albums.every(a => a.hidden)); }
 
-/** Pack ▸ (the saved default first, then every format) · Unpack · Repack ▸ · Encrypt · Decrypt. */
-export function opsItems(t: Target, a: AlbumActions): MenuEntry[] {
+/** Archive ▸: Pack ▸ (the saved default first, then every format) · Unpack · Repack ▸. */
+export function archiveItems(t: Target, a: AlbumActions): MenuEntry[] {
   return [
     { ...counted('Pack', t, x => x.kind !== 'DIRECTORY', 'already packed'), icon: 'archive', children: [{ label: `Default (${FORMAT_LABEL[a.packFormat()]})`, run: () => a.pack(t) }, SEP, ...PACK_FORMATS.map(f => ({ label: FORMAT_LABEL[f], run: () => a.pack(t, f) }))] },
     { ...counted('Unpack', t, x => x.kind === 'DIRECTORY', 'already unpacked'), icon: 'folderOpen', run: () => a.unpack(t) },
     { ...counted('Repack', t, x => x.kind === 'DIRECTORY', 'not packed'), icon: 'refresh', children: [{ label: 'zip', run: () => a.repack(t, 'ZIP') }, { label: '7z', run: () => a.repack(t, 'SEVEN_ZIP') }] },
-    { label: 'Encrypt (.cry)', icon: 'lock', run: () => a.crypt(t, true) },
-    { label: 'Decrypt', icon: 'unlock', run: () => a.crypt(t, false) },
+  ];
+}
+
+/** The operation groups: Archive ▸ always, Encryption ▸ (Encrypt · Decrypt) only while a session key is set. */
+export function opsItems(t: Target, a: AlbumActions): MenuEntry[] {
+  return [
+    { label: 'Archive', icon: 'archive', children: archiveItems(t, a) },
+    ...(a.hasKey() ? [{ label: 'Encryption', icon: 'lock', children: [{ label: 'Encrypt (.cry)', icon: 'lock', run: () => a.crypt(t, true) }, { label: 'Decrypt', icon: 'unlock', run: () => a.crypt(t, false) }] } as MenuEntry] : []),
+  ];
+}
+
+/** Files ▸: Move to… · Copy to… · Hide / Unhide · Delete… (the last one for the grid's own albums only, never a node's query). */
+export function fileItems(t: Target, a: AlbumActions, withDelete: boolean): MenuEntry[] {
+  const hidden = allHidden(t);
+  return [
+    { label: 'Move to…', icon: 'arrowRight', run: () => a.moveTo(t) },
+    { label: 'Copy to…', icon: 'copy', run: () => a.copyTo(t) },
+    { label: hidden ? 'Unhide' : 'Hide', icon: hidden ? 'eye' : 'eyeOff', keys: 'H', run: () => a.hide(t, !hidden) },
+    ...(withDelete ? [{ label: 'Delete…', icon: 'trash', keys: 'Del', danger: true, run: () => a.delete(t) } as MenuEntry] : []),
   ];
 }
 
@@ -75,14 +94,11 @@ export function favoritesItems(t: Target, lists: Entity[], a: AlbumActions): Men
   return [...lists.map(l => ({ label: l.name, checked: inAll(l.id), run: () => a.favorite(t, l.id, !inAll(l.id)) })), ...(lists.length ? [SEP] : []), { label: 'New list…', icon: 'plus', run: () => a.newList(t) }];
 }
 
-/** The album submenu of a folder or entity node ("Albums below ▸", "Its albums ▸"): the operations, move/copy/hide, Assign ▸, Favorites ▸ over the node's query. */
+/** The album submenu of a folder or entity node ("Albums below ▸", "Its albums ▸"): the operation groups, Files ▸, Assign ▸, Favorites ▸ over the node's query. */
 export function albumsSubmenu(t: Target, a: AlbumActions): MenuEntry[] {
-  const hidden = allHidden(t);
   return [
-    ...opsItems(t, a), SEP,
-    { label: 'Move to…', icon: 'arrowRight', run: () => a.moveTo(t) },
-    { label: 'Copy to…', icon: 'copy', run: () => a.copyTo(t) },
-    { label: hidden ? 'Unhide' : 'Hide', icon: hidden ? 'eye' : 'eyeOff', run: () => a.hide(t, !hidden) },
+    ...opsItems(t, a),
+    { label: 'Files', icon: 'drive', children: fileItems(t, a, false) },
     SEP,
     { label: 'Assign', icon: 'tag', children: assignItems(t, a) },
     { label: 'Favorites', icon: 'heart', children: () => a.lists().then(l => favoritesItems(t, l, a)) },
@@ -96,9 +112,9 @@ function selectionItems(a: AlbumActions): MenuEntry[] {
 /** Right-click on the empty canvas. */
 export function canvasMenu(a: AlbumActions): MenuEntry[] { return selectionItems(a); }
 
-/** §7.4: the grid's menu for `t` (the selection when the clicked tile is in it, else that tile); `focused` = the one album Open/Details/Show in folder act on. */
+/** §7.4: the grid's menu for `t` (the selection when the clicked tile is in it, else that tile); `focused` = the one album Open/Details/Show in folder act on. Operations and file moves sit in submenus (Archive ▸, Encryption ▸, Files ▸) to keep it short. */
 export function albumMenu(t: Target, a: AlbumActions, focused: Album | null): MenuEntry[] {
-  const count = t.albumIds?.length ?? t.albums.length, hidden = allHidden(t);
+  const count = t.albumIds?.length ?? t.albums.length;
   return [
     ...(count > 1 ? [{ label: `${plural(count, 'album')} selected`, disabled: true } as MenuEntry, SEP] : []),
     { label: 'Open', icon: 'maximize', keys: 'Enter', disabled: !focused, run: () => a.open(focused!.id) },
@@ -110,11 +126,7 @@ export function albumMenu(t: Target, a: AlbumActions, focused: Album | null): Me
     { label: 'Favorites', icon: 'heart', children: () => a.lists().then(l => favoritesItems(t, l, a)) },
     SEP,
     ...opsItems(t, a),
-    SEP,
-    { label: 'Move to…', icon: 'arrowRight', run: () => a.moveTo(t) },
-    { label: 'Copy to…', icon: 'copy', run: () => a.copyTo(t) },
-    { label: hidden ? 'Unhide' : 'Hide', icon: hidden ? 'eye' : 'eyeOff', keys: 'H', run: () => a.hide(t, !hidden) },
-    { label: 'Delete…', icon: 'trash', keys: 'Del', danger: true, run: () => a.delete(t) },
+    { label: 'Files', icon: 'drive', children: fileItems(t, a, true) },
     SEP,
     ...selectionItems(a),
   ];

@@ -1,6 +1,6 @@
 /** Wire model — mirrors docs/ARCHITECTURE.md §1 and §3. */
 
-export type Kind = 'DIRECTORY' | 'ZIP' | 'ARCHIVE'; // ARCHIVE: any other archive 7-Zip reads (rar, 7z, tar, iso, tar.gz ...)
+export type Kind = 'DIRECTORY' | 'ZIP' | 'ARCHIVE'; // ARCHIVE: any other archive 7-Zip reads (rar, 7z, tar, iso, tar.gz ...); as a query filter, every archive kind
 
 export interface Album {
   id: string;

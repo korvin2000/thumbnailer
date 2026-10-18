@@ -69,7 +69,7 @@ ratings and edits are kept, but do not move albums before that scan has run, or 
 
 Move, copy, delete, pack/unpack/repack, encrypt/decrypt `.cry`, copy photos and the folder operations change files in
 the library, one operation at a time (never during a scan), each after a confirm dialog that lists every item and what happens to it.
-In the UI they sit in the right-click menus: an album tile (or the selection, also from the ▾ of the "N selected" chip), a folder
+In the UI they sit in the right-click menus, grouped as Archive ▸, Encryption ▸ (shown only while a session key is set) and Files ▸ (move, copy, hide, delete): an album tile (or the selection, also from the ▾ of the "N selected" chip), a folder
 of the Browse tree (its own rename/move/copy/delete and "Albums below ▸"), an entity row ("Its albums ▸"); the same menus assign
 models, studios, photographers, genres, tags, ratings, shot dates and favorites lists in bulk, and hide/unhide albums. The dialog
 shows the preflight (what runs, what is skipped and why, bytes and free space, consequences) and the conflict policy (rename or

@@ -5,7 +5,8 @@ import {
   Folder, GatewayEvent, LibraryInfo, Listing, MetaRow, Op, PhotoList, PhotoMarks, Preflight, SearchResult, Settings, SettingsInfo,
 } from './model';
 
-interface Pending { resolve: (m: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+/** One request: queued until a socket is open (`sent`), then correlated by id; `timer` bounds both the wait and the answer. */
+interface Pending { type: string; payload: object; resolve: (m: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; sent: boolean }
 
 const REQUEST_TIMEOUT_MS = 30_000;
 /** Comparing copies hashes both albums in full and a preflight sizes every item: minutes on a slow disk, while the UI shows a spinner. */
@@ -16,12 +17,15 @@ const OP_EVENTS = new Set(['opProgress', 'opResult']);
 /** A target's query goes out as an `AlbumQuery` under the server's 500-album cap. */
 const target = (t: AlbumTarget) => ({ albumIds: t.albumIds, query: t.query && { ...t.query, sort: 'NAME', offset: 0, limit: 500 } });
 
-/** JSON-over-WebSocket client with id correlation and exponential reconnect; images come over plain HTTP. */
+/**
+ * JSON-over-WebSocket client with id correlation and exponential reconnect; images come over plain HTTP. A request made while the socket is
+ * down (the server restarting after an optimize or a library switch) waits for the next connection instead of failing, within its timeout.
+ */
 export class WsGateway extends Gateway {
   readonly events = new Subject<GatewayEvent>();
   readonly mock = false;
 
-  private ready!: Promise<WebSocket>;
+  private ws: WebSocket | null = null;
   private seq = 0;
   private backoff = 500;
   /** Last render spec epoch seen in a settings reply; a changed spec changes image URLs, bypassing the browser cache. */
@@ -78,37 +82,36 @@ export class WsGateway extends Gateway {
 
   private connect() {
     const ws = new WebSocket(this.url);
-    let failed!: (e: Error) => void;
-    this.ready = new Promise<WebSocket>((resolve, reject) => {
-      failed = reject;
-      ws.onopen = () => {
-        this.backoff = 500;
-        resolve(ws);
-        this.events.next({ type: 'connection', connected: true });
-      };
-    });
-    this.ready.catch(() => { /* surfaced through the awaiting requests */ });
+    ws.onopen = () => {
+      this.backoff = 500;
+      this.ws = ws;
+      for (const [id, p] of this.pending) this.send(ws, id, p);
+      this.events.next({ type: 'connection', connected: true });
+    };
     ws.onmessage = e => this.receive(JSON.parse(e.data));
     ws.onclose = () => {
-      failed(new Error('Connection lost'));
+      this.ws = null;
       this.events.next({ type: 'connection', connected: false });
-      for (const p of this.pending.values()) p.reject(new Error('Connection lost'));
-      this.pending.clear();
+      for (const [id, p] of this.pending) if (p.sent) { clearTimeout(p.timer); this.pending.delete(id); p.reject(new Error('Connection lost')); } // the unsent ones go out on the next socket
       setTimeout(() => this.connect(), this.backoff);
       this.backoff = Math.min(this.backoff * 2, 10_000);
     };
   }
 
-  /** Waits for the socket while it is (re)connecting, so requests issued at startup are not lost. */
-  private async request<T>(type: string, payload: object, timeout = REQUEST_TIMEOUT_MS): Promise<T> {
-    const ws = await this.ready;
+  /** Sent at once on an open socket, else by the next `onopen`; the timer runs from here, so a long outage ends in "Not connected". */
+  private request<T>(type: string, payload: object, timeout = REQUEST_TIMEOUT_MS): Promise<T> {
     const id = String(++this.seq);
     return new Promise<T>((resolve, reject) => {
-      if (ws.readyState !== WebSocket.OPEN) return reject(new Error('Not connected'));
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${type}: timeout`)); }, timeout);
-      this.pending.set(id, { resolve, reject, timer });
-      ws.send(JSON.stringify({ type, id, ...payload }));
+      const p: Pending = { type, payload, resolve, reject, sent: false, timer: setTimeout(() => { this.pending.delete(id); reject(new Error(p.sent ? `${type}: timeout` : 'Not connected')); }, timeout) };
+      this.pending.set(id, p);
+      if (this.ws?.readyState === WebSocket.OPEN) this.send(this.ws, id, p);
     });
+  }
+
+  private send(ws: WebSocket, id: string, p: Pending) {
+    if (p.sent) return;
+    p.sent = true;
+    ws.send(JSON.stringify({ type: p.type, id, ...p.payload }));
   }
 
   private receive(m: { type: string; id?: string; message?: string } & Record<string, unknown>) {

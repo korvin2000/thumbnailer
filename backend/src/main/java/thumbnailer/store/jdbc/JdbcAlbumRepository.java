@@ -431,7 +431,9 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
             for (int i = 0; i < genres.size(); i++) w.named("genre" + i, EntityKind.GENRE, genres.get(i));
             var tags = q.tags() == null ? List.<String>of() : q.tags().stream().filter(Objects::nonNull).toList();
             for (int i = 0; i < tags.size(); i++) w.named("tag" + i, EntityKind.TAG, tags.get(i));
-            w.add("kind = :kind", "kind", q.kind() == null ? null : q.kind().name());
+            // ARCHIVE in a query means every archive kind (the UI's Archives strip); ZIP stays zip alone (`kind:zip`)
+            w.add(q.kind() == Kind.ARCHIVE ? "kind <> :kind" : "kind = :kind", "kind",
+                    q.kind() == null ? null : q.kind() == Kind.ARCHIVE ? Kind.DIRECTORY.name() : q.kind().name());
             w.add("bytes >= :minBytes", "minBytes", q.minBytes());
             w.add("bytes <= :maxBytes", "maxBytes", q.maxBytes());
             w.add("image_count >= :minCount", "minCount", q.minCount());

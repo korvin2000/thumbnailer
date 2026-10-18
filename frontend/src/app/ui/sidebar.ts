@@ -10,7 +10,7 @@ import { Actions } from './actions';
 import { EntityTree, KIND_ICON, KIND_LABEL } from './entity-tree';
 import { FiltersPanel } from './filters-panel';
 import { FolderTree } from './folder-tree';
-import { ContextMenu } from './shared/context-menu';
+import { ContextMenu, MenuEntry } from './shared/context-menu';
 import { Icon, IconName } from './shared/icon';
 
 /** The Browse tab's group-by modes: Folders = the folder tree, the rest = an entity tree of that kind. */
@@ -23,21 +23,26 @@ const GROUPS: { key: GroupBy; label: string; icon: IconName; kind?: EntityKind }
   { key: 'list', label: KIND_LABEL.LIST, icon: KIND_ICON.LIST, kind: 'LIST' },
 ];
 
-/** Left panel with two tabs: Browse (folder tree or an entity tree, picked by `Prefs.groupBy`, over the fixed Views strip) and Refine (search criteria); `Prefs.sidebar` picks the tab. */
+/**
+ * Left panel with two tabs: Browse (folder tree or an entity tree, picked by `Prefs.groupBy`, over the fixed Views strip) and Refine (search
+ * criteria); `Prefs.sidebar` picks the tab. The header is one segmented strip: the Browse segment reads "Browse" while Refine shows and, once
+ * active, the current group with a caret that opens the group menu, so the three controls fit the panel's width.
+ */
 @Component({
   selector: 'app-sidebar',
   imports: [Icon, FolderTree, EntityTree, FiltersPanel, DecimalPipe],
   template: `
     <header>
-      <div class="segmented">
-        <button [class.active]="prefs.sidebar() === 'folders'" (click)="prefs.sidebar.set('folders')" title="Browse (E)"><app-icon [name]="group().icon" [size]="14" />Browse</button>
-        <button [class.active]="prefs.sidebar() === 'refine'" (click)="prefs.sidebar.set('refine')" title="Refine (F)">
+      @let browsing = prefs.sidebar() !== 'refine';
+      <div class="segmented tabs">
+        <button class="mode" [class.active]="browsing" [class.menu]="menuOpen()" [title]="browsing ? 'Browsing by ' + group().label.toLowerCase() + ' — change (E)' : 'Browse (E)'" (click)="browsing ? openGroupMenu($event) : prefs.sidebar.set('folders')">
+          <app-icon [name]="group().icon" [size]="14" /><span class="lbl">{{ browsing ? group().label : 'Browse' }}</span>@if (browsing) { <app-icon class="caret" name="chevronDown" [size]="12" /> }
+        </button>
+        <button [class.active]="!browsing" (click)="prefs.sidebar.set('refine')" title="Refine (F)">
           <app-icon name="filter" [size]="14" />Refine @if (store.refining()) { <span class="badge">{{ store.refining() }}</span> }
         </button>
       </div>
-      <span class="grow"></span>
-      @if (prefs.sidebar() === 'refine') { <button class="btn ghost sm" (click)="store.resetRefine()" [disabled]="!store.refining() && !store.text()">Reset</button> }
-      @else { <button class="btn sm ghost groupby" [title]="'Grouped by ' + group().label + ' — change'" (click)="openGroupMenu($event)"><app-icon name="layers" [size]="14" />{{ group().label }}<app-icon name="chevronDown" [size]="12" /></button> }
+      @if (!browsing) { <button class="btn icon-btn sm ghost" title="Reset search and filters" (click)="store.resetRefine()" [disabled]="!store.refining() && !store.text()"><app-icon name="refresh" [size]="15" /></button> }
       <button class="btn icon-btn sm ghost" (click)="prefs.sidebar.set('none')" title="Close sidebar (Esc)"><app-icon name="x" /></button>
     </header>
     @if (prefs.sidebar() !== 'refine' && scope(); as s) {
@@ -68,10 +73,14 @@ const GROUPS: { key: GroupBy; label: string; icon: IconName; kind?: EntityKind }
   `,
   styles: `
     :host { display: flex; flex-direction: column; width: var(--filters-w); height: 100%; background: var(--bg-elev); border-right: 1px solid var(--border); }
-    header { display: flex; flex: none; align-items: center; gap: 4px; height: 44px; padding: 0 8px 0 10px; border-bottom: 1px solid var(--border); }
-    .grow { flex: 1; }
+    header { display: flex; flex: none; align-items: center; gap: 4px; height: 44px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); }
+    .tabs { flex: 1; min-width: 0; margin-right: auto; }
+    .tabs > button { min-width: 0; padding: 0 7px; }
+    .tabs .mode { flex: 1; justify-content: flex-start; }
+    .tabs .mode .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tabs .caret { margin-left: auto; color: var(--text-3); transition: transform 0.15s var(--ease); }
+    .tabs .mode.menu .caret { transform: rotate(180deg); }
     .badge { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
-    .groupby { gap: 4px; padding: 0 5px 0 7px; font-weight: 500; }
     .scope { display: flex; flex: none; align-items: center; gap: 5px; height: 30px; padding: 0 4px 0 14px; border-bottom: 1px solid var(--border); background: var(--accent-soft); color: var(--accent-strong); font-size: 12px; white-space: nowrap; }
     .scope .crumb, .scope .sep { color: var(--text-2); }
     .scope .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
@@ -100,6 +109,9 @@ export class Sidebar {
   private readonly toasts = inject(Toasts);
 
   protected readonly group = computed(() => GROUPS.find(g => g.key === this.prefs.groupBy()) ?? GROUPS[0]);
+  /** The group menu is the one the service shows (its entries are this instance's): the caret turns while it is. */
+  private groupItems: MenuEntry[] | null = null;
+  protected readonly menuOpen = computed(() => { const s = this.menu.state(); return !!s && s.items === this.groupItems; });
   /** Hidden and duplicate album counts, recounted after every catalog, scan or result change (two one-row searches). */
   protected readonly counts = signal<{ hidden: number | null; duplicates: number | null }>({ hidden: null, duplicates: null });
   /** The entity scope the grid is narrowed to (the location bar shows folders only): group › name, or the Unassigned row. */
@@ -120,9 +132,11 @@ export class Sidebar {
     });
   }
 
+  /** The group menu under the Browse segment: what the tree lists (Folders, or one catalog kind). */
   protected openGroupMenu(e: MouseEvent) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    this.menu.open(r.left, r.bottom + 4, GROUPS.map(g => ({ label: g.label, icon: g.icon, checked: g.key === this.prefs.groupBy(), run: () => this.prefs.groupBy.set(g.key) })));
+    this.groupItems = GROUPS.map(g => ({ label: g.label, icon: g.icon, checked: g.key === this.prefs.groupBy(), run: () => this.prefs.groupBy.set(g.key) }));
+    this.menu.open(r.left, r.bottom + 6, this.groupItems);
   }
 
   protected clearScope() { this.store.setFilter('entities', null); this.store.setFilter('missing', null); }

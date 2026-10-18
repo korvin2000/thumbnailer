@@ -240,7 +240,7 @@ AlbumQuery {
   tags?: string[]          // every tag must be present
   model?, studio?, photographer?: string   // exact, case-insensitive
   roots?: string[]         // limit to these scan roots (or path prefixes)
-  kind?: 'DIRECTORY' | 'ZIP' | 'ARCHIVE'
+  kind?: 'DIRECTORY' | 'ZIP' | 'ARCHIVE'   // ARCHIVE matches every archive kind (ZIP included); ZIP = zip alone
   minBytes?, maxBytes?: number
   minCount?, maxCount?: number
   minMegapixels?, maxMegapixels?: number   // compared with avgPixels / 1e6
@@ -301,7 +301,7 @@ src/app/
           catalog-store.ts / ops-store.ts (catalog and operation state beside the album store), selection.ts,
           folder-picker.ts (promise-style `pick()` service behind the folder dialog), toasts.ts, format.ts (pipes),
           layout.ts (bricks/grid layout engine), search-syntax.ts (`#tag`, `model:`/`studio:`/`by:`/`kind:` tokens)
-  ui/     topbar, sidebar (left, overlay below 1100px; tabs Folders = folder-tree, Refine = filters-panel),
+  ui/     topbar (one sidebar toggle reopening the last tab, Catalog ▾ → entity picker → card), sidebar (left, overlay below 1100px; tabs Browse = folder-tree or entity-tree by group, Refine = filters-panel; one segmented header),
           folder-tree (lazy Explorer-like tree over `folders`), location-bar (above the grid: ↑, crumbs with
           children popovers, editable path, count, rescan of the shown folder), tile-grid (generic virtualized grid, also
           used by the viewer), album-card, details-panel (right: meta + edit; floating, inline ≥1400px, bottom sheet

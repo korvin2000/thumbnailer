@@ -55,8 +55,7 @@ const MEGAPIXELS = [0, 1, 2, 4, 8, 12, 16, 24, 36, 50, 100, Infinity];
       <div class="segmented kinds">
         <button [class.active]="!f().kind" (click)="store.setFilter('kind', null)" title="Folders and archives">All</button>
         <button [class.active]="f().kind === 'DIRECTORY'" (click)="setKind('DIRECTORY')" title="Plain folders">Folders</button>
-        <button [class.active]="f().kind === 'ZIP'" (click)="setKind('ZIP')" title="Zip archives">Zips</button>
-        <button [class.active]="f().kind === 'ARCHIVE'" (click)="setKind('ARCHIVE')" title="Other archives: rar, 7z, tar, iso">Archives</button>
+        <button [class.active]="f().kind === 'ARCHIVE'" (click)="setKind('ARCHIVE')" title="Archives of any kind: zip, rar, 7z, tar, iso">Archives</button>
       </div>
     </section>
 
