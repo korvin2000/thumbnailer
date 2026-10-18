@@ -3,21 +3,21 @@ package thumbnailer.metadata;
 import java.io.IOException;
 import java.time.DateTimeException;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.regex.Pattern;
 import thumbnailer.album.AlbumMeta;
-import thumbnailer.album.Entry;
-import thumbnailer.source.AlbumContainer;
 
 /**
- * SPI: a partial {@link AlbumMeta} read from an album. Implementations are Spring beans ordered with {@code @Order};
- * {@link Metadata} merges them so that an earlier extractor's non-blank field wins and tags are unioned.
+ * SPI: a partial {@link AlbumMeta} read from an album's {@link Extraction}. Implementations are Spring beans or
+ * {@code META-INF/services} providers (public, no-argument constructor); {@link Metadata} runs them by {@link #order}
+ * and merges them so that an earlier extractor's non-blank field wins and tags and genres are unioned.
  */
 public interface MetadataExtractor {
 
     Pattern ISO_DATE = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})");
 
-    AlbumMeta extract(AlbumContainer container, List<Entry> entries) throws IOException;
+    AlbumMeta extract(Extraction ctx) throws IOException;
+
+    default int order() { return 100; }
 
     /** The first valid {@code yyyy-MM-dd} in {@code text}, if any. */
     static LocalDate date(String text) {

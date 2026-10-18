@@ -36,6 +36,7 @@ Useful switches (`application.yml` keys, overridable as `--key=value` or environ
 | `thumbnailer.store.tupl.cache-mb` | `128` | TuplDB page cache (off-heap, allocated at start) |
 | `thumbnailer.min-images` | `2` | images a folder needs to count as an album |
 | `thumbnailer.demo` | `false` | generate sample albums under the library dir |
+| `thumbnailer.genres` | (none) | comma-separated genre words the file-name parser takes from an album name when they stand as whole words |
 | `server.port` / `server.address` | `8080` / `127.0.0.1` | bind address |
 
 Folders to scan (picked in a folder browser), exclusions (`*` globs), scan-on-start, path mapping for a moved library and

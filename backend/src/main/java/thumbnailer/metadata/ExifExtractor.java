@@ -3,26 +3,25 @@ package thumbnailer.metadata;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Objects;
-import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import thumbnailer.album.AlbumMeta;
 import thumbnailer.album.Entry;
 import thumbnailer.image.ImageProbe;
-import thumbnailer.source.AlbumContainer;
 
-/** Earliest {@code DateTimeOriginal} (already probed per entry) and the first image's {@code Artist}. */
+/** Earliest {@code DateTimeOriginal} (already probed per entry) and the first image's {@code Artist} (its head, during indexing). */
 @Component
-@Order(3)
-class ExifExtractor implements MetadataExtractor {
+public class ExifExtractor implements MetadataExtractor {
+
+    @Override public int order() { return 3; }
 
     @Override
-    public AlbumMeta extract(AlbumContainer container, List<Entry> entries) throws IOException {
-        var date = entries.stream().map(Entry::shotAt).filter(Objects::nonNull).min(Comparator.naturalOrder())
+    public AlbumMeta extract(Extraction ctx) throws IOException {
+        var date = ctx.images().stream().map(Entry::shotAt).filter(Objects::nonNull).min(Comparator.naturalOrder())
                 .map(LocalDateTime::toLocalDate).orElse(null);
         String artist = null;
-        if (!entries.isEmpty()) artist = ImageProbe.exif(container.head(entries.getFirst().name(), ImageProbe.HEAD)).artist();
+        if (!ctx.images().isEmpty() && ctx.container() != null)
+            artist = ImageProbe.exif(ctx.container().head(ctx.images().getFirst().name(), ImageProbe.HEAD)).artist();
         return new AlbumMeta(null, null, null, artist, null, date, null, null);
     }
 }

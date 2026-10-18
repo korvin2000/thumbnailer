@@ -8,7 +8,7 @@ import thumbnailer.album.Entry;
 
 class CoverSelectorTest {
 
-    private final CoverSelector selector = new CoverSelector();
+    private final CoverSelector selector = new CoverSelector(List.of());
 
     @Test
     void nameHintsWinOverSmallest() {
@@ -30,6 +30,19 @@ class CoverSelectorTest {
         assertThat(first(entries, "001.jpg")).isEqualTo("001.jpg");
         assertThat(first(entries, "gone.jpg")).isEqualTo("002.jpg");
         assertThat(selector.candidates(entries, "001.jpg").map(Entry::name)).containsExactly("001.jpg", "002.jpg");
+    }
+
+    @Test
+    void classPathStrategiesRunAfterTheBuiltInsByOrderAndAFailingOneIsSkipped() {
+        CoverStrategy failing = new CoverStrategy() {
+            @Override public java.util.Optional<Entry> pick(thumbnailer.metadata.Extraction ctx) { throw new IllegalStateException("x"); }
+            @Override public int order() { return 0; }
+        };
+        var chained = new CoverSelector(List.of(failing));
+        assertThat(chained.chain()).extracting(s -> s.getClass().getSimpleName()).containsExactly("", "NameHint", "Smallest", "PluginStrategy");
+        var entries = List.of(entry(0, "001.jpg", 300), entry(1, "002.jpg", 100), entry(2, "003.jpg", 200), entry(3, "004.jpg", 400));
+        assertThat(chained.candidates(entries, null).map(Entry::name)).as("smallest, then the plugin's median, then the rest")
+                .containsExactly("002.jpg", "003.jpg", "001.jpg", "004.jpg");
     }
 
     private String first(List<Entry> entries, String pinned) {

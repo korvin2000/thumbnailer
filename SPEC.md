@@ -97,7 +97,7 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | K3 | Cards: model (profile, studios table with credited alias and roles, genres, own hashtags), studio (roster, photographers, genres), photographer, genre, list; derived facts read-only, curated facts editable | ○ | F3, `ui/entity-card.ts` |
 | K4 | Sidebar grouped by Folders / Studios / Models / Photographers / Genres / Favorites with counts, Unassigned rows, batch confirm/merge/delete | ○ | F3, `ui/entity-tree.ts` |
 | K5 | Filters by entity id, by missing role, by genre; `model:`/`studio:`/`by:`/`#tag` resolve through aliases; facets from links | ◐ | `JdbcAlbumRepository.Where` (`entities`, `missing` phase 0; aliases B1) |
-| K6 | Favorites lists for albums and photos; photo ratings 1–10 by entry name | ◐ | `CatalogRepository.mark` (phase 0), viewer UI (F2) |
+| K6 | Favorites lists for albums and photos; photo ratings 1–10 by entry name | ◐ | `CatalogRepository.mark` (phase 0); backend done: `markPhoto`, `photos {listId}` (visible albums, `index` from the entries; `PhotosApiTest`); viewer UI (F2), photo grid (F4) |
 | K7 | Hidden = safe-delete: index only, excluded from default views and counts, visible in the Hidden view, reconciliation unaffected | ◐ | `JdbcAlbumRepositoryTest` hidden rules (phase 0), Views strip (F3) |
 | K8 | Copies by content stamp: `copies` per page, copy list with Compare, Duplicates view | ◐ | `copies` (phase 0), `compareCopies` (B1), UI (F3) |
 | K9 | Multi-selection (≤ 500), context menus on albums, folders, entities, photos; confirm dialogs for every operation | ◐ | `core/selection.spec.ts` (phase 0), F1/F4 |
@@ -111,7 +111,7 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | O3 | Identity survives every operation: `relocate`/`rebase` for path changes, re-index with asserted identity (`commit(prior, …, nameMap)`) for container changes; pins and photo marks follow renamed entries | ◐ | `index/Reindexer`, `AlbumService.commit(prior…)` (phase 0) |
 | O4 | Bulk metadata assignment (model, studio, photographer, genre, tags add/remove, rating, shot date) to a selection or a tree node's albums | ◐ | `bulkUpdate` (phase 0), menus (F4) |
 | O5 | Viewer: sort (name, size, date, dimensions, rating, random), min-size filter, five scale modes, full screen with slideshow, photo favorites and ratings, copy to 1 of 10 targets with skip-identical and auto-rename, metadata view, bio text | ○ | F2, B4 |
-| O6 | Plugin contracts: `Extraction` context for extractors and cover strategies, beans + `ServiceLoader`, later a `:spi` module | ○ | B4, phase 3 |
+| O6 | Plugin contracts: `Extraction` context for extractors and cover strategies, beans + `ServiceLoader`, later a `:spi` module | ◐ | `metadata/Extraction`, `Plugins.load` (beans + `META-INF/services`, by `order()`, failures skipped), built-ins registered both ways; `MetadataTest`, `CoverSelectorTest`, `ExtractionTest`; `:spi` module: phase 3 |
 
 ## N — Platform and non-functional
 

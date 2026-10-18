@@ -60,6 +60,35 @@ class HeaderTest {
         assertThat(frame.width() + "x" + frame.height()).as("the first frame, as ImageIO reads it").isEqualTo("100x50");
     }
 
+    @Test
+    void metaTellsWhetherTheHeadShowsAMetadataBlock() throws IOException {
+        byte[] plain = jpeg(64, 48), withExif = withSegments(plain, exif(ByteOrder.LITTLE_ENDIAN, 1, "A", null));
+        assertThat(Header.meta(withExif)).as("jpeg + APP1 Exif").isTrue();
+        assertThat(Header.meta(withSegments(plain, xmp(100)))).as("jpeg + APP1 XMP").isTrue();
+        assertThat(Header.meta(plain)).as("jpeg, JFIF only").isFalse();
+        var png = write("png");
+        assertThat(Header.meta(png)).as("png").isFalse();
+        var tiffPayload = Arrays.copyOfRange(exif(ByteOrder.BIG_ENDIAN, 6, "B", null), 10, exif(ByteOrder.BIG_ENDIAN, 6, "B", null).length);
+        var chunk = ByteBuffer.allocate(12 + tiffPayload.length).putInt(tiffPayload.length).put("eXIf".getBytes(StandardCharsets.US_ASCII))
+                .put(tiffPayload).putInt(0).array(); // the CRC is not checked
+        var out = new ByteArrayOutputStream();
+        out.write(png, 0, 33); // signature + IHDR
+        out.writeBytes(chunk);
+        out.write(png, 33, png.length - 33);
+        var pngExif = out.toByteArray();
+        assertThat(Header.meta(pngExif)).as("png + eXIf").isTrue();
+        assertThat(Header.parse(MemorySegment.ofArray(pngExif)).exif().orientation()).isEqualTo(6);
+        assertThat(Header.meta(write("tiff"))).as("tiff: its IFDs").isTrue();
+        assertThat(Header.meta(write("gif"))).isFalse();
+        assertThat(Header.meta(Arrays.copyOf(plain, 3))).as("not parsed: unknown").isNull();
+    }
+
+    private static byte[] write(String format) throws IOException {
+        var out = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(30, 20, BufferedImage.TYPE_INT_RGB), format, out);
+        return out.toByteArray();
+    }
+
     private static byte[] jpeg(int w, int h) throws IOException {
         var out = new ByteArrayOutputStream();
         ImageIO.write(new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB), "jpg", out);
