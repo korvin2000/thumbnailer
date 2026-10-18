@@ -7,6 +7,16 @@ undo. Reference SPEC IDs.
 
 ## State (2026-10-18, v0.1.0)
 
+- 2026-10-18 **catalog phase 1, track F1 (UI infra) landed** on its branch ([catalog_plan.md](catalog_plan.md) §8): `ContextMenu` as a
+  stack of top-layer popovers (nested and lazy submenus, keyboard incl. type-ahead, viewport flipping by the pure `placeMenu`, focus
+  returned to the opener), `Confirm` (item list / `showAll`, preflight totals, notes, skipped, consequences, warnings, select/check/
+  password2 with a blocking hint, stacks above the settings dialog), `EntityPicker` (recent picks per kind in localStorage, create row),
+  `TileGrid` drives a `Selection` input over the visual order (Ctrl/Shift click, Shift+arrows, Ctrl+Space) and emits `contextMenu`
+  (right-click, Shift+F10), the location bar's selection chip (count, ▾ menu from `selectionMenu`, Deselect), `App` keys `Ctrl+A`
+  (pages up to the cap), `H` (hide/unhide through `bulkUpdate`), `Esc` (selection first), `Delete` hook. Checks: `ng build` 512 kB,
+  `ng test` 42; every piece exercised in the mock UI. Not wired yet (F4 / phase 0 files): `[selection]="store.selection"` and
+  `(contextMenu)` on the grid, `[selectionMenu]` on the location bar, and `album-card.ts` needs `.check { z-index: 1 }` (the scrim
+  paints over the check corner).
 - 2026-10-18 **catalog phase 0 (backbone) landed**, uncommitted: [catalog_plan.md](catalog_plan.md) §8 phase 0 —
   schema (`entity`, `alias`, `album_link`, `entity_link`, `photo`, `photo_link`, `meta`; `album.seq/hidden/bio`;
   `removed` PK `(content_id, id)` + `seq/hidden`, migrated on start), records (`AlbumMeta.genres`, `AlbumPatch`

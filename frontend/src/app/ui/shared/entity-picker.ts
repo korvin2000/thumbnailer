@@ -31,7 +31,12 @@ export class EntityPicker {
 
 const NOUN: Record<EntityKind, string> = { MODEL: 'model', STUDIO: 'studio', PHOTOGRAPHER: 'photographer', GENRE: 'genre', TAG: 'tag', LIST: 'list' };
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+const RECENT = 8, recentKey = (kind: EntityKind) => `thumbnailer.recent.${kind}`;
+/** The last picks of a kind (localStorage snapshots, refreshed from the search when the entity shows up in it). */
+const readRecent = (kind: EntityKind): Entity[] => { try { return JSON.parse(localStorage.getItem(recentKey(kind)) ?? '[]'); } catch { return []; } };
+const writeRecent = (kind: EntityKind, list: Entity[]) => { try { localStorage.setItem(recentKey(kind), JSON.stringify(list)); } catch { /* storage unavailable */ } };
 
+/** Search box over `Gateway.entities` (debounced, newest answer wins), recent picks first while the box is empty, ↑ ↓ ⏎ Esc, "Create …" when allowed and nothing matches exactly. */
 @Component({
   selector: 'app-entity-picker',
   imports: [Icon],
@@ -42,19 +47,29 @@ const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
           <app-icon name="search" [size]="16" /><h2>{{ req.title ?? 'Choose a ' + noun[req.kind] }}</h2>
           <button class="btn icon-btn sm ghost" (click)="picker.cancel()" title="Cancel"><app-icon name="x" /></button>
         </header>
-        <div class="search"><input #box class="input" [placeholder]="'Search ' + noun[req.kind] + 's…'" [value]="text()" (input)="search($any($event.target).value)" (keydown)="key($event)" spellcheck="false" /></div>
+        <div class="search"><input #box class="input" [placeholder]="'Search ' + noun[req.kind] + 's…'" [value]="text()" (input)="search($any($event.target).value)" (keydown)="key($event)" spellcheck="false" autocomplete="off" /></div>
         @if (error(); as err) { <div class="error"><app-icon name="alert" [size]="14" /> {{ err }}</div> }
-        <ul>
-          @for (e of items(); track e.id) {
-            <li [class.active]="active() === $index" [class.auto]="e.auto" (click)="picker.choose(e)" (mouseenter)="active.set($index)">
+        <ul role="listbox">
+          @if (recentShown().length) {
+            <li class="group">Recent</li>
+            @for (e of recentShown(); track e.id) {
+              <li role="option" [class.active]="active() === $index" [class.auto]="e.auto" (click)="pick(e)" (mouseenter)="active.set($index)">
+                <span class="name">{{ e.name }}</span>@if (e.auto) { <span class="dot" title="Created from album text, not confirmed"></span> }<span class="n">{{ e.albums }}</span>
+              </li>
+            }
+            <li class="group">All</li>
+          }
+          @for (e of rest(); track e.id; let i = $index) {
+            @let at = i + recentShown().length;
+            <li role="option" [class.active]="active() === at" [class.auto]="e.auto" (click)="pick(e)" (mouseenter)="active.set(at)">
               <span class="name">{{ e.name }}</span>@if (e.auto) { <span class="dot" title="Created from album text, not confirmed"></span> }<span class="n">{{ e.albums }}</span>
             </li>
           }
           @if (canCreate()) {
-            <li class="create" [class.active]="active() === items().length" (click)="create()" (mouseenter)="active.set(items().length)"><app-icon name="plus" [size]="14" /> Create “{{ text().trim() }}”</li>
+            <li role="option" class="create" [class.active]="active() === rows().length" (click)="create()" (mouseenter)="active.set(rows().length)"><app-icon name="plus" [size]="14" /> Create “{{ text().trim() }}”</li>
           }
           @if (loading()) { <li class="state"><span class="spinner"></span> Loading…</li> }
-          @else if (!items().length && !canCreate()) { <li class="state">Nothing found</li> }
+          @else if (!rows().length && !canCreate()) { <li class="state">Nothing found</li> }
         </ul>
         @if (total() > items().length) { <footer>{{ items().length }} of {{ total() }}: type to narrow</footer> }
       }
@@ -73,6 +88,7 @@ const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
     li { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--radius-s); font-size: 13px; cursor: pointer; user-select: none; }
     li.active { background: var(--surface-2); }
     li.auto .name { color: var(--text-2); }
+    li.group { padding: 8px 10px 2px; color: var(--text-3); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; cursor: default; }
     .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
     .n { color: var(--text-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
@@ -92,10 +108,15 @@ export class EntityPickerDialog {
   protected readonly text = signal('');
   protected readonly items = signal<Entity[]>([]);
   protected readonly total = signal(0);
+  protected readonly recent = signal<Entity[]>([]);
   protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);
-  /** Keyboard row; `items().length` = the Create row. */
+  /** Keyboard row over `rows()`; `rows().length` = the Create row. */
   protected readonly active = signal(0);
+  /** Recent picks lead while the box is empty, with the search's fresher copy of each where it has one. */
+  protected readonly recentShown = computed(() => this.text().trim() ? [] : this.recent().map(r => this.items().find(e => e.id === r.id) ?? r));
+  protected readonly rest = computed(() => { const seen = new Set(this.recentShown().map(e => e.id)); return this.items().filter(e => !seen.has(e.id)); });
+  protected readonly rows = computed(() => [...this.recentShown(), ...this.rest()]);
   protected readonly canCreate = computed(() => { const t = norm(this.text()); return !!this.picker.open()?.allowCreate && !!t && !this.items().some(e => norm(e.name) === t); });
   /** Bumped per search and on dismissal; an older answer is dropped. */
   private gen = 0;
@@ -106,7 +127,7 @@ export class EntityPickerDialog {
       const req = this.picker.open(), dlg = this.dialog().nativeElement;
       untracked(() => {
         if (!req) { this.gen++; clearTimeout(this.timer); if (dlg.open) dlg.close(); return; }
-        this.items.set([]); this.total.set(0); this.error.set(null); // a new request (even one replacing an open one) starts over
+        this.items.set([]); this.total.set(0); this.error.set(null); this.recent.set(readRecent(req.kind)); // a new request (even one replacing an open one) starts over
         this.search('', 0);
         if (!dlg.open) dlg.showModal();
         this.box()?.nativeElement.focus();
@@ -131,18 +152,29 @@ export class EntityPickerDialog {
   }
 
   protected key(e: KeyboardEvent) {
-    const rows = this.items().length + (this.canCreate() ? 1 : 0);
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (rows) this.active.update(i => (i + (e.key === 'ArrowDown' ? 1 : -1) + rows) % rows); }
-    else if (e.key === 'Enter') { const it = this.items()[this.active()]; if (it) this.picker.choose(it); else if (this.canCreate()) void this.create(); }
-    else return;
+    const n = this.rows().length + (this.canCreate() ? 1 : 0);
+    switch (e.key) {
+      case 'ArrowDown': case 'ArrowUp': if (n) this.active.update(i => (i + (e.key === 'ArrowDown' ? 1 : -1) + n) % n); break;
+      case 'Home': this.active.set(0); break;
+      case 'End': this.active.set(Math.max(0, n - 1)); break;
+      case 'Enter': { const it = this.rows()[this.active()]; if (it) this.pick(it); else if (this.canCreate()) void this.create(); break; }
+      default: return;
+    }
     e.preventDefault();
+  }
+
+  /** Chooses `e` and remembers it as the kind's newest recent pick. */
+  protected pick(e: Entity) {
+    const list = [e, ...this.recent().filter(r => r.id !== e.id)].slice(0, RECENT);
+    writeRecent(e.kind, list);
+    this.picker.choose(e);
   }
 
   /** Creates the typed name as a confirmed entity and picks it; a name owned by another entity is shown here (toasts hide behind the dialog). */
   protected async create() {
     const req = this.picker.open(), name = this.text().trim();
     if (!req || !name) return;
-    try { const c = await this.gw.saveEntity({ kind: req.kind, name, rating: 0, profile: null, aliases: [], links: [] }); if (this.picker.open() === req) this.picker.choose(c.entity); }
+    try { const c = await this.gw.saveEntity({ kind: req.kind, name, rating: 0, profile: null, aliases: [], links: [] }); if (this.picker.open() === req) this.pick(c.entity); }
     catch (e) { this.error.set(e instanceof Error ? e.message : String(e)); }
   }
 }
