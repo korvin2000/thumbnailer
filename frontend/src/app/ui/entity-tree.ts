@@ -6,19 +6,19 @@ import { Entity, EntityKind, EntityList, EntityQuery } from '../core/model';
 import { Selection } from '../core/selection';
 import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
-import { Confirm } from './shared/confirm';
-import { EntityPicker } from './shared/entity-picker';
+import { Actions } from './actions';
+import { KIND_ICON, KIND_LABEL, NOUN } from './kinds';
 import { Icon, IconName } from './shared/icon';
 
-/** A right-click on a row, for the menu builder (F4): the row's entity (null on All / Unassigned), the selected ids and the pointer. */
-export interface EntityTreeContext { kind: EntityKind; entity: Entity | null; selected: number[]; x: number; y: number }
+
+export { KIND_ICON, KIND_LABEL, NOUN } from './kinds';
+
+/** A right-click on a row, for the menu builder (`Actions.openEntityMenu`): the row's entity (null on All / Unassigned, `missing` tells which), the selected ids and the pointer. */
+export interface EntityTreeContext { kind: EntityKind; entity: Entity | null; missing: boolean; selected: number[]; x: number; y: number }
 
 /** One visible line; `scope` = what a plain click narrows the grid to (entity ids: all must match, so a child row carries its parent too). */
 interface Row { key: string; /** The selection id (the entity's id as text); empty on All / Unassigned. */ sid: string; entity: Entity | null; label: string; count: number | null; depth: number; icon: IconName; nested: boolean; open: boolean; scope: number[] | 'all' | 'missing' }
 
-export const KIND_ICON: Record<EntityKind, IconName> = { MODEL: 'user', STUDIO: 'building', PHOTOGRAPHER: 'camera', GENRE: 'sparkles', TAG: 'hash', LIST: 'heart' };
-export const KIND_LABEL: Record<EntityKind, string> = { MODEL: 'Models', STUDIO: 'Studios', PHOTOGRAPHER: 'Photographers', GENRE: 'Genres', TAG: 'Hashtags', LIST: 'Favorites' };
-export const NOUN: Record<EntityKind, string> = { MODEL: 'model', STUDIO: 'studio', PHOTOGRAPHER: 'photographer', GENRE: 'genre', TAG: 'tag', LIST: 'list' };
 /** The second level under a row (`entities {under}`): a studio's models, a model's studios…; lists have none. */
 const UNDER: Partial<Record<EntityKind, EntityKind>> = { STUDIO: 'MODEL', MODEL: 'STUDIO', PHOTOGRAPHER: 'MODEL', GENRE: 'MODEL' };
 const PAGE = 100, INDENT = 14, UNUSED_SCAN = 2000;
@@ -102,15 +102,14 @@ const same = (a: number[], b: number[]) => a.length === b.length && a.every(x =>
 })
 export class EntityTree {
   readonly kind = input.required<EntityKind>();
-  /** Right-click on a row; nothing is bound until the menus land (F4). */
+  /** Right-click on a row (the row joins the selection first); the sidebar hands it to `Actions.openEntityMenu`. */
   readonly contextMenu = output<EntityTreeContext>();
 
   protected readonly store = inject(AlbumStore);
   protected readonly catalog = inject(CatalogStore);
   private readonly gw = inject(Gateway);
   private readonly toasts = inject(Toasts);
-  private readonly picker = inject(EntityPicker);
-  private readonly confirm = inject(Confirm);
+  private readonly actions = inject(Actions);
   private readonly host: HTMLElement = inject(ElementRef).nativeElement;
   protected readonly indent = INDENT;
   protected readonly label = KIND_LABEL;
@@ -249,33 +248,16 @@ export class EntityTree {
   protected onContext(e: MouseEvent, r: Row) {
     e.preventDefault();
     if (r.entity && !this.selection.has(r.sid)) this.selection.set([r.sid]);
-    this.contextMenu.emit({ kind: this.kind(), entity: r.entity, selected: this.selectedIds(), x: e.clientX, y: e.clientY });
+    this.contextMenu.emit({ kind: this.kind(), entity: r.entity, missing: r.scope === 'missing', selected: this.selectedIds(), x: e.clientX, y: e.clientY });
   }
 
-  // ---- batch actions on the selection ----
+  // ---- batch actions on the selection (the flows live in `Actions`; a done one clears the rows) ----
 
   private selectedIds() { return [...this.selection.ids()].map(Number); }
-  private nameOf(id: number) { return this.catalog.entityOf(id)?.name ?? `#${id}`; }
-  private plural(n: number) { return `${n} ${NOUN[this.kind()]}${n === 1 ? '' : 's'}`; }
 
-  protected async confirmSelected() {
-    const ids = this.selectedIds();
-    if (ids.length && await this.catalog.confirm(ids)) { this.toasts.show(`${this.plural(ids.length)} confirmed`, 'success'); this.selection.clear(); }
-  }
-
-  protected async mergeSelected() {
-    const ids = this.selectedIds();
-    if (!ids.length) return;
-    const into = await this.picker.pick({ kind: this.kind(), title: `Merge ${this.plural(ids.length)} into…` });
-    const from = into ? ids.filter(id => id !== into.id) : [];
-    if (into && from.length && await this.catalog.merge(from, into.id)) {
-      this.toasts.show(`Merged into ${into.name}`, 'success');
-      this.selection.clear();
-      this.store.setFilter('entities', [into.id]);
-    }
-  }
-
-  protected async deleteSelected() { await this.deleteAll(this.selectedIds(), 'Their albums lose this credit; album texts naming them are cleared.'); }
+  protected async confirmSelected() { if (await this.actions.confirmEntities(this.kind(), this.selectedIds())) this.selection.clear(); }
+  protected async mergeSelected() { if (await this.actions.mergeInto(this.kind(), this.selectedIds())) this.selection.clear(); }
+  protected async deleteSelected() { if (await this.actions.deleteEntities(this.kind(), this.selectedIds())) this.selection.clear(); }
 
   /** Unconfirmed entities of the kind without albums, found over the first pages. */
   protected async deleteUnused() {
@@ -284,18 +266,7 @@ export class EntityTree {
     catch (e) { this.toasts.error(e, 'Cannot list: '); return; }
     const unused = all.filter(e => e.auto && e.albums === 0);
     if (!unused.length) this.toasts.show(`No unused ${NOUN[kind]}s`);
-    else await this.deleteAll(unused.map(e => e.id), 'Unconfirmed and linked to no album.');
-  }
-
-  private async deleteAll(ids: number[], message: string) {
-    if (!ids.length) return;
-    const ok = await this.confirm.ask({ title: `Delete ${this.plural(ids.length)}?`, message, items: ids.map(id => this.nameOf(id)), showAll: ids.length <= 60, danger: true, okLabel: 'Delete' });
-    if (ok && await this.catalog.delete(ids)) {
-      this.toasts.show(`${this.plural(ids.length)} deleted`, 'success');
-      this.selection.clear();
-      const f = this.store.filters().entities;
-      if (f?.some(id => ids.includes(id))) this.store.setFilter('entities', null);
-    }
+    else if (await this.actions.deleteEntities(kind, unused.map(e => e.id), 'Unconfirmed and linked to no album.')) this.selection.clear();
   }
 
   // ---- keyboard: like the folder tree, plus Esc (deselect), Ctrl+A (select every visible entity row), Delete ----

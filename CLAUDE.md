@@ -41,7 +41,8 @@ Angular 22 UI, a WebSocket data channel and HTTP image endpoints; albums are dir
 | render pipeline timings (probe, cover, thumb, throughput) | `THUMBNAILER_BENCH=1 ./gradlew -PskipFrontend :backend:test --tests '*RenderBench'` → `backend/build/render-bench.md` |
 | KV store benchmark (standalone build, see [kvbench/README.md](kvbench/README.md)) | `./gradlew -p kvbench installDist`, then in `kvbench/`: `build/install/kvbench/bin/kvbench all 100000` / `report` |
 
-Preview servers for the browser pane are in `.claude/launch.json`: `frontend` (:4200), `backend` (:8080, sets
+Preview servers for the browser pane are in `.claude/launch.json`: `frontend` (:4200), `frontend-demo` (:4201, the dev UI
+proxied to :8081 — open `http://localhost:4201/?live` to test the current UI against `backend-demo`), `backend` (:8080, sets
 `JAVA_HOME` itself) and `backend-demo` (:8081, the packaged jar on a scratch library `backend/build/smoke-home` with demo albums; never the real `~/.thumbnailer`), `backend-hdd` (:8082, the packaged jar on the scratch library `backend/build/hdd-home` whose only root is the owner's HDD test folder `D:/TESTS/albums`, read only; rules for that disk in [hdd_ssd_fix_goals.md](hdd_ssd_fix_goals.md)). The dev UI uses the **in-browser mock** by default; open `http://localhost:4200/?live` to talk to
 the backend, `?mock` forces the mock in any build. `ScanTest` is a full `@SpringBootTest` (slowest); the other backend
 tests are plain unit tests. No linter is configured.

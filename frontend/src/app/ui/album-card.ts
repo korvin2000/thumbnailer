@@ -52,15 +52,15 @@ import { Icon } from './shared/icon';
     img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.4s, transform 0.6s var(--ease); }
     img.loaded { opacity: 1; }
     :host(:hover) img { transform: scale(1.035); }
-    .badges { position: absolute; top: 8px; left: 8px; display: flex; gap: 4px; }
+    .badges { position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; gap: 4px; } /* above the hover actions: the ×N button stays clickable on narrow tiles */
     .badge {
       display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px; border-radius: 6px;
       background: oklch(10% 0.01 260 / 0.55); color: oklch(95% 0 0); font-size: 11px; font-weight: 600;
       backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     }
     .badge.rating { color: var(--accent); }
-    .check {
-      position: absolute; right: 0; bottom: 0; display: inline-flex; align-items: flex-end; justify-content: flex-end; width: 30px; height: 30px; padding: 3px;
+    .check { /* z-index: the scrim is a later sibling and would paint over the corner */
+      position: absolute; right: 0; bottom: 0; z-index: 1; display: inline-flex; align-items: flex-end; justify-content: flex-end; width: 30px; height: 30px; padding: 3px;
       background: var(--accent); color: var(--on-accent); clip-path: polygon(100% 0, 100% 100%, 0 100%); pointer-events: none;
     }
     :host(.checked) { outline-color: var(--accent); }

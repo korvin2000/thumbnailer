@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, input, output, signal, untracked } from '@angular/core';
+import { Router } from '@angular/router';
 import { CatalogStore } from '../core/catalog-store';
 import { ageFrom, cmToFtIn, Field, FIELDS, kgToLb, parseChips, parseProfile, withField } from '../core/entity-fields';
 import { Gateway } from '../core/gateway';
@@ -198,6 +199,7 @@ export class EntityCardView {
   protected readonly catalog = inject(CatalogStore);
   protected readonly store = inject(AlbumStore);
   protected readonly gw = inject(Gateway);
+  private readonly router = inject(Router);
   private readonly toasts = inject(Toasts);
   private readonly picker = inject(EntityPicker);
   private readonly confirm = inject(Confirm);
@@ -227,7 +229,8 @@ export class EntityCardView {
   private savedTimer?: ReturnType<typeof setTimeout>;
 
   constructor() {
-    effect(() => { const id = this.entityId(); untracked(() => { this.catalog.openCard(id); this.cover.set(null); void this.loadCover(id); }); });
+    // the card is usually already open in the store (the panel renders this for `cardId`); another id asked here opens it
+    effect(() => { const id = this.entityId(); untracked(() => { if (this.catalog.cardId() !== id) this.catalog.openCard(id); this.cover.set(null); void this.loadCover(id); }); });
     inject(DestroyRef).onDestroy(() => this.catalog.closeCard());
   }
 
@@ -300,7 +303,7 @@ export class EntityCardView {
   protected async confirmIt() { const c = this.catalog.card(); if (c && await this.catalog.confirm([c.entity.id])) this.flash(); }
 
   protected showAlbums() { const c = this.catalog.card(); if (c) { this.store.setFilter('missing', null); this.store.setFilter('entities', [c.entity.id]); } }
-  protected showPhotos() { this.toasts.show('The photo view of a list arrives with the viewer work'); }
+  protected showPhotos() { const c = this.catalog.card(); if (c) void this.router.navigate(['/list', c.entity.id]); }
 
   /** One `saveEntity` with the card's current values under `patch`. */
   protected save(patch: Partial<EntitySave>) {

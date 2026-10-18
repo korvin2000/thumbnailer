@@ -171,6 +171,8 @@ const slot = (key: string) => /^[0-9]$/.test(key) ? (+key + 9) % 10 : -1;
 })
 export class AlbumViewer {
   readonly id = input.required<string>();
+  /** `?photo=<index>`: the lightbox opens on that entry once the album is in (a list's photo grid lands here). */
+  readonly photo = input<string>();
 
   protected readonly gw = inject(Gateway);
   protected readonly store = inject(AlbumStore);
@@ -198,7 +200,7 @@ export class AlbumViewer {
   protected readonly sel = new Selection();
   /** Entry index shown in the lightbox (stable across re-sorts). */
   protected readonly lightbox = signal<number | null>(null);
-  protected readonly desc = signal(false);
+  protected readonly desc = this.prefs.viewerSortDesc;
   protected readonly seed = signal(Date.now());
   protected readonly minBytes = signal(0);
   protected readonly filterOpen = signal(false);
@@ -224,7 +226,6 @@ export class AlbumViewer {
   protected readonly links = computed(() => { const by: Partial<Record<EntityKind, { entity: number; name: string }[]>> = {}; for (const l of this.album()?.links ?? []) (by[l.role] ??= []).push(l); return by; });
 
   constructor() {
-    this.desc.set(SORT_DESC_FIRST[this.prefs.viewerSort()]);
     effect(() => { const id = this.id(); untracked(() => this.load(id)); });
     effect(onCleanup => { // slideshow: one timer per shown photo, restarted by every step
       const i = this.lightbox(), secs = this.prefs.slideshowSeconds();
@@ -255,6 +256,8 @@ export class AlbumViewer {
       this.lightbox.update(i => i === null || i < n ? i : null);
       if ([...this.sel.ids()].some(x => !names.has(x))) this.sel.set([...this.sel.ids()].filter(x => names.has(x)));
       if (this.bioOpen()) void this.loadBio();
+      const at = stale && this.photo() !== undefined ? +this.photo()! : NaN;
+      if (d.entries[at]) this.openLightbox(at);
     } catch (e) { if (this.id() === id) this.error.set(e instanceof Error ? e.message : 'Album not found'); }
   }
 

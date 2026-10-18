@@ -1,6 +1,6 @@
 import { Observable } from 'rxjs';
 import {
-  Album, AlbumDetails, AlbumPatch, AlbumQuery, AlbumTarget, Comparison, EntityCard, EntityKind, EntityList, EntityQuery, EntitySave, Facets, Filters,
+  Album, AlbumDetails, AlbumPatch, AlbumQuery, AlbumRef, AlbumTarget, Comparison, EntityCard, EntityKind, EntityList, EntityQuery, EntitySave, Facets, Filters,
   Folder, GatewayEvent, LibraryInfo, Listing, MetaRow, Op, PhotoList, PhotoMarks, Preflight, SearchResult, Settings, SettingsInfo,
 } from './model';
 
@@ -61,6 +61,6 @@ export abstract class Gateway {
   abstract cancelOp(): Promise<void>;
 
   abstract coverUrl(album: Album): string;
-  abstract thumbUrl(album: Album, index: number): string;
-  abstract originalUrl(album: Album, index: number): string;
+  abstract thumbUrl(album: AlbumRef, index: number): string;
+  abstract originalUrl(album: AlbumRef, index: number): string;
 }

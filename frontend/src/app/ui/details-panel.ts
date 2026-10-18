@@ -1,5 +1,5 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, inject, input, linkedSignal, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSignal, output, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { CatalogStore } from '../core/catalog-store';
 import { joinNames, parseNames } from '../core/entity-fields';
@@ -32,7 +32,7 @@ interface Suggest { role: EntityKind; options: string[] }
   template: `
     <header>
       @if (mode() === 'entity') {
-        <button class="btn icon-btn sm ghost" title="Back to the album" (click)="mode.set('album')"><app-icon name="arrowLeft" /></button><span class="label">Catalog</span>
+        <button class="btn icon-btn sm ghost" title="Back to the album" (click)="catalog.closeCard()"><app-icon name="arrowLeft" /></button><span class="label">Catalog</span>
       } @else { <span class="label">{{ hovering() ? 'Hovering' : 'Selected' }}</span> }
       <span class="state">
         @if (saving()) { <span class="spinner"></span> Saving }
@@ -41,8 +41,8 @@ interface Suggest { role: EntityKind; options: string[] }
       <button class="btn icon-btn sm ghost" title="Close (I)" (click)="close.emit()"><app-icon name="x" /></button>
     </header>
 
-    @if (mode() === 'entity' && entityId() !== null) {
-      <div class="body"><app-entity-card [entityId]="entityId()!" (open)="showEntity($event)" /></div>
+    @if (catalog.cardId(); as id) {
+      <div class="body"><app-entity-card [entityId]="id" (open)="showEntity($event)" /></div>
     } @else if (album(); as a) {
       <div class="body">
         <a class="cover" [class.portrait]="a.coverPortrait" [routerLink]="['/album', a.id]" title="Open album">
@@ -164,9 +164,8 @@ export class DetailsPanel {
   protected readonly catalog = inject(CatalogStore);
   private readonly toasts = inject(Toasts);
   protected readonly credits = CREDITS;
-  /** The panel shows the album, or a catalog entity opened from one of its chips (back arrow returns). */
-  readonly mode = signal<'album' | 'entity'>('album');
-  readonly entityId = signal<number | null>(null);
+  /** The panel shows the album, or the open catalog card (`CatalogStore.cardId`: a chip here, a tree row's "Open card", the viewer's links); the back arrow closes the card. */
+  readonly mode = computed(() => this.catalog.cardId() !== null ? 'entity' : 'album');
   protected readonly saving = signal(false);
   protected readonly saved = linkedSignal<Album | null, boolean>({ source: this.album, computation: () => false });
   /** Local tag list so quick successive edits build on each other instead of on the last acknowledged album. */
@@ -181,7 +180,7 @@ export class DetailsPanel {
     if (a && (a[field] ?? '') !== value.trim()) this.patch({ [field]: value.trim() });
   }
 
-  showEntity(id: number) { this.entityId.set(id); this.mode.set('entity'); }
+  showEntity(id: number) { this.catalog.openCard(id); }
 
   protected links(a: Album, role: EntityKind) { return (a.links ?? []).filter(l => l.role === role); }
 

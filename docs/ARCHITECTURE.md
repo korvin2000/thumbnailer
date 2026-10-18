@@ -285,19 +285,24 @@ URL, so a changed render spec bypasses the browser cache):
 
 ```
 src/app/
-  app.ts  shell (topbar, sidebar, location bar + grid, details, statusbar, settings, toasts; global keyboard)
+  app.ts  shell (topbar, sidebar, location bar + grid, details, statusbar with scan/operation progress, lazily loaded settings,
+          dialogs mounted once: context menu, confirm, entity picker, folder picker, copies popover; result dialog; global keyboard)
   core/   model.ts (contract types above), gateway.ts (abstract Gateway: search/album/update/scan/settings/facets/reveal/
           folders/browse/library/switchLibrary/forgetLibrary/optimize, image URLs, `events`), ws-gateway.ts (reconnecting
           WebSocket, id correlation, `&r=renderEpoch` on image URLs), mock-gateway.ts (in-browser dummy albums with
           canvas-drawn covers and a fake disk for the picker; used with `?mock`, or in a dev build unless `?live`),
           store.ts (query/results/selection/settings/library signals), prefs.ts (persisted UI prefs incl. theme),
+          catalog-store.ts / ops-store.ts (catalog and operation state beside the album store), selection.ts,
           folder-picker.ts (promise-style `pick()` service behind the folder dialog), toasts.ts, format.ts (pipes),
           layout.ts (bricks/grid layout engine), search-syntax.ts (`#tag`, `model:`/`studio:`/`by:`/`kind:` tokens)
   ui/     topbar, sidebar (left, overlay below 1100px; tabs Folders = folder-tree, Refine = filters-panel),
           folder-tree (lazy Explorer-like tree over `folders`), location-bar (above the grid: ↑, crumbs with
           children popovers, editable path, count, rescan of the shown folder), tile-grid (generic virtualized grid, also
           used by the viewer), album-card, details-panel (right: meta + edit; floating, inline ≥1400px, bottom sheet
-          ≤760px), album-viewer (/album/:id: entries grid, lightbox, set cover), shared (icon, rating, range)
+          ≤760px), album-viewer (/album/:id, lazy: entries grid, lightbox, marks, copy to), photo-list (/list/:id, lazy: a
+          favorites list's photos), actions (every menu/key action: bulk edits, preflight → Confirm → run), menus (pure menu
+          builders per subject), op-confirm (pure operation → dialog mapping), shared (icon, rating, range, context-menu,
+          confirm, entity-picker)
   ui/settings/  settings-dialog (native <dialog>, page rail, one draft Settings + Revert/Save footer), pages
           library (known libraries, switch/forget/add, composition donut + stats, optimize), folders (roots with
           Locate… → path-map rule, nested-root validation, exclusions, path mapping, scan), thumbnails (cover and

@@ -6,6 +6,7 @@ import { EntityKind } from '../core/model';
 import { GroupBy, Prefs } from '../core/prefs';
 import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
+import { Actions } from './actions';
 import { EntityTree, KIND_ICON, KIND_LABEL } from './entity-tree';
 import { FiltersPanel } from './filters-panel';
 import { FolderTree } from './folder-tree';
@@ -48,8 +49,8 @@ const GROUPS: { key: GroupBy; label: string; icon: IconName; kind?: EntityKind }
     }
     <div class="body">
       @if (prefs.sidebar() === 'refine') { <app-filters-panel /> }
-      @else if (group().kind; as kind) { <app-entity-tree [kind]="kind" /> }
-      @else { <app-folder-tree /> }
+      @else if (group().kind; as kind) { <app-entity-tree [kind]="kind" (contextMenu)="actions.openEntityMenu($event)" /> }
+      @else { <app-folder-tree (contextMenu)="actions.openFolderMenu($event)" /> }
     </div>
     @if (prefs.sidebar() !== 'refine') {
       <div class="views">
@@ -93,6 +94,7 @@ export class Sidebar {
   protected readonly store = inject(AlbumStore);
   protected readonly prefs = inject(Prefs);
   protected readonly catalog = inject(CatalogStore);
+  protected readonly actions = inject(Actions);
   private readonly gw = inject(Gateway);
   private readonly menu = inject(ContextMenu);
   private readonly toasts = inject(Toasts);
@@ -129,7 +131,7 @@ export class Sidebar {
 
   protected async unhideAll() {
     const n = await this.catalog.bulkUpdate({ query: { hidden: true } }, { hidden: false });
-    if (n !== null) { this.toasts.show(`${n} album${n === 1 ? '' : 's'} visible again`, 'success'); if (this.store.filters().hidden) this.store.setFilter('hidden', null); }
+    if (n !== null) { this.toasts.show(`${n} album${n === 1 ? '' : 's'} visible again`, 'success'); if (this.store.filters().hidden) this.store.setFilter('hidden', null); void this.store.loadSettings(); this.store.treeVersion.update(v => v + 1); }
   }
 
   private async recount() {

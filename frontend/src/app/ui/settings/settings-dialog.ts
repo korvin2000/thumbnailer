@@ -1,28 +1,27 @@
-import { ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, signal, untracked, viewChild } from '@angular/core';
+import { afterRenderEffect, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, signal, untracked, viewChild } from '@angular/core';
 import { DEFAULT_SETTINGS, Settings } from '../../core/model';
 import { AlbumStore } from '../../core/store';
 import { Toasts } from '../../core/toasts';
 import { Icon, IconName } from '../shared/icon';
 import { AboutPage } from './about-page';
 import { AppearancePage } from './appearance-page';
-import { FolderPickerDialog } from './folder-picker';
 import { FoldersPage } from './folders-page';
 import { KeyboardPage } from './keyboard-page';
 import { LibraryPage } from './library-page';
 import { OperationsPage } from './operations-page';
+import { SettingsLink, SettingsPage as Page } from './settings-link';
 import { ThumbnailsPage } from './thumbnails-page';
 
-type Page = 'library' | 'folders' | 'thumbnails' | 'operations' | 'appearance' | 'keyboard' | 'about';
 const PAGES: { id: Page; label: string; icon: IconName }[] = [
   { id: 'library', label: 'Library', icon: 'database' }, { id: 'folders', label: 'Folders', icon: 'folder' }, { id: 'thumbnails', label: 'Thumbnails', icon: 'image' },
   { id: 'operations', label: 'Operations', icon: 'archive' },
   { id: 'appearance', label: 'Appearance', icon: 'sun' }, { id: 'keyboard', label: 'Keyboard', icon: 'keyboard' }, { id: 'about', label: 'About', icon: 'info' },
 ];
 
-/** Native <dialog> with a page rail. One draft `Settings` is shared by Folders and Thumbnails and saved from the footer; Appearance applies instantly. */
+/** Native <dialog> with a page rail, loaded lazily on the first `SettingsLink.open(page)`. One draft `Settings` is shared by Folders, Thumbnails and Operations and saved from the footer; Appearance applies instantly. */
 @Component({
   selector: 'app-settings-dialog',
-  imports: [Icon, LibraryPage, FoldersPage, ThumbnailsPage, OperationsPage, AppearancePage, KeyboardPage, AboutPage, FolderPickerDialog],
+  imports: [Icon, LibraryPage, FoldersPage, ThumbnailsPage, OperationsPage, AppearancePage, KeyboardPage, AboutPage],
   template: `
     <dialog #dlg (cancel)="close()">
       <header>
@@ -59,7 +58,6 @@ const PAGES: { id: Page; label: string; icon: IconName }[] = [
           }
         </div>
       </div>
-      <app-folder-picker />
       <div class="toasts">
         @for (t of toasts.list(); track t.id) { <div class="toast" [class]="t.kind" (click)="toasts.dismiss(t.id)">{{ t.text }}</div> }
       </div>
@@ -100,6 +98,7 @@ const PAGES: { id: Page; label: string; icon: IconName }[] = [
 export class SettingsDialog {
   protected readonly store = inject(AlbumStore);
   protected readonly toasts = inject(Toasts);
+  private readonly link = inject(SettingsLink);
   private readonly dialog = viewChild.required<ElementRef<HTMLDialogElement>>('dlg');
 
   protected readonly pages = PAGES;
@@ -130,10 +129,13 @@ export class SettingsDialog {
         if (wasDirty) this.toasts.show('Unsaved settings of the previous library were discarded');
       });
     });
+    // a page asked for through `SettingsLink` (the brand button, the viewer, the `thumbnailer:settings` event), also the one that loaded this dialog
+    afterRenderEffect(() => { const p = this.link.request(); if (p) untracked(() => { this.link.request.set(null); this.open(p); }); });
   }
 
   /** Unsaved edits survive a close; the draft is only re-seeded when it holds nothing of its own. */
-  open() {
+  open(page?: Page) {
+    if (page) this.page.set(page);
     if (!this.seeded || !this.dirty()) { this.reseed(); this.seeded = true; }
     void this.store.loadLibrary(); // the pages live in the DOM while closed, so their first load may predate the scan
     this.dialog().nativeElement.showModal();

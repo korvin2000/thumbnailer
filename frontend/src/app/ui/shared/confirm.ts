@@ -3,10 +3,11 @@ import { BytesPipe } from '../../core/format';
 import { Preflight } from '../../core/model';
 import { Icon } from './icon';
 
-/** A control in the dialog; its value comes back under `key` (`password2`: asked twice, OK only when both agree). */
-export interface ConfirmOption { key: string; label: string; kind: 'select' | 'check' | 'password2'; choices?: string[]; value?: unknown }
+/** A control in the dialog; its value comes back under `key` (`password2`: asked twice, OK only when both agree; `text`/`number`/`date`: one input, `required` blocks OK while empty). */
+export interface ConfirmOption { key: string; label: string; kind: 'select' | 'check' | 'password2' | 'text' | 'number' | 'date'; choices?: string[]; value?: unknown; hint?: string; required?: boolean; min?: number; max?: number }
 export type ConfirmResult = Record<string, unknown>;
-export interface ConfirmRequest { title: string; message?: string; items?: string[]; showAll?: boolean; summary?: Preflight | null; danger?: boolean; okLabel?: string; options?: ConfirmOption[] }
+/** `cancelLabel` null = no Cancel button (a dialog that only informs). */
+export interface ConfirmRequest { title: string; message?: string; items?: string[]; showAll?: boolean; summary?: Preflight | null; danger?: boolean; okLabel?: string; cancelLabel?: string | null; options?: ConfirmOption[] }
 
 /** Promise-style confirmation every operation goes through; `app-confirm` shows while `open()` is set. */
 @Injectable({ providedIn: 'root' })
@@ -49,7 +50,7 @@ const SHOWN = 10;
             }
             @if (q.summary; as s) {
               <div class="summary">
-                <div class="totals" [class.none]="!todo()"><b>{{ todo() }}</b> of {{ s.items.length }} to do · {{ s.bytes | bytes }} · {{ s.free | bytes }} free@if (s.bytes > s.free) { <span class="warn"> — not enough space</span> }</div>
+                <div class="totals" [class.none]="!todo()"><b>{{ todo() }}</b> of {{ s.items.length }} to do · {{ s.bytes | bytes }}@if (s.free >= 0) { · {{ s.free | bytes }} free@if (s.bytes > s.free) { <span class="warn"> — not enough space</span> } }</div>
                 @for (x of noted().slice(0, SHOWN); track $index) { <div class="dim"><span class="mono">{{ x.path }}</span> — {{ x.note }}</div> }
                 @for (x of skipped().slice(0, SHOWN); track $index) { <div class="dim skip"><span class="mono">{{ x.path }}</span> — skipped: {{ x.reason ?? 'no reason given' }}</div> }
                 @if (noted().length + skipped().length > 2 * SHOWN) { <div class="dim">and {{ noted().length + skipped().length - 2 * SHOWN }} more</div> }
@@ -65,15 +66,19 @@ const SHOWN = 10;
                 }
                 @case ('check') { <label class="check"><input type="checkbox" [checked]="!!values()[o.key]" (change)="set(o.key, $any($event.target).checked)" /> {{ o.label }}</label> }
                 @case ('password2') {
-                  <label class="field"><span>{{ o.label }}</span><input class="input sm" type="password" autocomplete="new-password" (input)="set(o.key, $any($event.target).value)" /></label>
+                  <label class="field"><span>{{ o.label }}</span><input class="input sm" type="password" autocomplete="new-password" autofocus (input)="set(o.key, $any($event.target).value)" /></label>
                   <label class="field"><span>Repeat</span><input class="input sm" type="password" autocomplete="new-password" (input)="set(o.key, $any($event.target).value, repeat)" /></label>
+                }
+                @default {
+                  <label class="field"><span>{{ o.label }}</span><input class="input sm" [type]="o.kind" [value]="values()[o.key] ?? ''" [placeholder]="o.hint ?? ''" [attr.min]="o.min" [attr.max]="o.max" autofocus spellcheck="false" autocomplete="off"
+                                                                     (input)="set(o.key, o.kind === 'number' ? $any($event.target).valueAsNumber : $any($event.target).value)" /></label>
                 }
               }
             }
           </div>
           <footer>
             @if (hint(); as hint) { <span class="hint muted">{{ hint }}</span> }
-            <button type="button" class="btn sm" [attr.autofocus]="q.danger ? '' : null" (click)="confirm.finish(null)">Cancel</button>
+            @if (q.cancelLabel !== null) { <button type="button" class="btn sm" [attr.autofocus]="q.danger ? '' : null" (click)="confirm.finish(null)">{{ q.cancelLabel ?? 'Cancel' }}</button> }
             <button type="submit" class="btn sm" [class.primary]="!q.danger" [class.danger]="q.danger" [attr.autofocus]="q.danger ? null : ''" [disabled]="blocked()">{{ q.okLabel ?? 'OK' }}</button>
           </footer>
         </form>
@@ -120,11 +125,16 @@ export class ConfirmDialog {
   protected readonly skipped = computed(() => this.confirm.open()?.summary?.items.filter(i => i.skip) ?? []);
   protected readonly noted = computed(() => this.confirm.open()?.summary?.items.filter(i => !i.skip && i.note) ?? []);
   protected readonly todo = computed(() => { const s = this.confirm.open()?.summary; return s ? s.items.length - this.skipped().length : 1; });
-  /** Why OK is unavailable: a password typed once or twice differently, or a preflight that leaves nothing to do. */
+  /** Why OK is unavailable: a password typed once or twice differently, a required value missing or out of range, or a preflight that leaves nothing to do. */
   protected readonly hint = computed(() => {
-    const pw = (this.confirm.open()?.options ?? []).find(o => o.kind === 'password2');
-    if (pw && !this.values()[pw.key]) return 'Enter the password twice';
-    if (pw && this.values()[pw.key] !== this.repeat()[pw.key]) return 'The passwords differ';
+    const options = this.confirm.open()?.options ?? [], pw = options.find(o => o.kind === 'password2'), v = this.values();
+    if (pw && !v[pw.key]) return 'Enter the password twice';
+    if (pw && v[pw.key] !== this.repeat()[pw.key]) return 'The passwords differ';
+    for (const o of options) {
+      const x = v[o.key], empty = x === '' || x == null || (typeof x === 'number' && isNaN(x));
+      if (o.required && empty) return `Enter ${o.label.toLowerCase()}`;
+      if (o.kind === 'number' && !empty && ((o.min != null && (x as number) < o.min) || (o.max != null && (x as number) > o.max))) return `${o.label} must be ${o.min ?? '…'}–${o.max ?? '…'}`;
+    }
     return this.todo() ? null : 'Nothing to do';
   });
   protected readonly blocked = computed(() => this.hint() !== null);

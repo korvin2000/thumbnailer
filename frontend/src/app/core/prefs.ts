@@ -30,6 +30,8 @@ export class Prefs {
   readonly groupBy = this.persisted<GroupBy>('groupBy', 'folders');
   readonly viewerScale = this.persisted<ViewerScale>('viewerScale', 'fitLarge');
   readonly viewerSort = this.persisted<ViewerSort>('viewerSort', 'name');
+  /** Direction of `viewerSort` (true = descending); a new field resets it to its default (`SORT_DESC_FIRST`). */
+  readonly viewerSortDesc = this.persisted('viewerSortDesc', false);
   /** Viewer filter: minimum longer side in px (0 = all). */
   readonly viewerMinSide = this.persisted('viewerMinSide', 0);
   readonly slideshowSeconds = this.persisted('slideshowSeconds', 5);

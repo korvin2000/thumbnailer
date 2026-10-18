@@ -8,6 +8,12 @@
       "port": 4200
     },
     {
+      "name": "frontend-demo",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--prefix", "frontend", "ng", "serve", "--port", "4201", "--proxy-config", "proxy.demo.json"],
+      "port": 4201
+    },
+    {
       "name": "backend",
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "set JAVA_HOME=C:\\work\\thumbnailer\\devtools\\jdk-27&& gradlew.bat -PskipFrontend :backend:bootRun"],

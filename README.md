@@ -69,6 +69,13 @@ ratings and edits are kept, but do not move albums before that scan has run, or 
 
 Move, copy, delete, pack/unpack/repack, encrypt/decrypt `.cry`, copy photos and the folder operations change files in
 the library, one operation at a time (never during a scan), each after a confirm dialog that lists every item and what happens to it.
+In the UI they sit in the right-click menus: an album tile (or the selection, also from the ▾ of the "N selected" chip), a folder
+of the Browse tree (its own rename/move/copy/delete and "Albums below ▸"), an entity row ("Its albums ▸"); the same menus assign
+models, studios, photographers, genres, tags, ratings, shot dates and favorites lists in bulk, and hide/unhide albums. The dialog
+shows the preflight (what runs, what is skipped and why, bytes and free space, consequences) and the conflict policy (rename or
+skip); encryption asks for the password twice unless the session key is set under Settings → Folders. The status bar shows the
+running operation with Cancel; a result with skipped or failed items opens as a dialog. Copy targets and the default pack
+format live under Settings → Operations. A favorites list's photos open as their own grid ("Show photos" on the list).
 A source is deleted only after its result was written beside it (`<name>.part`), forced to disk and read back equal
 byte for byte; only Delete and Delete folder remove files on purpose, and they say so in their dialog. There is no
 Recycle Bin: deletion is final (hiding an album, *safe-delete*, touches no file). Every step is journaled in the
@@ -90,7 +97,7 @@ open `http://localhost:4200/?live` to talk to a running backend. Frontend unit t
 
 `/` search · `E` folders tab · `F` refine tab · `I` details panel · `T` theme · `[` `]` albums per row · arrows move
 (also in the folder tree: `→` expand, `←` collapse) · `Shift`+arrows / `Shift`+click extend the selection, `Ctrl`+click or
-`Ctrl+Space` toggle, `Ctrl+A` select all (≤ 500) · `Shift+F10` album menu · `H` hide · `Delete` delete… · `Enter` open ·
+`Ctrl+Space` toggle, `Ctrl+A` select all (≤ 500) · `Shift+F10` or right-click album menu (also on folders and entity rows) · `H` hide · `Delete` delete… · `Enter` open ·
 `C` use photo as cover · `Esc` clear the selection, close
 
 Viewer: `F11` full screen · `Space` slideshow · `S` scale mode · `R` reshuffle · `1`–`9` `0` copy to target · `Ctrl+1…0` rate · `F` favorites ·

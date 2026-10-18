@@ -1,11 +1,13 @@
 import { Subject } from 'rxjs';
 import {
-  Album, AlbumPatch, AlbumTarget, Comparison, Entity, EntityCard, EntityKind, EntityLinkIn, EntityList, EntityQuery, EntitySave, GatewayEvent, Link, StudioRow,
+  Album, AlbumPatch, AlbumTarget, Comparison, Derived, Entity, EntityCard, EntityKind, EntityLinkIn, EntityList, EntityQuery, EntitySave, GatewayEvent, Link, StudioRow,
 } from './model';
 import { delay, GENRES, MODELS, PHOTOGRAPHERS, STUDIOS, TAGS, targets } from './mock-gateway';
 import type { MockPhotos } from './mock-photos';
 
 const LISTS = ['English models', 'Best of 2024'];
+/** Related entities a card lists at most (the server's cap; `entities {under}` pages the rest). */
+const DERIVED = 100;
 /** The album text each role resolves from (favorites lists are no text). */
 const FIELDS = { MODEL: 'model', STUDIO: 'studio', PHOTOGRAPHER: 'photographer', GENRE: 'genres', TAG: 'tags' } as const;
 type Role = keyof typeof FIELDS;
@@ -60,14 +62,16 @@ export class MockCatalog {
     this.created.clear();
   }
 
+  /** Under another entity, the items are those linked to its visible albums and `albums` is the count shared with it (sort COUNT by that number). */
   async entities(kind: EntityKind, o: EntityQuery = {}): Promise<EntityList> {
     await delay(40);
     const t = o.text ? norm(kind, o.text) : '', scope = o.under != null ? this.albumsOf(o.under) : null, offset = o.offset ?? 0;
     const limit = o.limit! > 0 ? Math.min(o.limit!, LIMIT) : 100;
-    const all = [...this.rows.values()].filter(r => r.kind === kind && (!t || [r.name, ...r.aliases].some(n => norm(kind, n).startsWith(t)))
-      && (!scope || scope.some(a => a.links.some(l => l.entity === r.id))))
+    const count = (r: Row) => scope ? scope.filter(a => a.links.some(l => l.entity === r.id)).length : r.albums;
+    const all = [...this.rows.values()].filter(r => r.kind === kind && (!t || [r.name, ...r.aliases].some(n => norm(kind, n).startsWith(t))))
+      .map(r => ({ ...this.view(r), albums: count(r) })).filter(e => !scope || e.albums > 0)
       .sort((x, y) => (o.byCount ? y.albums - x.albums : 0) || x.name.localeCompare(y.name));
-    return { items: all.slice(offset, offset + limit).map(r => this.view(r)), total: all.length };
+    return { items: all.slice(offset, offset + limit), total: all.length };
   }
 
   async entity(id: number): Promise<EntityCard> { await delay(60); return this.card(id); }
@@ -107,14 +111,17 @@ export class MockCatalog {
     this.changed([...kinds]);
   }
 
-  /** A's names become B's aliases, its links, members and favorites move to B; album texts stay and now resolve to B. */
+  /** A's names become B's aliases, its links, members and favorites move to B; B's profile wins field by field; album texts stay and now resolve to B. */
   async mergeEntities(from: number[], into: number): Promise<EntityCard> {
     await delay(80);
     const b = this.row(into), merged = from.filter(id => id !== into).map(id => this.row(id));
+    if (!merged.length) throw new Error('Nothing to merge');
     if (merged.some(a => a.kind !== b.kind)) throw new Error('Only entities of one kind can be merged');
     for (const a of merged) {
       b.aliases = [...b.aliases, a.name, ...a.aliases].filter((n, i, all) => norm(b.kind, n) !== norm(b.kind, b.name) && all.findIndex(x => norm(b.kind, x) === norm(b.kind, n)) === i);
-      b.rating = Math.max(a.rating, b.rating); b.auto &&= a.auto; b.profile ??= a.profile;
+      b.rating = Math.max(a.rating, b.rating); b.auto &&= a.auto;
+      const profile = { ...fields(a.profile), ...fields(b.profile) };
+      if (Object.keys(profile).length) b.profile = JSON.stringify(profile); else delete b.profile;
       b.links = [...b.links, ...a.links];
       this.members.get(a.id)?.forEach(m => this.members.get(into)?.add(m));
       if (a.kind === 'LIST') this.photos().remapList(a.id, into);
@@ -147,15 +154,15 @@ export class MockCatalog {
 
   async bulkUpdate(t: AlbumTarget, patch: AlbumPatch): Promise<number> {
     await delay(60);
-    const albums = targets(this.albums, t);
+    const albums = targets(this.albums, t, this.idOf);
     albums.forEach(a => this.save(a.id, patch));
     return albums.length;
   }
 
   /** Roles 1–5: the entity's name joins the albums' text; LIST: membership only (no album save, one `catalogChanged` when any changed). Resolves with the albums changed. */
-  async link(t: AlbumTarget, entityId: number): Promise<number> { await delay(60); return this.relink(targets(this.albums, t), entityId, true); }
+  async link(t: AlbumTarget, entityId: number): Promise<number> { await delay(60); return this.relink(targets(this.albums, t, this.idOf), entityId, true); }
 
-  async unlink(t: AlbumTarget, entityId: number): Promise<number> { await delay(60); return this.relink(targets(this.albums, t), entityId, false); }
+  async unlink(t: AlbumTarget, entityId: number): Promise<number> { await delay(60); return this.relink(targets(this.albums, t, this.idOf), entityId, false); }
 
   async copies(albumId: string): Promise<Album[]> {
     await delay(40);
@@ -174,6 +181,9 @@ export class MockCatalog {
   // ---- internals ----
 
   isList(id: number): boolean { return this.rows.get(id)?.kind === 'LIST'; }
+
+  /** The id a name or alias of the kind resolves to (the filters' lookup). */
+  readonly idOf = (kind: EntityKind, name: string): number | undefined => this.find(kind, name)?.id;
 
   private create(kind: EntityKind, name: string, auto: boolean): Row {
     const r: Row = { id: ++this.seq, kind, name, rating: 0, auto, albums: 0, aliases: [], links: [] };
@@ -250,21 +260,37 @@ export class MockCatalog {
 
   private changed(kinds: EntityKind[]) { this.events.next({ type: 'catalogChanged', kinds }); }
 
-  /** `aliases` are the other names, normalized as the server's alias table stores them. */
+  /** `aliases` are the other names, normalized as the server's alias table stores them; `derived` holds the sections the kind shows, related entities with the shared album count, most first, ≤ 100. */
   private card(id: number): EntityCard {
-    const r = this.row(id), albums = this.albumsOf(id);
-    const linked = (kind: EntityKind) => [...new Set(albums.flatMap(a => a.links.filter(l => l.role === kind && l.entity !== id).map(l => l.entity)))].map(x => this.view(this.row(x)));
-    const studios = new Map<number, StudioRow>();
-    for (const a of albums) for (const l of a.links) if (l.role === 'STUDIO' && l.entity !== id) {
-      const s = studios.get(l.entity) ?? { entity: this.view(this.row(l.entity)), aliases: [], genres: [], albums: 0 }, alias = a.links.find(x => x.entity === id)?.alias;
-      if (alias && !s.aliases.includes(alias)) s.aliases.push(alias);
-      s.genres = [...new Set([...s.genres, ...a.genres])];
-      s.albums++;
-      studios.set(l.entity, s);
-    }
-    return {
-      entity: this.view(r), aliases: [...new Set(r.aliases.map(n => norm(r.kind, n)))], links: r.links.filter(l => this.rows.has(l.to)).map(l => ({ ...l, to: this.view(this.row(l.to)) })),
-      derived: { albums: albums.length, models: linked('MODEL'), studios: [...studios.values()], photographers: linked('PHOTOGRAPHER'), genres: linked('GENRE'), tags: linked('TAG').map(e => e.name) },
+    const r = this.row(id), albums = this.albumsOf(id), byCount = <T extends { albums: number }>(xs: T[]) => xs.sort((x, y) => y.albums - x.albums).slice(0, DERIVED);
+    const related = (kind: EntityKind): Entity[] => {
+      const n = new Map<number, number>();
+      for (const a of albums) for (const l of a.links) if (l.role === kind && l.entity !== id) n.set(l.entity, (n.get(l.entity) ?? 0) + 1);
+      return byCount([...n].map(([x, albums]) => ({ ...this.view(this.row(x)), albums })));
     };
+    const studios = () => {
+      const m = new Map<number, StudioRow>();
+      for (const a of albums) for (const l of a.links) if (l.role === 'STUDIO' && l.entity !== id) {
+        const s = m.get(l.entity) ?? { entity: this.view(this.row(l.entity)), aliases: [], genres: [], albums: 0 }, alias = a.links.find(x => x.entity === id)?.alias;
+        if (alias && !s.aliases.includes(alias)) s.aliases.push(alias);
+        s.genres = [...new Set([...s.genres, ...a.genres])];
+        s.albums++;
+        m.set(l.entity, s);
+      }
+      return byCount([...m.values()]);
+    };
+    const derived: Derived = { albums: albums.length };
+    switch (r.kind) {
+      case 'MODEL': Object.assign(derived, { studios: studios(), photographers: related('PHOTOGRAPHER'), genres: related('GENRE'), tags: related('TAG').map(e => e.name) }); break;
+      case 'STUDIO': Object.assign(derived, { models: related('MODEL'), photographers: related('PHOTOGRAPHER'), genres: related('GENRE') }); break;
+      case 'PHOTOGRAPHER': Object.assign(derived, { models: related('MODEL'), studios: studios(), genres: related('GENRE') }); break;
+      case 'GENRE': case 'TAG': Object.assign(derived, { models: related('MODEL'), studios: studios() }); break;
+    }
+    return { entity: this.view(r), aliases: [...new Set(r.aliases.map(n => norm(r.kind, n)))], links: r.links.filter(l => this.rows.has(l.to)).map(l => ({ ...l, to: this.view(this.row(l.to)) })), derived };
   }
+}
+
+/** The non-empty fields of a profile JSON (a merge fills the survivor's empty ones from the merged). */
+function fields(profile?: string): Record<string, unknown> {
+  try { return Object.fromEntries(Object.entries(JSON.parse(profile || '{}')).filter(([, v]) => v !== '' && v != null && !(Array.isArray(v) && !v.length))); } catch { return {}; }
 }

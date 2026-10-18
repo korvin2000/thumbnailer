@@ -59,13 +59,25 @@ undo. Reference SPEC IDs.
   link chips, shot date, `ui/copies-popover.ts` (Compare before Delete…). Checks: `ng build` 556 kB, `ng test` 42; mock
   pass. Open: live `under`/merge/creditAs/compareCopies (B1), entity context menus and Delete… wiring (F4, hooks
   `EntityTree.contextMenu`, `CopiesPopover.deleteRequested`), `app-copies-popover` to move from `Topbar` to `app.html`.
-- Open after phase 1 (phase 2 = F4 actions + B5 integration, phase 3 = Codex reviews per track, `:spi`, docs):
+- 2026-10-18 **catalog phase 2, track F4 (actions)**: every menu of catalog_plan §7.2/§7.4 wired — `ui/menus.ts` (pure builders per
+  subject over a `Target` = selection or node query, skip counts in the labels), `ui/actions.ts` (assign/favorites/rating/shot date/hide
+  through `link`/`unlink`/`bulkUpdate`, every file operation as preflight → `Confirm` (`ui/op-confirm.ts`) → run, folder rename/move/
+  copy/delete, entity rename/merge/confirm/credited-as/delete, Select first N…), status-bar progress with Cancel and a result dialog for
+  skipped/failed items (`OpsStore.issues`), the copies popover's Delete…, `Confirm` text/number/date options, `SettingsLink` +
+  `SettingsDialog.open(page)` behind the `thumbnailer:settings` event, a favorites list's photo grid (`ui/photo-list.ts`, `/list/:id` →
+  viewer `?photo=`), `Prefs.viewerSortDesc`, the card opened from the tree/viewer (`CatalogStore.cardId` drives the details panel), mock
+  parity with B1 (`under` shared counts, `derived` per kind, alias-resolved filters, link facets, merge profile fill, `compareCopies`
+  busy, a renamed root keeps its settings root), the viewer/settings/photo list as lazy chunks (`ng build` 548 kB initial, from 610),
+  `frontend-demo` preview server (dev UI on :4201 proxied to `backend-demo`). Checks: `ng test` 76 (+31), `ng build` under budget; mock
+  pass of every menu and operation flow; live on `backend-demo`: assign, favorites, hide/unhide, preflights (albums, folder, root rename),
+  `under`, a list's photos. Not exercised live: running an operation from the UI, merge/credited-as/rename of live entities (B5's smoke).
+- Open after phase 2 (phase 3 = Codex reviews per track, `:spi`, docs):
   B2 ⇄ B3 contract (`Unpacker.unpack` hashes: as read vs read back; one crypt rewrite — B2 `ops/Crypt` or B3
   `CryptRewriter`; `*.spill` cleanup in recovery), `AlbumService.patch(id, Function)` (B1) and `setFlags` (B4),
-  `CatalogRepository.photos` (B4 runs SQL itself), `AlbumServiceTest.removeDeletes…` race under load, the mock lacks
-  B1 semantics, `app.html`/`album-card.ts` wiring (`[selection]`, `(contextMenu)`, `[selectionMenu]`, copies popover
-  host, `.check` z-index), `SettingsDialog.open(page)`, `viewerSortDesc`, settings refetch after a root rename,
-  F2 metadata button for flags 0/3, `ng build` 609 kB over the 600 kB warn budget (lazy-load viewer/settings).
+  `CatalogRepository.photos` (B4 runs SQL itself), `AlbumServiceTest.removeDeletes…` race under load; requests to the
+  backend from F4: `reveal {path}` for a folder (today the first album below stands in), `entityCard.entity` as the reply of
+  `confirmEntities`/`deleteEntities` is not needed but `catalogChanged` after `markPhoto` would let the list grid and counts
+  follow another client; the `.cry` password card still lives on the Folders page (§7.6 wants it under Operations).
 - 2026-10-18 **B3 packers + cry** (branch `claude/catalog-b3-73a732`): `ops/pack` — `Packers` (zip: images STORED,
   text DEFLATED; 7z through 7-Zip-JBinding, level 0 = Copy non-solid, written at runtime by the vendored native;
   `hashes` by reopening), `FolderUnpacker` (one pass, flatten + name map, containment, read-back), `CryptRewriter`

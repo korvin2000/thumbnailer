@@ -4,7 +4,6 @@ import { EntityKind } from '../core/model';
 import { formatBytes, formatMegapixels } from '../core/format';
 import { Prefs, SidebarTab } from '../core/prefs';
 import { AlbumStore } from '../core/store';
-import { CopiesPopover } from './copies-popover';
 import { Icon, IconName } from './shared/icon';
 import { SortMenu } from './sort-menu';
 
@@ -15,7 +14,7 @@ const NOUN: Record<EntityKind, string> = { MODEL: 'model', STUDIO: 'studio', PHO
 
 @Component({
   selector: 'app-topbar',
-  imports: [Icon, SortMenu, CopiesPopover],
+  imports: [Icon, SortMenu],
   template: `
     <button class="brand" title="Thumbnailer — settings" (click)="settings.emit()"><span class="logo"><app-icon name="images" [size]="18" /></span><span class="name">Thumbnailer</span></button>
 
@@ -55,7 +54,6 @@ const NOUN: Record<EntityKind, string> = { MODEL: 'model', STUDIO: 'studio', PHO
 
     <button class="btn icon-btn" [title]="(prefs.theme() === 'dark' ? 'Light' : 'Dark') + ' theme (T)'" (click)="prefs.toggleTheme()"><app-icon [name]="prefs.theme() === 'dark' ? 'sun' : 'moon'" /></button>
     <button class="btn icon-btn" [class.active]="prefs.detailsOpen()" title="Details panel (I)" (click)="prefs.detailsOpen.set(!prefs.detailsOpen())"><app-icon name="panelRight" /></button>
-    <app-copies-popover />
   `,
   styles: `
     :host { display: flex; align-items: center; gap: 8px; height: var(--topbar-h); padding: 0 12px; background: var(--bg-elev); border-bottom: 1px solid var(--border); }

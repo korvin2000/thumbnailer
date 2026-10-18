@@ -39,6 +39,9 @@ export interface Album {
   copies: number;
 }
 
+/** What an image URL needs of an album (`PhotoListItem.album` is one). */
+export type AlbumRef = Pick<Album, 'id' | 'revision'>;
+
 /** Catalog kinds, in code order 1..6. */
 export type EntityKind = 'MODEL' | 'STUDIO' | 'PHOTOGRAPHER' | 'GENRE' | 'TAG' | 'LIST';
 export const ENTITY_KINDS: EntityKind[] = ['MODEL', 'STUDIO', 'PHOTOGRAPHER', 'GENRE', 'TAG', 'LIST'];
