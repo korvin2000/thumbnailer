@@ -29,6 +29,12 @@ undo. Reference SPEC IDs.
   entities-under/genres filter/alias-resolved filters (B1), every operation item (B2), packers (B3), `Entry.flags`
   always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4). `ops/Manifest`
   and `Journal` records are B2's.
+- 2026-10-18 **B3 packers + cry** (branch `claude/catalog-b3-73a732`): `ops/pack` — `Packers` (zip: images STORED,
+  text DEFLATED; 7z through 7-Zip-JBinding, level 0 = Copy non-solid, written at runtime by the vendored native;
+  `hashes` by reopening), `FolderUnpacker` (one pass, flatten + name map, containment, read-back), `CryptRewriter`
+  (+ `verify`), `PhotoNames`; `SevenZipContainer.extract` (one pass, fail-closed); streaming `Cry.encrypt`/`decrypt`.
+  Not wired: B2 calls them. Checks: `:backend:test` 111 (1 skipped), all B3 tests green; `AlbumServiceTest.removeDeletes…`
+  fails under full-suite load (phase-0 race: `blob.remove` vs the released `recount` thread; passes alone).
 
 - 2026-10-14 `.cry` password is session-only: the key lives in server memory (never in settings.json), forgotten on restart or 10 s after the last client leaves; clients see an 8-hex fingerprint only; albums indexed with a key survive a missing key (only their `.cry` reads fail); Folders page shows a masked set state and an eye toggle for a typed password.
 - 2026-10-14 UI polish: sort = field × direction (`ui/sort-menu.ts`, 4 reverse `Sort` orders + indexes), folder tree filter/collapse/expand, kind strip, light/dark toggle only, settings behind the brand button, zip-file archive icon, datalist arrows and Save icon fixed. Checks: backend 70 tests pass (1 skipped), frontend build + 15 tests pass.

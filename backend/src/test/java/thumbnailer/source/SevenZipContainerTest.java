@@ -82,5 +82,40 @@ class SevenZipContainerTest {
         assertThat(new SevenZipContainer(Path.of("Shoot 01.tar.bz2"), Exclusions.NONE).name()).isEqualTo("Shoot 01");
     }
 
+    @Test
+    void extractDeliversWholeFilesInPackingOrderInOnePassAndFailsClosed() throws IOException {
+        Files.write(dir.resolve("t.tar.gz"), Archives.gzip(Archives.tar(files)));
+        Archives.sevenZip(dir.resolve("solid.7z"), ArchiveFormat.SEVEN_ZIP, files, true);
+        Archives.sevenZip(dir.resolve("plain.7z"), ArchiveFormat.SEVEN_ZIP, files, false);
+        var asked = List.of("raw/c.jpg", "album.txt", "b.jpg", "a.jpg");
+        for (var name : List.of("t.tar.gz", "solid.7z", "plain.7z")) {
+            var got = new LinkedHashMap<String, byte[]>();
+            var heads = new LinkedHashMap<String, byte[]>();
+            try (var c = new SevenZipContainer(dir.resolve(name), Exclusions.NONE)) {
+                c.extract(asked, (item, in) -> {
+                    assertThat(item.bytes()).isEqualTo(files.get(item.name()).length);
+                    got.put(item.name(), in.readAllBytes());
+                });
+                c.heads(asked, 1, heads::put);
+                assertThatThrownBy(() -> c.extract(List.of("a.jpg", "missing.jpg"), (i, in) -> got.clear()))
+                        .isInstanceOf(FileNotFoundException.class);
+                assertThatThrownBy(() -> c.extract(asked, (i, in) -> { throw new IOException("sink full"); }))
+                        .hasMessage("sink full");
+            }
+            assertThat(got.keySet()).as(name + ": packing order, as heads").containsExactlyElementsOf(heads.keySet());
+            if (name.startsWith("t.")) assertThat(got.keySet()).containsExactly("b.jpg", "a.jpg", "raw/c.jpg", "album.txt");
+            got.forEach((n, b) -> assertThat(b).as(name + " " + n).isEqualTo(files.get(n)));
+        }
+        for (var name : List.of("solid.7z", "plain.7z")) { // a flipped byte in the data: heads skip, extract fails
+            var bytes = Files.readAllBytes(dir.resolve(name));
+            for (int i = 1000; i < 1100; i++) bytes[i] ^= 0x55;
+            var bad = dir.resolve("bad-" + name);
+            Files.write(bad, bytes);
+            try (var c = new SevenZipContainer(bad, Exclusions.NONE)) {
+                assertThatThrownBy(() -> c.extract(asked, (i, in) -> {})).as(name).isInstanceOf(IOException.class);
+            }
+        }
+    }
+
     private static byte[] slice(byte[] b, int n) { return java.util.Arrays.copyOf(b, Math.min(n, b.length)); }
 }

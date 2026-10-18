@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 import java.util.regex.Pattern;
 import net.sf.sevenzipjbinding.ArchiveFormat;
@@ -47,7 +48,7 @@ import thumbnailer.natives.LibraryLoader;
  * named file streams to it without a listing. 7-Zip may call the output streams from its own threads (multi-threaded
  * LZMA2/xz decoding), so callbacks touch no thread-confined state.
  */
-final class SevenZipContainer implements AlbumContainer {
+public final class SevenZipContainer implements AlbumContainer {
 
     static final Set<String> EXTENSIONS = Set.of("rar", "7z", "tar", "iso", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "z", "taz");
     private static final Set<ArchiveFormat> STREAMS = Set.of(ArchiveFormat.GZIP, ArchiveFormat.BZIP2, ArchiveFormat.XZ, ArchiveFormat.Z);
@@ -260,6 +261,74 @@ final class SevenZipContainer implements AlbumContainer {
             run(wanted.keySet().stream().mapToInt(Integer::intValue).sorted().toArray(), collect, pass);
         }
     }
+
+    /**
+     * Every named file whole, in packing order, in one native pass (a solid archive or a wrapped tar decompresses
+     * once): each is buffered and handed on as it completes, possibly on a 7-Zip thread. Fail-closed: a missing,
+     * damaged or mis-sized file fails the call.
+     */
+    @Override
+    public void extract(Collection<String> names, EntrySink sink) throws IOException {
+        var byName = new HashMap<String, Item>();
+        items().forEach(i -> byName.put(i.name(), i));
+        var wanted = new HashMap<Integer, Item>();
+        for (var n : names) {
+            var item = byName.get(n);
+            if (item == null) throw new FileNotFoundException(n);
+            if (item.bytes() > Integer.MAX_VALUE - 8) throw new IOException("Too large to extract at once: " + n);
+            wanted.put(refs.get(n).index, item);
+        }
+        if (wanted.isEmpty()) return;
+        var pass = new Pass();
+        var done = new AtomicInteger();
+        IntFunction<Chunks> collect = i -> new Chunks() {
+            final Item item = wanted.get(i);
+            final byte[] buf = new byte[(int) item.bytes()];
+            int at;
+
+            @Override
+            public void accept(byte[] b, int off, int len) throws SevenZipException {
+                if (len > buf.length - at) pass.fail(damaged(item));
+                at += copy(b, off, len, buf, at);
+            }
+
+            @Override
+            public void end(boolean ok) throws SevenZipException {
+                if (!ok || at < buf.length) pass.fail(damaged(item));
+                try {
+                    sink.accept(item, new ByteArrayInputStream(buf));
+                } catch (IOException e) {
+                    pass.fail(e);
+                }
+                done.incrementAndGet();
+            }
+        };
+        if (wrapped) {
+            int last = wanted.keySet().stream().mapToInt(Integer::intValue).max().orElse(-1);
+            tar(new TarStream.Visitor() {
+                Chunks out;
+
+                @Override public boolean entry(String entry, long size, long mtime) throws SevenZipException {
+                    var r = refs.get(entry);
+                    if (r != null && r.index > last) pass.stop();
+                    out = r != null && wanted.containsKey(r.index) ? collect.apply(r.index) : null;
+                    return out != null;
+                }
+
+                @Override public void data(byte[] b, int off, int len) throws SevenZipException { out.accept(b, off, len); }
+
+                @Override public void end() throws SevenZipException { out.end(true); }
+            }, pass);
+        } else {
+            run(wanted.keySet().stream().mapToInt(Integer::intValue).sorted().toArray(), collect, pass);
+        }
+        if (done.get() < wanted.size()) throw new IOException("Not every entry could be read from " + file.getFileName());
+    }
+
+    private IOException damaged(Item item) { return new IOException("Damaged entry " + item.name() + " in " + file.getFileName()); }
+
+    /** Loads 7-Zip-JBinding for code that writes archives (the out-archive side shares the reader's initialization). */
+    public static void loadNative() { Native.init(); }
 
     @Override
     public void close() throws IOException {
