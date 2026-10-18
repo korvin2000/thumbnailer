@@ -2,6 +2,7 @@ package thumbnailer.index;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.dynatrace.hash4j.hashing.Hashing;
@@ -40,12 +41,16 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.util.FileSystemUtils;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumPatch;
+import thumbnailer.album.Link;
 import thumbnailer.catalog.Catalog;
+import thumbnailer.catalog.Entity;
+import thumbnailer.catalog.EntityKind;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumRepository.Tombstone;
 import thumbnailer.album.AlbumService;
@@ -83,6 +88,7 @@ class ScanTest {
     @Autowired Gate gate;
     @Autowired Reindexer reindexer;
     @Autowired FileOps ops;
+    @Autowired JdbcTemplate jdbc;
     @LocalServerPort int port;
     @TempDir Path root;
     /** Distinct image sizes per test, so no test's album looks like another test's moved album. */
@@ -442,44 +448,122 @@ class ScanTest {
         var received = new CopyOnWriteArrayList<String>();
         var socket = connect(received);
         socket.sendText("{\"type\":\"saveEntity\",\"id\":1,\"entity\":{\"kind\":\"LIST\",\"name\":\"Best\",\"rating\":0,\"aliases\":[\" Top  Ten \"]}}", true).join();
-        var card = await(received, m -> m.contains("\"id\":1"));
+        var card = await(received, m -> m.endsWith("\"id\":1}"));
         assertThat(card).startsWith("{\"type\":\"entityCard\",\"entity\":{\"id\":").contains("\"name\":\"Best\"", "\"aliases\":[\"top ten\"]");
         var list = card.replaceFirst(".*?\"entity\":\\{\"id\":(\\d+).*", "$1");
         await(received, m -> m.equals("{\"type\":\"catalogChanged\",\"kinds\":[\"LIST\"]}"));
         var other = String.valueOf(Integer.parseInt(list) + 100); // the envelope id is not the entity's
         socket.sendText("{\"type\":\"entity\",\"id\":\"" + other + "\",\"entityId\":" + list + "}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":\"" + other + "\""))).startsWith("{\"type\":\"entityCard\"")
+        assertThat(await(received, m -> m.endsWith("\"id\":\"" + other + "\"}"))).startsWith("{\"type\":\"entityCard\"")
                 .contains("\"entity\":{\"id\":" + list + ",", "\"name\":\"Best\"");
         socket.sendText("{\"type\":\"link\",\"id\":2,\"albumIds\":[\"" + l.id() + "\"],\"entityId\":" + list + "}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":2"))).isEqualTo("{\"type\":\"ok\",\"count\":1,\"id\":2}");
+        assertThat(await(received, m -> m.endsWith("\"id\":2}"))).isEqualTo("{\"type\":\"ok\",\"count\":1,\"id\":2}");
         socket.sendText("{\"type\":\"entities\",\"id\":3,\"kind\":\"LIST\",\"text\":\"BE\",\"sort\":\"COUNT\",\"offset\":0,\"limit\":10}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":3"))).startsWith("{\"type\":\"entityList\"")
+        assertThat(await(received, m -> m.endsWith("\"id\":3}"))).startsWith("{\"type\":\"entityList\"")
                 .contains("\"albums\":1,", "\"photos\":0", "\"total\":1");
         socket.sendText("{\"type\":\"markPhoto\",\"id\":4,\"albumId\":\"" + l.id() + "\",\"name\":\"a.jpg\",\"rating\":7,\"lists\":[" + list + "]}", true).join();
         var marks = "{\"a.jpg\":{\"rating\":7,\"lists\":[" + list + "]}}";
-        assertThat(await(received, m -> m.contains("\"id\":4"))).startsWith("{\"type\":\"photoMarks\"").contains(marks);
+        assertThat(await(received, m -> m.endsWith("\"id\":4}"))).startsWith("{\"type\":\"photoMarks\"").contains(marks);
         socket.sendText("{\"type\":\"search\",\"id\":5,\"query\":{\"roots\":[\"" + normalizedRoot() + "\"],\"offset\":0,\"limit\":10}}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":5"))).contains("\"hidden\":false",
+        assertThat(await(received, m -> m.endsWith("\"id\":5}"))).contains("\"hidden\":false",
                 "\"links\":[{\"entity\":" + list + ",\"role\":\"LIST\",\"name\":\"Best\"}]", "\"copies\":1",
                 "\"stamp\":\"" + l.internal().contentId() + "\"").doesNotContain("seq");
 
         socket.sendText("{\"type\":\"bulkUpdate\",\"id\":6,\"query\":{\"roots\":[\"" + normalizedRoot() + "\"],\"offset\":0,\"limit\":10},"
                 + "\"patch\":{\"hidden\":true,\"addTags\":[\"#Best Of\"],\"date\":\"2001\"}}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":6"))).isEqualTo("{\"type\":\"ok\",\"count\":1,\"id\":6}");
+        assertThat(await(received, m -> m.endsWith("\"id\":6}"))).isEqualTo("{\"type\":\"ok\",\"count\":1,\"id\":6}");
         var hidden = repo.find(l.id()).orElseThrow();
         assertThat(hidden).extracting(Album::hidden, Album::tags, Album::shotDate).containsExactly(true, List.of("best-of"), LocalDate.of(2001, 1, 1));
         socket.sendText("{\"type\":\"search\",\"id\":10,\"query\":{\"roots\":[\"" + normalizedRoot() + "\"],\"offset\":0,\"limit\":10}}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":10"))).as("hidden").contains("\"total\":0");
+        assertThat(await(received, m -> m.endsWith("\"id\":10}"))).as("hidden").contains("\"total\":0");
         socket.sendText("{\"type\":\"album\",\"id\":7,\"albumId\":\"" + l.id() + "\"}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":7"))).contains("\"marks\":" + marks, "\"flags\":0");
+        assertThat(await(received, m -> m.endsWith("\"id\":7}"))).contains("\"marks\":" + marks, "\"flags\":0");
         socket.sendText("{\"type\":\"compareCopies\",\"id\":8,\"a\":\"x\",\"b\":\"y\"}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":8"))).isEqualTo("{\"type\":\"error\",\"message\":\"not implemented: compareCopies\",\"id\":8}");
+        assertThat(await(received, m -> m.endsWith("\"id\":8}"))).isEqualTo("{\"type\":\"error\",\"message\":\"No album x\",\"id\":8}");
 
         socket.sendText("{\"type\":\"op\",\"id\":9,\"op\":{\"kind\":\"PACK\",\"albumIds\":[\"" + l.id() + "\"],\"password\":\"s3cret\"}}", true).join();
-        assertThat(await(received, m -> m.contains("\"id\":9"))).startsWith("{\"type\":\"opAccepted\",\"opId\":\"");
+        assertThat(await(received, m -> m.endsWith("\"id\":9}"))).startsWith("{\"type\":\"opAccepted\",\"opId\":\"");
         assertThat(await(received, m -> m.startsWith("{\"type\":\"opResult\"")))
                 .contains("\"failed\":[{\"item\":\"" + l.path() + "\",\"reason\":\"not implemented\"}]");
         assertThat(received).noneMatch(m -> m.contains("s3cret"));
+        socket.abort();
+    }
+
+    @Test
+    void scannedTextBecomesAutoEntitiesCountedWhileVisibleAndAnOldDatabaseIsBackfilled() throws IOException {
+        var model = "Zoe " + salt;
+        dir(root.resolve("Z"), "a.jpg", "b.jpg");
+        Files.writeString(root.resolve("Z/album.txt"), "model: " + model + "\nstudio: Studio " + salt + "\n#tag" + salt);
+        assertThat(jdbc.queryForObject("SELECT val FROM meta WHERE name = 'catalog_version'", String.class)).as("backfilled at start").isEqualTo("1");
+        scan(() -> false);
+        var z = byName("Z");
+        assertThat(z.links()).extracting(Link::role, Link::name).containsExactly(tuple(EntityKind.MODEL, model),
+                tuple(EntityKind.STUDIO, "Studio " + salt), tuple(EntityKind.TAG, "tag" + salt));
+        var zoe = catalog.entities(EntityKind.MODEL, model, null, false, 0, 10).getFirst();
+        assertThat(zoe).extracting(Entity::name, Entity::auto, Entity::albums).containsExactly(model, true, 1);
+        assertThat(catalog.entities(EntityKind.TAG, "tag" + salt, null, false, 0, 10)).extracting(Entity::auto).containsExactly(false);
+        albums.patch(z.id(), new AlbumPatch(null, null, null, null, null, null, null, null, null, null, true, null, null));
+        assertThat(catalog.entity(zoe.id()).albums()).as("hidden").isZero();
+        albums.patch(z.id(), new AlbumPatch(null, null, null, null, null, null, null, null, null, null, false, null, null));
+        assertThat(catalog.entity(zoe.id()).albums()).isEqualTo(1);
+
+        jdbc.update("DELETE FROM album_link WHERE role <> 6"); // a database from before the catalog
+        jdbc.update("UPDATE meta SET val = '0' WHERE name = 'catalog_version'");
+        assertThat(repo.find(z.id()).orElseThrow().links()).isEmpty();
+        catalog.backfill();
+        assertThat(repo.find(z.id()).orElseThrow()).extracting(a -> a.links().size(), Album::revision).containsExactly(3, z.revision() + 2);
+        assertThat(catalog.entity(zoe.id()).albums()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT val FROM meta WHERE name = 'catalog_version'", String.class)).isEqualTo("1");
+    }
+
+    @Test
+    void curationRewritesAlbumTextThroughPatchesAndCopiesCompareByteForByte() throws Exception {
+        String model = "Zed " + salt, studio = "Stu " + salt, other = "Ola " + salt, credited = "Zeta " + salt;
+        dir(root.resolve("C1"), "a.jpg", "b.jpg");
+        Files.writeString(root.resolve("C1/album.txt"), "model: " + model + "\nstudio: " + studio);
+        dir(root.resolve("C2"), "a.jpg", "b.jpg");
+        Files.writeString(root.resolve("C2/album.txt"), "model: " + other);
+        scan(() -> false);
+        var c1 = byName("C1");
+        var c2 = byName("C2");
+        int m = c1.links().get(0).entity(), s = c1.links().get(1).entity();
+        var received = new CopyOnWriteArrayList<String>();
+        var socket = connect(received);
+
+        socket.sendText("{\"type\":\"link\",\"id\":1,\"albumIds\":[\"" + c2.id() + "\"],\"entityId\":" + m + "}", true).join();
+        assertThat(await(received, x -> x.endsWith("\"id\":1}"))).isEqualTo("{\"type\":\"ok\",\"count\":1,\"id\":1}");
+        assertThat(repo.find(c2.id()).orElseThrow().model()).as("the effective list + the name").isEqualTo(other + ", " + model);
+        socket.sendText("{\"type\":\"link\",\"id\":2,\"albumIds\":[\"" + c2.id() + "\"],\"entityId\":" + m + "}", true).join();
+        assertThat(await(received, x -> x.endsWith("\"id\":2}"))).as("already linked").isEqualTo("{\"type\":\"ok\",\"count\":0,\"id\":2}");
+
+        socket.sendText("{\"type\":\"creditAs\",\"id\":3,\"modelId\":" + m + ",\"studioId\":" + s + ",\"alias\":\"" + credited + "\"}", true).join();
+        assertThat(await(received, x -> x.endsWith("\"id\":3}"))).startsWith("{\"type\":\"entityCard\"").contains("\"alias\":\"" + credited + "\"");
+        var rewritten = repo.find(c1.id()).orElseThrow();
+        assertThat(rewritten.model()).isEqualTo(credited);
+        assertThat(rewritten.links().getFirst()).extracting(Link::entity, Link::alias).containsExactly(m, credited);
+        assertThat(rewritten.revision()).isEqualTo(c1.revision() + 1);
+        assertThat(repo.find(c2.id()).orElseThrow().model()).as("not at that studio").isEqualTo(other + ", " + model);
+
+        socket.sendText("{\"type\":\"unlink\",\"id\":4,\"albumIds\":[\"" + c1.id() + "\"],\"entityId\":" + m + "}", true).join();
+        assertThat(await(received, x -> x.endsWith("\"id\":4}"))).isEqualTo("{\"type\":\"ok\",\"count\":1,\"id\":4}");
+        assertThat(repo.find(c1.id()).orElseThrow()).extracting(Album::model, a -> a.internal().edited().model()).containsExactly(null, "");
+
+        socket.sendText("{\"type\":\"deleteEntities\",\"id\":5,\"ids\":[" + m + "]}", true).join();
+        assertThat(await(received, x -> x.endsWith("\"id\":5}"))).isEqualTo("{\"type\":\"ok\",\"id\":5}");
+        assertThat(repo.find(c2.id()).orElseThrow().model()).isEqualTo(other);
+        assertThat(catalog.entities(EntityKind.MODEL, model, null, false, 0, 10)).isEmpty();
+
+        Files.createDirectories(root.resolve("C3"));
+        for (var f : List.of("a.jpg", "b.jpg", "album.txt")) Files.copy(root.resolve("C2").resolve(f), root.resolve("C3").resolve(f));
+        scan(() -> false);
+        var c3 = byName("C3");
+        socket.sendText("{\"type\":\"compareCopies\",\"id\":6,\"a\":\"" + c2.id() + "\",\"b\":\"" + c3.id() + "\"}", true).join();
+        assertThat(await(received, x -> x.endsWith("\"id\":6}"))).isEqualTo("{\"type\":\"comparison\",\"identical\":true,\"differing\":[],\"id\":6}");
+        var b = Files.readAllBytes(root.resolve("C3/b.jpg"));
+        b[b.length / 2] ^= 1; // same size, other bytes
+        Files.write(root.resolve("C3/b.jpg"), b);
+        socket.sendText("{\"type\":\"compareCopies\",\"id\":7,\"a\":\"" + c2.id() + "\",\"b\":\"" + c3.id() + "\"}", true).join();
+        assertThat(await(received, x -> x.endsWith("\"id\":7}"))).isEqualTo("{\"type\":\"comparison\",\"identical\":false,\"differing\":[\"b.jpg\"],\"id\":7}");
         socket.abort();
     }
 

@@ -25,6 +25,13 @@ undo. Reference SPEC IDs.
   re-check (two more closed: `remove` deletes under the catalog read lock, the scan's cancel token is published with the gate under one lock). Checks: `:backend:test` 100 (1 skipped), `ng build` 504 kB, `ng test` 35; live smoke on the packaged
   jar (`backend-demo`): search fields, lists/links/marks, hide/unhide, date `2019`, copies, duplicates/entities/
   missing filters, entity card counts, preflight, op admission, not-implemented errors, images 200.
+- 2026-10-18 **catalog track B1 landed** (branch `claude/catalog-b1-091200`): resolution in `Catalog.resolving` (whole
+  text first, insert-or-get under the write lock, one link per entity with the alias as written, alias search text; new
+  auto entities announced, under a scan by its recount), backfill at start (`catalog_version` 1, before `scanOnStart`,
+  under the gate), merge/rename/alias with column-only `search` recompute, credited-as and delete entity as two steps
+  (catalog write, then one patch per album), `link`/`unlink` of text roles, `entities` under another, derived cards,
+  alias-resolved filters (model/studio/photographer/tags/genres) and facets from links, `compareCopies`. Checks:
+  `:backend:test` 111 (1 skipped); the mock's emulation of these semantics is not updated (phase-0 files).
 - Open after phase 0 (each owned by a track): `Catalog.resolve` returns no links (B1), merge/creditAs/compareCopies/
   entities-under/genres filter/alias-resolved filters (B1), every operation item (B2), packers (B3), `Entry.flags`
   always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4). `ops/Manifest`

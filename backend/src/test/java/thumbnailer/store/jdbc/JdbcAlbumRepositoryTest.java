@@ -29,9 +29,12 @@ import thumbnailer.album.AlbumRepository.Save;
 import thumbnailer.album.AlbumRepository.Stats;
 import thumbnailer.album.AlbumRepository.Tombstone;
 import thumbnailer.album.Entry;
+import thumbnailer.album.Facets;
 import thumbnailer.album.Link;
+import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.Entity;
 import thumbnailer.catalog.EntityKind;
+import thumbnailer.catalog.EntitySave;
 import thumbnailer.catalog.Resolution;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Kind;
@@ -42,6 +45,7 @@ class JdbcAlbumRepositoryTest {
     private final EmbeddedDatabase db = new EmbeddedDatabaseBuilder().setType(EmbeddedDatabaseType.H2)
             .generateUniqueName(true).addScript("schema.sql").build();
     private final JdbcAlbumRepository repo = new JdbcAlbumRepository(new JdbcTemplate(db), JSON, Path.of("build"));
+    private final Catalog catalog = new Catalog(new JdbcCatalogRepository(new JdbcTemplate(db)), e -> {});
 
     /** The file-system root, e.g. {@code C:/}: it already ends in '/'. */
     private static final String DRIVE = Containers.normalize(Path.of("/"));
@@ -81,12 +85,12 @@ class JdbcAlbumRepositoryTest {
 
     @Test
     void searchFiltersSortsAndPages() {
-        repo.save(album("1", "Ellena by the sea", "Ellena", List.of("wedding", "beach"), 500, LocalDate.of(2019, 1, 1), 8), List.of());
-        repo.save(album("2", "Ellena 2", "Ellena", List.of("wedding"), 900, LocalDate.of(2020, 1, 1), 5), List.of());
-        repo.save(album("3", "Mira", "Mira ELLENA-like", List.of("wedding", "outdoor"), 700, LocalDate.of(2021, 1, 1), 9), List.of());
-        repo.save(album("4", "Ellena old", "Ellena", List.of("wedding"), 950, LocalDate.of(2010, 1, 1), 9), List.of());
-        repo.save(album("5", "Ellena no tag", "Ellena", List.of(), 990, LocalDate.of(2022, 1, 1), 9), List.of());
-        repo.save(album("6", "Ellena undated", "Ellena", List.of("wedding"), 100, null, 1), List.of());
+        resolved(album("1", "Ellena by the sea", "Ellena", List.of("wedding", "beach"), 500, LocalDate.of(2019, 1, 1), 8));
+        resolved(album("2", "Ellena 2", "Ellena", List.of("wedding"), 900, LocalDate.of(2020, 1, 1), 5));
+        resolved(album("3", "Mira", "Mira ELLENA-like", List.of("wedding", "outdoor"), 700, LocalDate.of(2021, 1, 1), 9));
+        resolved(album("4", "Ellena old", "Ellena", List.of("wedding"), 950, LocalDate.of(2010, 1, 1), 9));
+        resolved(album("5", "Ellena no tag", "Ellena", List.of(), 990, LocalDate.of(2022, 1, 1), 9));
+        resolved(album("6", "Ellena undated", "Ellena", List.of("wedding"), 100, null, 1));
 
         // text + tag + ranges, largest first, two per page
         var q = query("ellena", List.of("Wedding"), 400L, LocalDate.of(2015, 1, 1), Sort.LARGEST, 0, 2);
@@ -268,6 +272,36 @@ class JdbcAlbumRepositoryTest {
     }
 
     @Test
+    void entityFiltersResolveThroughAnyAliasAndFacetsCountTheLinks() {
+        catalog.save(new EntitySave(null, EntityKind.MODEL, "Ariell van Hoover", 0, null, List.of("Nikka"), null));
+        resolved(credited("1", "Nikka", "EL-Studio", "Pat", List.of("beach"), List.of("Glamour")));
+        resolved(credited("2", "Ariell van Hoover", null, null, List.of("beach", "wedding"), List.of("Glamour", "Art")));
+        resolved(credited("3", "Mira", "el-studio", null, List.of("wedding"), null));
+        resolved(credited("4", "Nikka", null, null, List.of("beach", "hidden"), List.of("Art")).withHidden(true));
+
+        assertThat(ids(by("NIKKA", null, null, null, null))).as("an alias finds every album of the entity").containsExactly("1", "2");
+        assertThat(ids(by("ariell  van hoover", null, null, null, null))).containsExactly("1", "2");
+        assertThat(ids(by("Nobody", null, null, null, null))).as("a name no entity has matches nothing").isEmpty();
+        assertThat(ids(by("Ariell", null, null, null, null))).as("whole names, not substrings").isEmpty();
+        assertThat(ids(by(null, "EL-STUDIO", null, null, null))).containsExactly("1", "3");
+        assertThat(ids(by(null, null, "pat", null, null))).containsExactly("1");
+        assertThat(ids(by(null, null, null, List.of("#Beach"), null))).containsExactly("1", "2");
+        assertThat(ids(by(null, null, null, List.of("beach", "wedding"), null))).as("every tag").containsExactly("2");
+        assertThat(ids(by(null, null, null, null, List.of("glamour")))).containsExactly("1", "2");
+        assertThat(ids(by(null, null, null, null, List.of("Glamour", "Art")))).containsExactly("2");
+        assertThat(ids(by(null, null, null, null, List.of("Nope")))).isEmpty();
+
+        var facets = repo.facets(AlbumQuery.ALL);
+        assertThat(facets.models()).as("primary names; hidden albums do not count")
+                .containsExactly(new Facets.Count("Ariell van Hoover", 2), new Facets.Count("Mira", 1));
+        assertThat(facets.studios()).containsExactly(new Facets.Count("EL-Studio", 2));
+        assertThat(facets.photographers()).containsExactly(new Facets.Count("Pat", 1));
+        assertThat(facets.tags()).containsExactly(new Facets.Count("beach", 2), new Facets.Count("wedding", 2));
+        assertThat(facets.genres()).containsExactly(new Facets.Count("Glamour", 2), new Facets.Count("Art", 1));
+        assertThat(repo.facets(by("nikka", null, null, null, null)).tags()).containsExactly(new Facets.Count("beach", 2), new Facets.Count("wedding", 1));
+    }
+
+    @Test
     void relocateBumpsTheRevisionAndByRootMatchesALiteralPrefix() {
         for (var path : List.of("A_%", "A_%/x", "AB_%", "Ab")) repo.save(at(path, ROOT + "/" + path, Kind.DIRECTORY), List.of());
         repo.save(at("r", ROOT + "/A_%/x/r", Kind.DIRECTORY), List.of());
@@ -328,6 +362,23 @@ class JdbcAlbumRepositoryTest {
     private static AlbumQuery filter(List<Integer> entities, EntityKind missing, Boolean duplicates) {
         return new AlbumQuery(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, entities, missing, null, duplicates, Sort.NAME, 0, 10);
+    }
+
+    /** Saved as {@code AlbumService} saves: its text resolved into links under the catalog lock. */
+    private void resolved(Album a) {
+        catalog.resolving(new AlbumMeta(a.name(), a.model(), a.studio(), a.photographer(), a.description(), null, a.tags(), a.genres()),
+                0, r -> repo.save(a, List.of(), r, new Save(false, !a.hidden(), false, Map.of())));
+    }
+
+    private List<String> ids(AlbumQuery q) { return repo.search(q).stream().map(Album::id).toList(); }
+
+    private static AlbumQuery by(String model, String studio, String photographer, List<String> tags, List<String> genres) {
+        return new AlbumQuery(null, tags, model, studio, photographer, null, null, null, null, null, null, null, null, null,
+                null, null, null, genres, null, null, null, null, Sort.NAME, 0, 10);
+    }
+
+    private static Album credited(String id, String model, String studio, String photographer, List<String> tags, List<String> genres) {
+        return at(id, ROOT + "/" + id, Kind.DIRECTORY).withEdits(new AlbumMeta(null, model, studio, photographer, null, null, tags, genres));
     }
 
     private static AlbumQuery hidden() {
