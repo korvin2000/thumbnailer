@@ -74,7 +74,9 @@ byte for byte; only Delete and Delete folder remove files on purpose, and they s
 Recycle Bin: deletion is final (hiding an album, *safe-delete*, touches no file). Every step is journaled in the
 library folder (`ops.journal`, manifests under `ops/`) before it runs; after a crash the next start finishes or rolls
 back each unfinished item before any scan, so a source or its verified result always survives. Albums keep their
-identity (id, rating, edits, pinned cover, photo marks) through every operation.
+identity (id, rating, edits, pinned cover, photo marks) through every operation. Copy photos never copies a photo that
+is already in the target folder, under its own name or a numbered one (`name (2).jpg`); another file of that name gets
+the next free number.
 
 ## Development
 

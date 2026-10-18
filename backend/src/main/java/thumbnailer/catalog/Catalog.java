@@ -255,6 +255,11 @@ public class Catalog {
 
     public Map<String, PhotoMark> marks(int seq) { return read(() -> repo.marks(seq)); }
 
+    /** One page of a favorites list's photos in visible albums, by album path, then name. */
+    public List<CatalogRepository.Listed> photos(int listId, int offset, int limit) { return read(() -> repo.photos(listId, offset, limit)); }
+
+    public int photoCount(int listId) { return read(() -> repo.photoCount(listId)); }
+
     /** Rates a photo or sets its lists (null = unchanged); {@code lists} must be favorites lists. */
     public void mark(int seq, String name, Integer rating, List<Integer> lists) {
         if (rating != null && (rating < 0 || rating > 10)) throw new IllegalArgumentException("Rating must be 0..10");

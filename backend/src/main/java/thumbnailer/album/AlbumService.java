@@ -177,11 +177,21 @@ public class AlbumService {
 
     /** Edits keep the files, so an unchanged cover keeps its tag; a new one is rendered on the next request. */
     public Album patch(String id, AlbumPatch patch) {
-        if (patch.rating() != null && (patch.rating() < 0 || patch.rating() > 10))
-            throw new IllegalArgumentException("Rating must be 0..10");
+        return patch(id, a -> patch).orElseThrow(() -> new NoSuchElementException("No album " + id));
+    }
+
+    /**
+     * The edit {@code edit} computes from the album as stored, applied under the album's lock, so no other edit lands
+     * between the read and the save (a text edit over the current text). Empty when the album is gone or the edit is null.
+     */
+    public Optional<Album> patch(String id, Function<Album, AlbumPatch> edit) {
         Album album;
         synchronized (lock(id)) {
-            var stored = repo.find(id).orElseThrow(() -> new NoSuchElementException("No album " + id));
+            var stored = repo.find(id).orElse(null);
+            var patch = stored == null ? null : edit.apply(stored);
+            if (patch == null) return Optional.empty();
+            if (patch.rating() != null && (patch.rating() < 0 || patch.rating() > 10))
+                throw new IllegalArgumentException("Rating must be 0..10");
             album = stored.withEdits(patch.edit(stored.internal().edited(), stored.tags()))
                     .with(id, stored.revision() + 1, patch.rating() != null ? patch.rating() : stored.rating())
                     .withHidden(patch.hidden() != null ? patch.hidden() : stored.hidden());
@@ -193,7 +203,20 @@ public class AlbumService {
             }
             album = save(album, null, !stored.hidden(), Map.of());
         }
-        return changed(album);
+        return Optional.of(changed(album));
+    }
+
+    /**
+     * Stores the {@link Entry#flags} learned for entry {@code name} after indexing (a metadata read): one rewrite of
+     * the album's entry list under its lock. Not an album save: the files and what they show are unchanged, so no revision.
+     */
+    public void setFlags(String albumId, String name, int flags) {
+        synchronized (lock(albumId)) {
+            var entries = repo.entries(albumId);
+            var learned = entries.stream().map(e -> !e.name().equals(name) || e.flags() == flags ? e
+                    : new Entry(e.index(), e.name(), e.bytes(), e.mtime(), e.width(), e.height(), e.shotAt(), flags)).toList();
+            if (!learned.equals(entries)) repo.saveEntries(albumId, learned);
+        }
     }
 
     /** A moved album keeps everything but its path and root; the move is a save, so it bumps the revision. */

@@ -6,7 +6,6 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -16,15 +15,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
-import javax.crypto.Cipher;
-import javax.crypto.spec.SecretKeySpec;
 import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Cry;
 
 /**
- * Encrypting and decrypting with an operation's own key ({@link Cry} decrypts with the session's, which may be gone by
- * the time the operation runs): the name map of a container, the transform of one file (checked by a round trip
- * before anything is written), and the view an archive is rewritten through.
+ * Encrypting and decrypting with an operation's own key through {@link Cry}'s format code (its container wrap uses the
+ * session's key, which may be gone by the time the operation runs): the name map of a container, the transform of one
+ * file (an encryption is checked by a round trip before anything is written), and the view an archive is rewritten
+ * through by the {@link thumbnailer.ops.pack.Packer}, so a rewrite verifies like any pack.
  */
 final class Crypt {
 
@@ -59,33 +57,20 @@ final class Crypt {
         return names;
     }
 
-    /** The embedded name of a {@code .cry} file, or an IOException when the key does not fit (the header check of {@link Cry}). */
+    /** The embedded base name of a {@code .cry} file of {@code size} bytes, or an IOException when the key does not fit. */
     static String name(byte[] head, long size, byte[] key) throws IOException {
-        if (head.length < 21 || (size - 5) % 16 != 0) throw new IOException("not a .cry file");
-        int f = ByteBuffer.wrap(head).getInt();
-        if (nameLength(aes(Cipher.DECRYPT_MODE, key, head, 5, 16)) != size - 7 - f) throw new IOException("wrong password");
-        var name = Cry.plainName(head, key);
+        var name = Cry.plainName(head, size, key);
         int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
         name = name.substring(slash + 1);
         if (name.isBlank() || name.equals("..")) throw new IOException("No usable name inside");
         return name;
     }
 
-    /** The image a {@code .cry} file holds; IOException when the key does not fit. */
-    static byte[] decrypt(byte[] file, byte[] key) throws IOException {
-        int c = file.length - 5, f = file.length < 5 ? -1 : ByteBuffer.wrap(file).getInt();
-        if (c < 16 || c % 16 != 0 || f < 0 || f > c - 2) throw new IOException("not a .cry file");
-        var plain = aes(Cipher.DECRYPT_MODE, key, file, 5, c);
-        int l = nameLength(plain);
-        if (l != c - 2 - f) throw new IOException("wrong password");
-        return Arrays.copyOfRange(plain, 2 + l, 2 + l + f);
-    }
-
     /** {@code bytes} of file {@code name} encrypted (under its base name) or decrypted; an encryption is decrypted again and compared first. */
     static byte[] transform(String name, byte[] bytes, byte[] key, boolean encrypt) throws IOException {
-        if (!encrypt) return decrypt(bytes, key);
+        if (!encrypt) return Cry.decrypt(bytes, key);
         var out = Cry.encrypt(bytes, name.substring(name.lastIndexOf('/') + 1), key);
-        if (!Arrays.equals(decrypt(out, key), bytes)) throw new IOException("Encryption does not read back: " + name);
+        if (!Arrays.equals(Cry.decrypt(out, key), bytes)) throw new IOException("Encryption does not read back: " + name);
         return out;
     }
 
@@ -131,17 +116,5 @@ final class Crypt {
     private static long encryptedSize(long bytes, String name) {
         int n = name.substring(name.lastIndexOf('/') + 1).getBytes(UTF_8).length;
         return 5 + 2 + n + (16 - (bytes + 2 + n) % 16) % 16 + bytes;
-    }
-
-    private static int nameLength(byte[] plain) { return ((plain[0] & 0xFF) << 8 | plain[1] & 0xFF) ^ 0x8000; }
-
-    private static byte[] aes(int mode, byte[] key, byte[] in, int offset, int length) throws IOException {
-        try {
-            var c = Cipher.getInstance("AES/ECB/NoPadding");
-            c.init(mode, new SecretKeySpec(key, "AES"));
-            return c.doFinal(in, offset, length);
-        } catch (GeneralSecurityException e) {
-            throw new IOException(e);
-        }
     }
 }

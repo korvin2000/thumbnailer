@@ -218,15 +218,19 @@ class Planner {
         if (Cry.is(in.path())) {
             if (key == null) return skip(in.path(), "needs the password");
             plain = Crypt.name(bytes, bytes.length, key);
-            bytes = Crypt.decrypt(bytes, key);
+            bytes = Cry.decrypt(bytes, key);
         } else plain = in.path().substring(in.path().lastIndexOf('/') + 1);
-        var dst = Containers.prefix(target) + plain;
-        var existing = s.locate(dst);
-        if (Files.isRegularFile(existing, NOFOLLOW_LINKS) && Files.size(existing) == bytes.length
-                && Trees.hashes(existing).get("") == Hashes.of(bytes)) return skip(in.path(), "identical file exists");
-        dst = destination(Op.Conflict.RENAME, s, target, plain, true, taken);
-        return new Item(in.path(), new Manifest(COPY_PHOTOS, a.id(), a.kind(), a.path(), dst, Trees.part(dst), null, false,
-                Map.of(in.path(), "")), null, null, bytes.length, bytes.length, store(s.locate(target)));
+        long hash = Hashes.of(bytes);
+        for (int n = 1; ; n++) { // the photo itself under any of its names (copied before) is not copied again
+            var dst = Containers.prefix(target) + (n == 1 ? plain : Trees.numbered(plain, n, true));
+            var at = s.locate(dst);
+            if (Files.isRegularFile(at, NOFOLLOW_LINKS) && Files.size(at) == bytes.length && Trees.hashes(at).get("") == hash)
+                return skip(in.path(), "identical file exists");
+            if (Files.exists(at, NOFOLLOW_LINKS) || Files.exists(s.locate(Trees.part(dst)), NOFOLLOW_LINKS)
+                    || taken.contains(dst.toLowerCase(Locale.ROOT))) continue;
+            return new Item(in.path(), new Manifest(COPY_PHOTOS, a.id(), a.kind(), a.path(), dst, Trees.part(dst), null, false,
+                    Map.of(in.path(), "")), null, null, bytes.length, bytes.length, store(s.locate(target)));
+        }
     }
 
     /** What would happen, for the confirm dialog; items that do not fit the free space of their volume are skipped. */
@@ -323,10 +327,10 @@ class Planner {
         }
     }
 
-    /** An archive whose only top-level entry is a folder of its own name is extracted without it. */
+    /** An archive whose only top-level entry is a folder of its own name (case ignored) is extracted without it. */
     static Map<String, String> flatten(String base, Set<String> names) {
         var top = base + "/";
-        boolean flat = !names.isEmpty() && names.stream().allMatch(n -> n.startsWith(top) && n.length() > top.length());
+        boolean flat = !names.isEmpty() && names.stream().allMatch(n -> n.length() > top.length() && n.regionMatches(true, 0, top, 0, top.length()));
         return names.stream().collect(Collectors.toMap(n -> n, n -> flat ? n.substring(top.length()) : n, (x, y) -> x, LinkedHashMap::new));
     }
 

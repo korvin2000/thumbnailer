@@ -15,7 +15,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Nullness by convention (null = not set / no filter / unchanged); `Optional` for lookups. No custom exceptions:
   `IllegalArgumentException` / `NoSuchElementException` / `IllegalStateException`; WS turns any exception into
   `Event.Error`. Per-item I/O failures: `catch (IOException | RuntimeException e)` → `log.warn` → skip.
-- Threads: platform daemon threads `scan`, `ws-broadcast`, `ws-idle`, `covers-compact`, `resampler-warmup` (once at start); the non-daemon `restart` thread; virtual `walk-N` (one walker per disk in a scan) and `gallery` (one pass per viewed sequential archive); indexing runs one virtual thread per
+- Threads: platform daemon threads `scan`, `ws-broadcast`, `ws-idle`, `covers-compact`, `resampler-warmup` (once at start), `catalog-backfill` (once at start, only while the gate is busy then), `ops` (one per operation), `pack-read` (the pass feeding a 7z pack); the non-daemon `restart` thread; virtual `walk-N` (one walker per disk in a scan) and `gallery` (one pass per viewed sequential archive); indexing runs one virtual thread per
   album (`index-N`), bounded by a semaphore (`index-threads` albums per disk walker); renders are a pipeline in `AlbumService`
   (covers: indexing + cover misses; entry thumbnails): read in a disk turn (`source/Disks` lane: FIFO, `hdd-readers`
   at once on an HDD/network/unknown disk, ungated on an SSD; separate `SCAN` and `VIEW` lanes), a place in the queue
@@ -115,7 +115,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   (`removed` by id, index `removed_id`) in one transaction;
   `entries == null` keeps stored entries; every `order()` must match one index in `schema.sql` exactly (columns,
   directions, `NULLS LAST`), or that sort falls back to sorting every row (seconds at 100 k albums); tags are
-  stored as `" a b "` and matched with `LIKE '% tag %'` — change `album()`, `facets()` and `Where` together.
+  stored as `" a b "` for `album()` and the search text only; tag filters and facets go through `album_link` (alias-resolved).
   `schema.sql` must stay idempotent (`IF NOT EXISTS`); there is no migration tool.
 - Entry `index` = position among readable images (name-sorted); it is the id used by `/img/{id}/{index}` and the UI.
 

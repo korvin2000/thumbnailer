@@ -42,6 +42,9 @@ import tools.jackson.databind.json.JsonMapper;
 @ConditionalOnProperty(name = "thumbnailer.store.albums", havingValue = "jdbc", matchIfMissing = true)
 class JdbcCatalogRepository implements CatalogRepository {
 
+    /** A list's photos of visible albums. */
+    private static final String LISTED = " FROM photo_link l JOIN photo p ON p.id = l.photo_id JOIN album a ON a.seq = p.album_seq"
+            + " WHERE l.entity_id = ? AND NOT a.hidden";
     /** A list's photo count is computed: lists are few, and only photos of visible albums count. */
     private static final String ENTITY = "SELECT id, kind, name, rating, auto, albums, profile, CASE WHEN kind = 6 THEN "
             + "(SELECT COUNT(*) FROM photo_link l JOIN photo p ON p.id = l.photo_id JOIN album a ON a.seq = p.album_seq "
@@ -204,6 +207,16 @@ class JdbcCatalogRepository implements CatalogRepository {
 
     @Override
     public void recount() { template.update("UPDATE entity SET albums = (" + VISIBLE + ")"); }
+
+    @Override
+    public List<Listed> photos(int listId, int offset, int limit) {
+        return jdbc.sql("SELECT a.id, a.name, a.revision, p.name, p.rating" + LISTED + " ORDER BY a.path, p.name LIMIT ? OFFSET ?")
+                .params(listId, limit, offset).query((rs, i) -> new Listed(rs.getString(1), rs.getString(2), rs.getLong(3),
+                        rs.getString(4), rs.getInt(5))).list();
+    }
+
+    @Override
+    public int photoCount(int listId) { return jdbc.sql("SELECT COUNT(*)" + LISTED).params(listId).query(Integer.class).single(); }
 
     @Override
     public Map<String, PhotoMark> marks(int seq) {

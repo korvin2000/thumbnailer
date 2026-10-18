@@ -9,8 +9,9 @@ import thumbnailer.source.AlbumContainer;
 public interface Unpacker {
 
     /**
-     * Writes every file of {@code raw} below {@code dir}, renamed by {@code nameMap} (old → new, e.g. a flattened top
-     * directory); returns the hashes of the written files, read back.
+     * Writes every file of {@code raw} below {@code dir} (created if missing), renamed by {@code nameMap} (old → new,
+     * e.g. a flattened top directory); returns, by written name ('/'-relative), the hash of the bytes read from the
+     * archive. The caller verifies by reading the tree back once it is on the disk: source bytes against written bytes.
      */
     Map<String, Long> unpack(AlbumContainer raw, Path dir, Map<String, String> nameMap) throws IOException;
 }
