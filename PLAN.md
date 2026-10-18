@@ -47,6 +47,14 @@ undo. Reference SPEC IDs.
   with multi-select by entry name, copy-to targets through preflight → Confirm → `COPY_PHOTOS`, metadata dialog, bio
   drawer, viewer defaults on the Appearance page, §7.7 keys. Checks: `ng build` 542 kB, `ng test` 45. Unverified:
   `requestFullscreen` (pending in the embedded preview pane), the live `photoMeta`/`albumText`/`COPY_PHOTOS` paths.
+- 2026-10-18 **catalog phase 1, track F3 (trees + cards)** on branch `claude/catalog-f3-299886`: Browse tab with group-by
+  (`ui/sidebar.ts`), `ui/entity-tree.ts` (All · Unassigned · paged entities, second level over `under`, multi-select
+  Confirm / Merge… / Delete…, Delete unused…), Views strip (Hidden + Unhide all, Duplicates), topbar scope chips, Refine
+  genre select + hidden switch, `ui/entity-card.ts` over the pure `core/entity-fields.ts` schema (studios table with
+  credited-as, sections, hashtags, collision → merge offer), details-panel name-list inputs with server suggestions,
+  link chips, shot date, `ui/copies-popover.ts` (Compare before Delete…). Checks: `ng build` 556 kB, `ng test` 42; mock
+  pass. Open: live `under`/merge/creditAs/compareCopies (B1), entity context menus and Delete… wiring (F4, hooks
+  `EntityTree.contextMenu`, `CopiesPopover.deleteRequested`), `app-copies-popover` to move from `Topbar` to `app.html`.
 - Open after phase 0 (each owned by a track): `Catalog.resolve` returns no links (B1), merge/creditAs/compareCopies/
   entities-under/genres filter/alias-resolved filters (B1), every operation item (B2), packers (B3), `Entry.flags`
   always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4). `ops/Manifest`

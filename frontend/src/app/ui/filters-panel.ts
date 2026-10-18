@@ -40,6 +40,14 @@ const MEGAPIXELS = [0, 1, 2, 4, 8, 12, 16, 24, 36, 50, 100, Infinity];
         <select class="input sm" [value]="f().photographer ?? ''" (change)="store.setFilter('photographer', $any($event.target).value)">
           <option value="">Any</option>@for (x of facets().photographers; track x.value) { <option [value]="x.value">{{ x.value }} ({{ x.count }})</option> }
         </select></label>
+      <label><span><app-icon name="sparkles" [size]="13" /> Genre</span>
+        <select class="input sm" [value]="f().genres?.[0] ?? ''" (change)="setGenre($any($event.target).value)">
+          <option value="">Any</option>@for (x of facets().genres; track x.value) { <option [value]="x.value">{{ x.value }} ({{ x.count }})</option> }
+        </select></label>
+    </section>
+
+    <section>
+      <label class="check" title="Hidden albums are safe-deleted: out of every other view and count"><input type="checkbox" [checked]="!!f().hidden" (change)="store.setFilter('hidden', $any($event.target).checked ? true : null)" /> Show hidden albums only</label>
     </section>
 
     <section>
@@ -101,7 +109,7 @@ export class FiltersPanel {
   protected readonly mps = MEGAPIXELS;
 
   protected readonly f = this.store.filters;
-  protected readonly facets = computed(() => this.store.facets() ?? { tags: [], models: [], studios: [], photographers: [] });
+  protected readonly facets = computed(() => this.store.facets() ?? { tags: [], models: [], studios: [], photographers: [], genres: [] });
   protected readonly activeTags = computed(() => this.store.query().tags ?? []);
   /** Active tags first (even without facet counts), then the most frequent ones. */
   protected readonly tagChoices = computed<Facet[]>(() => {
@@ -131,6 +139,8 @@ export class FiltersPanel {
     this.store.setFilter('minRating', r.lo === 0 ? null : r.lo);
     this.store.setFilter('maxRating', r.hi === 10 ? null : r.hi);
   }
+
+  protected setGenre(g: string) { this.store.setFilter('genres', g ? [g] : null); }
 
   protected setKind(k: Kind) { this.store.setFilter('kind', this.f().kind === k ? null : k); }
 

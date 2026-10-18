@@ -1,6 +1,8 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, input, linkedSignal, output, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { CatalogStore } from '../core/catalog-store';
+import { joinNames, parseNames } from '../core/entity-fields';
 import { BytesPipe, MegapixelsPipe } from '../core/format';
 import { Gateway } from '../core/gateway';
 import { Album, AlbumPatch, EntityKind } from '../core/model';
@@ -11,17 +13,22 @@ import { Icon } from './shared/icon';
 import { Rating } from './shared/rating';
 
 type TextField = 'name' | 'model' | 'studio' | 'photographer' | 'description';
-/** The credit inputs: each edits the raw text, its chips show the entities that text resolved to. */
+/** The credit inputs: each edits the raw text (a name list), its chips show the entities that text resolved to. */
 const CREDITS = [
-  { role: 'MODEL', field: 'model', label: 'Model', icon: 'user', list: 'dl-models' },
-  { role: 'STUDIO', field: 'studio', label: 'Studio', icon: 'building', list: 'dl-studios' },
-  { role: 'PHOTOGRAPHER', field: 'photographer', label: 'Photographer', icon: 'camera', list: 'dl-photographers' },
+  { role: 'MODEL', field: 'model', label: 'Model', icon: 'user', facet: 'models' },
+  { role: 'STUDIO', field: 'studio', label: 'Studio', icon: 'building', facet: 'studios' },
+  { role: 'PHOTOGRAPHER', field: 'photographer', label: 'Photographer', icon: 'camera', facet: 'photographers' },
+  { role: 'GENRE', field: 'genres', label: 'Genres', icon: 'sparkles', facet: 'genres' },
 ] as const;
+type Credit = typeof CREDITS[number];
+/** Datalist rows for one credit input: the typed head (names before the last separator) joined with each server suggestion. */
+interface Suggest { role: EntityKind; options: string[] }
 
-/** Floating panel with everything about one album; every field saves itself on change. */
+/** Floating panel with everything about one album; every field saves itself on change. In entity mode (a chip clicked) it shows the catalog card instead, 400 px wide. */
 @Component({
   selector: 'app-details-panel',
   imports: [Icon, Rating, RouterLink, BytesPipe, MegapixelsPipe, DatePipe, DecimalPipe, EntityCardView],
+  host: { '[class.entity]': "mode() === 'entity'" },
   template: `
     <header>
       @if (mode() === 'entity') {
@@ -35,7 +42,7 @@ const CREDITS = [
     </header>
 
     @if (mode() === 'entity' && entityId() !== null) {
-      <div class="body"><app-entity-card [entityId]="entityId()!" /></div>
+      <div class="body"><app-entity-card [entityId]="entityId()!" (open)="showEntity($event)" /></div>
     } @else if (album(); as a) {
       <div class="body">
         <a class="cover" [class.portrait]="a.coverPortrait" [routerLink]="['/album', a.id]" title="Open album">
@@ -61,6 +68,12 @@ const CREDITS = [
           <div><dt>Indexed</dt><dd>{{ a.indexedAt | date: 'short' }}</dd></div>
           <div><dt>Cover</dt><dd class="cover-name"><span>{{ a.cover || '—' }}</span>@if (a.coverPinned) { <app-icon name="pin" [size]="11" /> }</dd></div>
         </dl>
+        @if (a.hidden || a.copies > 1) {
+          <div class="flags">
+            @if (a.hidden) { <span class="flag"><app-icon name="eyeOff" [size]="12" /> Hidden</span> }
+            @if (a.copies > 1) { <button class="flag link" title="Show every album with the same photo names and sizes" (click)="catalog.copiesOf.set(a.id)"><app-icon name="layers" [size]="12" /> {{ a.copies }} copies <span class="dim">(same names and sizes)</span></button> }
+          </div>
+        }
 
         <section>
           <h3>Rating</h3>
@@ -69,16 +82,21 @@ const CREDITS = [
 
         <section class="fields">
           @for (c of credits; track c.role) {
-            <label><span><app-icon [name]="c.icon" [size]="13" /> {{ c.label }}</span><input class="input sm" [value]="a[c.field] ?? ''" (change)="save(c.field, $any($event.target).value)" [attr.list]="c.list" /></label>
+            <label><span><app-icon [name]="c.icon" [size]="13" /> {{ c.label }}</span>
+              <input class="input sm" [value]="text(a, c)" [attr.list]="'dl-' + c.role" [placeholder]="'names, comma-separated'" (input)="suggest(c, $any($event.target).value)" (change)="saveCredit(a, c, $any($event.target).value)" /></label>
+            <datalist [id]="'dl-' + c.role">@for (o of options(c); track o) { <option [value]="o"></option> }</datalist>
             @let linked = links(a, c.role);
             @if (linked.length) {
-              <div class="links">@for (l of linked; track l.entity) { <button class="chip" [title]="l.alias ? 'Written as ' + l.alias : 'Show ' + l.name" (click)="showEntity(l.entity)">{{ l.name }}</button> }</div>
+              <div class="links">
+                @for (l of linked; track l.entity) {
+                  <span class="chip"><button class="t" [title]="(l.alias ? 'Written as ' + l.alias + ' — ' : '') + 'Open ' + l.name" (click)="showEntity(l.entity)">{{ l.name }}</button><button [title]="'Unassign ' + l.name" (click)="unlink(a, l.entity)"><app-icon name="x" [size]="11" /></button></span>
+                }
+              </div>
             }
           }
+          <label><span><app-icon name="calendar" [size]="13" /> Shot date</span>
+            <span class="date"><input class="input sm" type="date" [value]="a.shotDate?.slice(0, 10) ?? ''" title="Overrides the indexed date" (change)="patch({ date: $any($event.target).value })" /><button class="btn icon-btn sm ghost" title="Back to the indexed date" (click)="patch({ date: '' })"><app-icon name="refresh" [size]="12" /></button></span></label>
           <label class="col"><span>Description</span><textarea class="input" rows="3" [value]="a.description ?? ''" (change)="save('description', $any($event.target).value)"></textarea></label>
-          <datalist id="dl-models">@for (x of store.facets()?.models; track x.value) { <option [value]="x.value"></option> }</datalist>
-          <datalist id="dl-studios">@for (x of store.facets()?.studios; track x.value) { <option [value]="x.value"></option> }</datalist>
-          <datalist id="dl-photographers">@for (x of store.facets()?.photographers; track x.value) { <option [value]="x.value"></option> }</datalist>
           <datalist id="dl-tags">@for (x of store.facets()?.tags; track x.value) { <option [value]="x.value"></option> }</datalist>
         </section>
 
@@ -98,6 +116,8 @@ const CREDITS = [
   `,
   styles: `
     :host { display: flex; flex-direction: column; border-radius: var(--radius-l); overflow: hidden; animation: fade-up 0.2s var(--ease); }
+    :host(.entity) { width: 400px; }
+    @media (max-width: 760px) { :host(.entity) { width: auto; } }
     header { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--border); }
     .state { flex: 1; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-3); }
     .body { flex: 1; overflow: auto; padding: 12px 14px 18px; display: flex; flex-direction: column; gap: 10px; }
@@ -115,14 +135,20 @@ const CREDITS = [
     dt { color: var(--text-3); font-size: 11.5px; }
     dd { margin: 0; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cover-name { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
+    .flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -4px; }
+    .flag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: 11.5px; }
+    .flag.link:hover { color: var(--accent-strong); background: var(--accent-soft); }
+    .flag .dim { color: var(--text-3); }
     section h3 { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
     .fields { display: flex; flex-direction: column; gap: 6px; }
     .fields label { display: grid; grid-template-columns: 108px 1fr; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
     .fields label.col { grid-template-columns: 1fr; gap: 4px; }
     .fields label > span { display: inline-flex; align-items: center; gap: 6px; }
+    .date { display: flex; gap: 4px; }
+    .date .input { flex: 1; min-width: 0; padding: 0 6px; }
     .links { display: flex; flex-wrap: wrap; gap: 4px; margin: -2px 0 2px 116px; }
+    .links .t, .tags .t { font: inherit; color: inherit; }
     .tags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-    .tags .t { font: inherit; color: inherit; }
     .tag-input { width: 110px; }
     .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; color: var(--text-3); text-align: center; }
   `,
@@ -135,6 +161,7 @@ export class DetailsPanel {
 
   protected readonly gw = inject(Gateway);
   protected readonly store = inject(AlbumStore);
+  protected readonly catalog = inject(CatalogStore);
   private readonly toasts = inject(Toasts);
   protected readonly credits = CREDITS;
   /** The panel shows the album, or a catalog entity opened from one of its chips (back arrow returns). */
@@ -144,6 +171,10 @@ export class DetailsPanel {
   protected readonly saved = linkedSignal<Album | null, boolean>({ source: this.album, computation: () => false });
   /** Local tag list so quick successive edits build on each other instead of on the last acknowledged album. */
   protected readonly tags = linkedSignal(() => this.album()?.tags ?? []);
+  /** Server suggestions for the credit input being typed in (one role at a time); the facets fill the lists otherwise. */
+  private readonly suggestion = signal<Suggest | null>(null);
+  private suggestTimer?: ReturnType<typeof setTimeout>;
+  private suggestGen = 0;
 
   protected save(field: TextField, value: string) {
     const a = this.album();
@@ -153,6 +184,38 @@ export class DetailsPanel {
   showEntity(id: number) { this.entityId.set(id); this.mode.set('entity'); }
 
   protected links(a: Album, role: EntityKind) { return (a.links ?? []).filter(l => l.role === role); }
+
+  /** The raw text of a credit input: the album's field, a genre list joined in name-list syntax. */
+  protected text(a: Album, c: Credit): string { return c.field === 'genres' ? joinNames(a.genres ?? []) : a[c.field] ?? ''; }
+
+  protected saveCredit(a: Album, c: Credit, value: string) {
+    this.suggestion.set(null);
+    if (c.field === 'genres') { const genres = parseNames(value); if (genres.join('\n') !== (a.genres ?? []).join('\n')) this.patch({ genres }); }
+    else this.save(c.field, value);
+  }
+
+  protected options(c: Credit): string[] {
+    const s = this.suggestion();
+    return s?.role === c.role ? s.options : (this.store.facets()?.[c.facet] ?? []).map(x => x.value);
+  }
+
+  /** Prefix search of the name being typed (after the last separator); each hit is offered as the whole list with that name completed. */
+  protected suggest(c: Credit, value: string) {
+    clearTimeout(this.suggestTimer);
+    const m = /^(.*[,;]\s*)?([^,;]*)$/.exec(value)!, head = m[1] ?? '', token = m[2].trim(), gen = ++this.suggestGen;
+    if (!token) { this.suggestion.set(null); return; }
+    this.suggestTimer = setTimeout(async () => {
+      try { const r = await this.catalog.entities(c.role, { text: token, limit: 12 }); if (gen === this.suggestGen) this.suggestion.set({ role: c.role, options: r.items.map(e => head + e.name) }); }
+      catch { /* the facet list stays */ }
+    }, 150);
+  }
+
+  protected async unlink(a: Album, entityId: number) {
+    this.saving.set(true);
+    const n = await this.catalog.unlink({ albumIds: [a.id] }, entityId);
+    this.saving.set(false);
+    if (n !== null) this.flash();
+  }
 
   protected setTags(tags: string[]) { this.tags.set(tags); this.patch({ tags }); }
 
@@ -168,8 +231,10 @@ export class DetailsPanel {
     this.saving.set(true);
     const ok = await this.store.patch(a.id, patch);
     this.saving.set(false);
-    if (ok) { this.saved.set(true); setTimeout(() => this.saved.set(false), 2000); }
+    if (ok) this.flash();
   }
+
+  private flash() { this.saved.set(true); setTimeout(() => this.saved.set(false), 2000); }
 
   protected async copy(text: string) {
     try { await navigator.clipboard.writeText(text); this.toasts.show('Path copied'); }

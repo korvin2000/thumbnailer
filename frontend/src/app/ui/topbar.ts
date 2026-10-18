@@ -1,15 +1,21 @@
-import { ChangeDetectionStrategy, Component, computed, ElementRef, inject, output, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, output, signal, untracked, viewChild } from '@angular/core';
+import { CatalogStore } from '../core/catalog-store';
+import { EntityKind } from '../core/model';
 import { formatBytes, formatMegapixels } from '../core/format';
 import { Prefs, SidebarTab } from '../core/prefs';
 import { AlbumStore } from '../core/store';
+import { CopiesPopover } from './copies-popover';
 import { Icon, IconName } from './shared/icon';
 import { SortMenu } from './sort-menu';
 
 interface Chip { key: string; label: string; icon?: IconName; remove: () => void }
+/** Scope chip prefix and icon per entity kind (`entities` filter); tags read `#name`. */
+const SCOPE: Record<EntityKind, [string, IconName]> = { MODEL: ['model:', 'user'], STUDIO: ['studio:', 'building'], PHOTOGRAPHER: ['by:', 'camera'], GENRE: ['genre:', 'sparkles'], TAG: ['#', 'hash'], LIST: ['list:', 'heart'] };
+const NOUN: Record<EntityKind, string> = { MODEL: 'model', STUDIO: 'studio', PHOTOGRAPHER: 'photographer', GENRE: 'genre', TAG: 'tag', LIST: 'list' };
 
 @Component({
   selector: 'app-topbar',
-  imports: [Icon, SortMenu],
+  imports: [Icon, SortMenu, CopiesPopover],
   template: `
     <button class="brand" title="Thumbnailer — settings" (click)="settings.emit()"><span class="logo"><app-icon name="images" [size]="18" /></span><span class="name">Thumbnailer</span></button>
 
@@ -49,6 +55,7 @@ interface Chip { key: string; label: string; icon?: IconName; remove: () => void
 
     <button class="btn icon-btn" [title]="(prefs.theme() === 'dark' ? 'Light' : 'Dark') + ' theme (T)'" (click)="prefs.toggleTheme()"><app-icon [name]="prefs.theme() === 'dark' ? 'sun' : 'moon'" /></button>
     <button class="btn icon-btn" [class.active]="prefs.detailsOpen()" title="Details panel (I)" (click)="prefs.detailsOpen.set(!prefs.detailsOpen())"><app-icon name="panelRight" /></button>
+    <app-copies-popover />
   `,
   styles: `
     :host { display: flex; align-items: center; gap: 8px; height: var(--topbar-h); padding: 0 12px; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
@@ -78,6 +85,7 @@ export class Topbar {
   readonly settings = output<void>();
   protected readonly store = inject(AlbumStore);
   protected readonly prefs = inject(Prefs);
+  private readonly catalog = inject(CatalogStore);
   protected readonly focused = signal(false);
   private readonly input = viewChild.required<ElementRef<HTMLInputElement>>('q');
 
@@ -98,8 +106,22 @@ export class Topbar {
     if (q.minMegapixels != null || q.maxMegapixels != null) out.push({ key: 'mp', label: `${q.minMegapixels != null ? formatMegapixels(q.minMegapixels * 1e6) : '0'} – ${q.maxMegapixels != null ? formatMegapixels(q.maxMegapixels * 1e6) : '∞'}`, remove: () => { s.setFilter('minMegapixels', null); s.setFilter('maxMegapixels', null); } });
     if (q.dateFrom || q.dateTo) out.push({ key: 'date', label: `${q.dateFrom ?? '…'} → ${q.dateTo ?? '…'}`, remove: () => { s.setFilter('dateFrom', null); s.setFilter('dateTo', null); } });
     if (q.minRating != null || q.maxRating != null) out.push({ key: 'rating', label: `★ ${q.minRating ?? 0}–${q.maxRating ?? 10}`, remove: () => { s.setFilter('minRating', null); s.setFilter('maxRating', null); } });
+    // catalog scopes (the tree, the cards, the Views strip): ids named through `CatalogStore.known`
+    for (const id of q.entities ?? []) {
+      const e = this.catalog.entityOf(id), [prefix, icon] = SCOPE[e?.kind ?? 'MODEL'];
+      out.push({ key: 'e:' + id, label: e ? (e.kind === 'TAG' ? '#' + e.name : `${prefix} ${e.name}`) : '…', icon, remove: () => s.setFilter('entities', (f.entities ?? []).filter(x => x !== id)) });
+    }
+    if (q.missing) out.push({ key: 'missing', label: `unassigned ${NOUN[q.missing]}`, icon: 'alert', remove: () => s.setFilter('missing', null) });
+    if (q.hidden) out.push({ key: 'hidden', label: 'hidden', icon: 'eyeOff', remove: () => s.setFilter('hidden', null) });
+    if (q.duplicates) out.push({ key: 'duplicates', label: 'duplicates', icon: 'layers', remove: () => s.setFilter('duplicates', null) });
+    for (const g of q.genres ?? []) out.push({ key: 'g:' + g, label: `genre: ${g}`, icon: 'sparkles', remove: () => s.setFilter('genres', (f.genres ?? []).filter(x => x !== g)) });
     return out;
   });
+
+  constructor() {
+    // a scope set by id alone (after a reload of the tree in another mode) still gets its name
+    effect(() => { const ids = this.store.filters().entities ?? []; untracked(() => this.catalog.ensureKnown(ids)); });
+  }
 
   focusSearch() { this.input().nativeElement.focus(); this.input().nativeElement.select(); }
 

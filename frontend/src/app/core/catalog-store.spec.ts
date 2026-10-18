@@ -11,14 +11,17 @@ const card = (id: number, name = 'A'): EntityCard => ({ entity: entity(id, name)
 /** A gateway that counts reads; mutations resolve at once. */
 const setup = () => {
   const calls = { entities: 0, entity: 0 };
+  const toasts: string[] = [];
   const gw = {
     entities: async () => { calls.entities++; return { items: [entity(1)], total: 1 }; },
-    entity: async (id: number) => { calls.entity++; return card(id); },
-    saveEntity: async () => card(2, 'B'), mergeEntities: async (_: number[], into: number) => card(into),
+    entity: async (id: number) => { calls.entity++; return card(id, 'E' + id); },
+    saveEntity: async (e: { name: string }) => { if (e.name === 'taken') throw new Error('"taken" is Owner; merge instead?'); return card(2, 'B'); },
+    mergeEntities: async (_: number[], into: number) => card(into),
     deleteEntities: async () => {}, confirmEntities: async () => {},
+    bulkUpdate: async () => 3,
   };
-  const store = Injector.create({ providers: [{ provide: Gateway, useValue: gw }, { provide: Toasts, useValue: { error: () => {} } }, CatalogStore] }).get(CatalogStore);
-  return { store, calls };
+  const store = Injector.create({ providers: [{ provide: Gateway, useValue: gw }, { provide: Toasts, useValue: { error: (e: Error) => toasts.push(e.message) } }, CatalogStore] }).get(CatalogStore);
+  return { store, calls, toasts };
 };
 const settle = () => new Promise(r => setTimeout(r));
 
@@ -56,5 +59,31 @@ describe('CatalogStore', () => {
     await store.delete([1]);
     expect(store.cardId()).toBeNull();
     expect(store.card()).toBeNull();
+  });
+
+  it('remembers every entity a page or card named, and fetches the ones a scope chip lacks', async () => {
+    const { store, calls } = setup();
+    expect(store.entityOf(1)).toBeUndefined();
+    await store.entities('MODEL');
+    expect(store.entityOf(1)?.name).toBe('A');
+    store.ensureKnown([1, 7, 7]); await settle();
+    expect(calls.entity).toBe(1); // 1 was known, 7 asked once
+    expect(store.entityOf(7)?.name).toBe('E7');
+  });
+
+  it('trySave leaves a name collision to the caller; save toasts it; a hidden bulk update drops the pages', async () => {
+    const { store, calls, toasts } = setup();
+    await expect(store.trySave({ kind: 'MODEL', name: 'taken', rating: 0, profile: null })).rejects.toThrow();
+    expect(toasts).toEqual([]);
+    expect(await store.save({ kind: 'MODEL', name: 'taken', rating: 0, profile: null })).toBeNull();
+    expect(toasts).toEqual(['"taken" is Owner; merge instead?']);
+    expect(CatalogStore.takenBy(new Error(toasts[0]))).toEqual({ name: 'taken', owner: 'Owner' });
+    expect(CatalogStore.takenBy(new Error('No entity 3'))).toBeNull();
+    await store.entities('MODEL');
+    const v = store.version();
+    expect(await store.bulkUpdate({ query: { hidden: true } }, { hidden: false })).toBe(3);
+    expect(store.version()).toBe(v + 1);
+    await store.entities('MODEL');
+    expect(calls.entities).toBe(2);
   });
 });
