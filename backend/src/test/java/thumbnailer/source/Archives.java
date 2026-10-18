@@ -44,6 +44,11 @@ public final class Archives {
     /** An archive as the app opens it (7-Zip formats). */
     public static AlbumContainer open(Path file) { return new SevenZipContainer(file, Exclusions.NONE); }
 
+    /** The registry with every container kind, for {@code openRaw} (no {@link Cry}: never wrapped). */
+    public static Containers containers() {
+        return new Containers(List.of(new DirectoryContainer.Factory(), new ZipContainer.Factory(), new SevenZipContainer.Factory()), null);
+    }
+
     public static byte[] gzip(byte[] data) throws IOException {
         var b = new ByteArrayOutputStream();
         try (var out = new GZIPOutputStream(b)) {

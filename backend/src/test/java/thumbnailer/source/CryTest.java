@@ -4,12 +4,18 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.ValueLayout;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -20,6 +26,8 @@ import java.util.Map;
 import java.util.Random;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 import net.sf.sevenzipjbinding.ArchiveFormat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -176,6 +184,57 @@ public class CryTest {
         assertThat(Cry.matches(sig + Cry.tag(KEY), locked)).as("no key now: kept as indexed").isTrue();
         assertThat(Cry.matches(sig + "+locked", keyed)).isFalse();
         assertThat(Cry.matches(sig + Cry.tag(new byte[16]), keyed)).isFalse();
+    }
+
+    @Test
+    void streamingWriterMatchesTheGoldenFilesAndTheOneShotWriter_decryptStreamsBack() throws IOException {
+        for (var g : GOLDEN) assertThat(streamed(g.plain, g.name)).as(g.name).isEqualTo(g.cry);
+        var rnd = new Random(7);
+        for (int size : new int[] {0, 1, (64 << 10) - 40, 64 << 10, (3 << 20) + 13}) { // chunk edges, a big payload
+            var plain = new byte[size];
+            rnd.nextBytes(plain);
+            for (var name : List.of("p.jpg", "ü".repeat(5000) + ".jpg", "n".repeat(32_752))) {
+                var cry = streamed(plain, name);
+                assertThat(cry).as(size + " " + name.length()).isEqualTo(oneShot(plain, name, KEY));
+                var back = new ByteArrayOutputStream();
+                assertThat(Cry.decrypt(new ByteArrayInputStream(cry), cry.length, KEY, back)).isEqualTo(name);
+                assertThat(back.toByteArray()).isEqualTo(plain);
+            }
+        }
+        var cry = Cry.encrypt(new byte[100], "x.jpg", KEY);
+        assertThatThrownBy(() -> Cry.decrypt(new ByteArrayInputStream(cry), cry.length, Cry.key("other"), OutputStream.nullOutputStream()))
+                .isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> Cry.decrypt(new ByteArrayInputStream(cry, 0, 40), cry.length, KEY, OutputStream.nullOutputStream()))
+                .isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> streamed(new byte[10], "n".repeat(32_768))).as("never clamped")
+                .isInstanceOf(IllegalArgumentException.class);
+        var sink = OutputStream.nullOutputStream();
+        assertThatThrownBy(() -> Cry.encrypt(new ByteArrayInputStream(new byte[9]), 10, "a.jpg", KEY, sink)).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> Cry.encrypt(new ByteArrayInputStream(new byte[11]), 10, "a.jpg", KEY, sink)).isInstanceOf(IOException.class);
+    }
+
+    /** Through the streaming writer, fed a few bytes per read. */
+    private static byte[] streamed(byte[] plain, String name) throws IOException {
+        var out = new ByteArrayOutputStream();
+        var in = new FilterInputStream(new ByteArrayInputStream(plain)) {
+            @Override public int read(byte[] b, int off, int len) throws IOException { return super.read(b, off, Math.min(len, 7777)); }
+        };
+        Cry.encrypt(in, plain.length, name, KEY, out);
+        return out.toByteArray();
+    }
+
+    /** The former whole-buffer writer, kept as the reference the streaming one must equal. */
+    private static byte[] oneShot(byte[] plain, String name, byte[] key) {
+        var n = name.getBytes(UTF_8);
+        int p = (16 - (plain.length + 2 + n.length) % 16) % 16, l = n.length + p;
+        var body = ByteBuffer.allocate(2 + l + plain.length).putShort((short) (l - 32768)).put(n).put(new byte[p]).put(plain).array();
+        try {
+            var c = Cipher.getInstance("AES/ECB/NoPadding");
+            c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"));
+            return ByteBuffer.allocate(5 + body.length).putInt(plain.length).put((byte) 1).put(c.doFinal(body)).array();
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** The generator's 100 KiB payload: its {@code Random(42)} after the 17 case payloads. */

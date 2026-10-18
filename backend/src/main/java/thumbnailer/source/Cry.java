@@ -4,8 +4,12 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.stream.Collectors.toMap;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -62,21 +66,81 @@ public class Cry {
         }
     }
 
-    /**
-     * xanderView's file for image bytes {@code plain} under its original {@code name} (the format's reference writer;
-     * whole files in memory).
-     */
+    /** {@link #encrypt(InputStream, long, String, byte[], OutputStream)} of a whole file in memory. */
     public static byte[] encrypt(byte[] plain, String name, byte[] key) {
-        var n = name.getBytes(UTF_8);
-        int p = (16 - (plain.length + 2 + n.length) % 16) % 16, l = n.length + p;
-        var body = ByteBuffer.allocate(2 + l + plain.length).putShort((short) (Math.min(l, 32767) - 32768)).put(n)
-                .put(new byte[p]).put(plain).array();
+        var out = new ByteArrayOutputStream(HEADER + plain.length + name.length() * 3 + 18);
         try {
-            return ByteBuffer.allocate(HEADER + body.length).putInt(plain.length).put((byte) 1)
-                    .put(aes(Cipher.ENCRYPT_MODE, key).doFinal(body)).array();
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException(e);
+            encrypt(new ByteArrayInputStream(plain), plain.length, name, key, out);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
+        return out.toByteArray();
+    }
+
+    /**
+     * Writes xanderView's file for the {@code size} image bytes of {@code in} under their original {@code name} (its
+     * UTF-8 base name), 64 KiB at a time; the header needs the size up front. A padded name over 32767 bytes or an
+     * image over 2 GiB cannot be written; fewer or more bytes than {@code size} fail.
+     */
+    public static void encrypt(InputStream in, long size, String name, byte[] key, OutputStream out) throws IOException {
+        if (size < 0 || size > Integer.MAX_VALUE) throw new IllegalArgumentException("Not a .cry size: " + size);
+        var n = name.getBytes(UTF_8);
+        int p = (int) ((16 - (size + 2 + n.length) % 16) % 16), l = n.length + p;
+        if (l > 32767) throw new IllegalArgumentException("Name too long for a .cry file: " + n.length + " bytes");
+        var cipher = aes(Cipher.ENCRYPT_MODE, key);
+        out.write(ByteBuffer.allocate(HEADER).putInt((int) size).put((byte) 1).array());
+        var buf = new byte[CHUNK];
+        var head = ByteBuffer.allocate(2 + l).putShort((short) (l - 32768)).put(n).array();
+        int at = head.length;
+        System.arraycopy(head, 0, buf, 0, Math.min(at, CHUNK));
+        for (long left = size; ; ) { // head (≤ 32769 bytes) shares the first chunk with the image
+            int k = in.readNBytes(buf, at, (int) Math.min(CHUNK - at, left));
+            left -= k;
+            at += k;
+            if (left == 0 || at == CHUNK) {
+                out.write(cipher.update(buf, 0, at));
+                at = 0;
+            }
+            if (left == 0) break;
+            if (k == 0) throw new EOFException(name + " ended before " + size + " bytes");
+        }
+        if (in.read() >= 0) throw new IOException(name + " is longer than " + size + " bytes");
+        try {
+            out.write(cipher.doFinal());
+        } catch (GeneralSecurityException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
+     * Writes the image a {@code .cry} file of {@code size} bytes holds, 64 KiB at a time; returns the original name it
+     * embeds. A wrong key (the header check) or a short file fails before or while writing.
+     */
+    public static String decrypt(InputStream in, long size, byte[] key, OutputStream out) throws IOException {
+        var header = in.readNBytes(HEADER);
+        if (header.length < HEADER || size < HEADER + 16 || (size - HEADER) % 16 != 0) throw new IOException("Not a .cry file");
+        long f = ByteBuffer.wrap(header).getInt();
+        var cipher = aes(Cipher.DECRYPT_MODE, key);
+        var buf = new byte[CHUNK];
+        long skip = -1, left = size - HEADER;
+        String name = null;
+        while (left > 0) {
+            int k = (int) Math.min(CHUNK, left);
+            if (in.readNBytes(buf, 0, k) < k) throw new EOFException("The .cry file ended early");
+            left -= k;
+            var plain = cipher.update(buf, 0, k);
+            if (skip < 0) { // the first chunk holds the length field and the whole name (≤ 32769 bytes)
+                skip = 2 + nameLength(plain);
+                if (f < 0 || skip != size - HEADER - f) throw new IOException("Not a .cry file for this password");
+                int end = 2;
+                while (end < skip && plain[end] != 0) end++;
+                name = new String(plain, 2, end - 2, UTF_8);
+            }
+            int from = (int) Math.min(skip, plain.length);
+            skip -= from;
+            out.write(plain, from, plain.length - from);
+        }
+        return name;
     }
 
     /** The original name a {@code .cry} file embeds, from its leading bytes (the header and the blocks holding the name). */
