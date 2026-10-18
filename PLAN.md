@@ -25,6 +25,11 @@ undo. Reference SPEC IDs.
   re-check (two more closed: `remove` deletes under the catalog read lock, the scan's cancel token is published with the gate under one lock). Checks: `:backend:test` 100 (1 skipped), `ng build` 504 kB, `ng test` 35; live smoke on the packaged
   jar (`backend-demo`): search fields, lists/links/marks, hide/unhide, date `2019`, copies, duplicates/entities/
   missing filters, entity card counts, preflight, op admission, not-implemented errors, images 200.
+- 2026-10-18 **F2 viewer landed** (branch `claude/catalog-f2-6209d0`): catalog_plan §7.5 in the mock UI — sort menu
+  (six fields, direction, reshuffle), size filter, five scale modes, full screen + slideshow, photo ratings/favorites
+  with multi-select by entry name, copy-to targets through preflight → Confirm → `COPY_PHOTOS`, metadata dialog, bio
+  drawer, viewer defaults on the Appearance page, §7.7 keys. Checks: `ng build` 542 kB, `ng test` 45. Unverified:
+  `requestFullscreen` (pending in the embedded preview pane), the live `photoMeta`/`albumText`/`COPY_PHOTOS` paths.
 - Open after phase 0 (each owned by a track): `Catalog.resolve` returns no links (B1), merge/creditAs/compareCopies/
   entities-under/genres filter/alias-resolved filters (B1), every operation item (B2), packers (B3), `Entry.flags`
   always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4). `ops/Manifest`

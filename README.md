@@ -78,3 +78,6 @@ open `http://localhost:4200/?live` to talk to a running backend. Frontend unit t
 
 `/` search · `E` folders tab · `F` refine tab · `I` details panel · `T` theme · `[` `]` albums per row · arrows move
 (also in the folder tree: `→` expand, `←` collapse) · `Enter` open · `C` use photo as cover · `Esc` close
+
+Viewer: `F11` full screen · `Space` slideshow · `S` scale mode · `R` reshuffle · `1`–`9` `0` copy to target · `Ctrl+1…0` rate · `F` favorites ·
+`M` metadata · `B` bio · `C` cover · `Ctrl`/`Shift`+click, `Ctrl+A` select photos · `Esc` close
