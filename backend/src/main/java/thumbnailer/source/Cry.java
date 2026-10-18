@@ -143,10 +143,23 @@ public class Cry {
         return name;
     }
 
+    /** {@link #decrypt(InputStream, long, byte[], OutputStream)} of a whole file in memory: the image it holds. */
+    public static byte[] decrypt(byte[] file, byte[] key) throws IOException {
+        var out = new ByteArrayOutputStream(Math.max(0, file.length - HEADER));
+        decrypt(new ByteArrayInputStream(file), file.length, key, out);
+        return out.toByteArray();
+    }
+
     /** The original name a {@code .cry} file embeds, from its leading bytes (the header and the blocks holding the name). */
-    public static String plainName(byte[] head, byte[] key) throws IOException {
+    public static String plainName(byte[] head, byte[] key) throws IOException { return plainName(head, -1, key); }
+
+    /**
+     * {@link #plainName(byte[], byte[])} of a file of {@code size} bytes (negative = unknown): with the size known, a
+     * key the header check of {@link #decrypt} refuses fails here already.
+     */
+    public static String plainName(byte[] head, long size, byte[] key) throws IOException {
         int blocks = (head.length - HEADER) & ~15;
-        if (blocks <= 0) throw new IOException("Not a .cry file");
+        if (blocks <= 0 || size >= 0 && (size < HEADER + 16 || (size - HEADER) % 16 != 0)) throw new IOException("Not a .cry file");
         byte[] plain;
         try {
             plain = aes(Cipher.DECRYPT_MODE, key).doFinal(head, HEADER, blocks);
@@ -154,6 +167,7 @@ public class Cry {
             throw new IOException(e);
         }
         int end = 2, stop = 2 + nameLength(plain);
+        if (size >= 0 && stop != size - HEADER - ByteBuffer.wrap(head).getInt()) throw new IOException("Not a .cry file for this password");
         while (end < Math.min(stop, blocks) && plain[end] != 0) end++;
         if (end == blocks && end < stop) throw new IOException("The head ends inside the name");
         return new String(plain, 2, end - 2, UTF_8);

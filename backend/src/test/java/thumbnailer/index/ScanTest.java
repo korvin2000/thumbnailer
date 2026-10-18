@@ -47,6 +47,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.util.FileSystemUtils;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumPatch;
+import thumbnailer.album.Entry;
 import thumbnailer.album.Link;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.Entity;
@@ -468,6 +469,18 @@ class ScanTest {
         assertThat(await(received, m -> m.endsWith("\"id\":5}"))).contains("\"hidden\":false",
                 "\"links\":[{\"entity\":" + list + ",\"role\":\"LIST\",\"name\":\"Best\"}]", "\"copies\":1",
                 "\"stamp\":\"" + l.internal().contentId() + "\"").doesNotContain("seq");
+        socket.sendText("{\"type\":\"photos\",\"id\":11,\"listId\":" + list + ",\"offset\":0,\"limit\":10}", true).join();
+        assertThat(await(received, m -> m.endsWith("\"id\":11}"))).startsWith("{\"type\":\"photoList\"")
+                .contains("\"name\":\"a.jpg\",\"index\":0,\"rating\":7", "\"total\":1");
+        repo.saveEntries(l.id(), repo.entries(l.id()).stream().map(e -> new Entry(e.index(), e.name(), e.bytes(), e.mtime(),
+                e.width(), e.height(), e.shotAt(), 0)).toList()); // indexed before flags were known
+        long revision = repo.find(l.id()).orElseThrow().revision();
+        socket.sendText("{\"type\":\"photoMeta\",\"id\":12,\"albumId\":\"" + l.id() + "\",\"index\":0}", true).join();
+        assertThat(await(received, m -> m.endsWith("\"id\":12}"))).startsWith("{\"type\":\"photoMeta\",\"rows\":[");
+        assertThat(repo.entries(l.id())).as("what the read learned is stored").extracting(Entry::flags).containsExactly(Entry.META_KNOWN, 0);
+        assertThat(repo.find(l.id()).orElseThrow().revision()).as("no album save").isEqualTo(revision);
+        assertThat(albums.patch(l.id(), a -> null)).as("no edit, no save").isEmpty();
+        assertThat(albums.patch("gone", a -> { throw new AssertionError("no album to edit"); })).isEmpty();
 
         socket.sendText("{\"type\":\"bulkUpdate\",\"id\":6,\"query\":{\"roots\":[\"" + normalizedRoot() + "\"],\"offset\":0,\"limit\":10},"
                 + "\"patch\":{\"hidden\":true,\"addTags\":[\"#Best Of\"],\"date\":\"2001\"}}", true).join();

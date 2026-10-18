@@ -79,14 +79,14 @@ class Steps {
     private final SettingsStore settings;
     private final JdbcTemplate jdbc;
     private final Journal journal;
-    private final Optional<Packer> packer;
-    private final Optional<Unpacker> unpacker;
+    private final Packer packer;
+    private final Unpacker unpacker;
     private final int minImages;
     /** Called after each journal line is written: tests throw here to stop an item the way a crash would. */
     volatile Consumer<Phase> crash = p -> {};
 
     Steps(AlbumService albums, AlbumRepository repo, Reindexer reindexer, Containers containers, SettingsStore settings,
-          JdbcTemplate jdbc, Journal journal, Optional<Packer> packer, Optional<Unpacker> unpacker,
+          JdbcTemplate jdbc, Journal journal, Packer packer, Unpacker unpacker,
           @Value("${thumbnailer.min-images:2}") int minImages) {
         this.albums = albums;
         this.repo = repo;
@@ -235,7 +235,7 @@ class Steps {
             case MOVE, COPY, FOLDER_MOVE, FOLDER_COPY -> hashes = Trees.copy(src, tmp);
             case UNPACK -> {
                 try (var raw = containers.openRaw(m.container(), src)) {
-                    hashes = unpacker.orElseThrow(() -> new IllegalStateException("No unpacker")).unpack(raw, tmp, m.names());
+                    hashes = unpacker.unpack(raw, tmp, m.names());
                 }
             }
             case COPY_PHOTOS -> {
@@ -244,7 +244,7 @@ class Steps {
                 try (var raw = containers.openRaw(m.container(), src); var in = raw.open(name)) {
                     bytes = in.readAllBytes();
                 }
-                if (Cry.is(name)) bytes = Crypt.decrypt(bytes, key);
+                if (Cry.is(name)) bytes = Cry.decrypt(bytes, key);
                 Files.write(tmp, bytes, CREATE_NEW);
                 hashes = Map.of("", Hashes.of(bytes));
             }
@@ -258,7 +258,7 @@ class Steps {
                     throw e;
                 }
                 try (in) {
-                    hashes = packer().pack(in, m.names().values(), tmp, m.format());
+                    hashes = packer.pack(in, m.names().values(), tmp, m.format());
                 }
             }
         }
@@ -270,12 +270,21 @@ class Steps {
 
     private void verify(Manifest m) throws IOException {
         var tmp = path(m.tmp());
-        if (!(ARCHIVES.contains(m.kind()) ? packer().hashes(tmp) : Trees.hashes(tmp)).equals(m.entries()))
+        if (!(ARCHIVES.contains(m.kind()) ? packer.hashes(tmp) : Trees.hashes(tmp)).equals(m.entries()))
             throw new IOException("The result does not read back as written: " + m.tmp());
     }
 
+    /** Deletes the partial result, and what a 7z pack spilled beside it ({@code <tmp>.<n>.spill}) when it never got to its cleanup. */
     private void rollback(Manifest m) throws IOException {
-        if (m.tmp() != null && !m.atomic()) Trees.delete(path(m.tmp()));
+        if (m.tmp() != null && !m.atomic()) {
+            var tmp = path(m.tmp());
+            Trees.delete(tmp);
+            var spill = tmp.getFileName() + ".";
+            if (ARCHIVES.contains(m.kind())) try (var spills = Files.newDirectoryStream(tmp.getParent(), f -> // no glob: names hold [ ]
+                    f.getFileName().toString().startsWith(spill) && f.getFileName().toString().endsWith(".spill"))) {
+                for (var f : spills) Trees.delete(f);
+            }
+        }
         journal.remove(m.op(), m.item());
     }
 
@@ -446,8 +455,6 @@ class Steps {
             log.warn("Journal line {} stays: {}", l, e.toString());
         }
     }
-
-    private Packer packer() { return packer.orElseThrow(() -> new IllegalStateException("No packer")); }
 
     private Kind kind(String canonical) {
         var p = path(canonical);

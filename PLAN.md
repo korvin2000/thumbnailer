@@ -7,6 +7,18 @@ undo. Reference SPEC IDs.
 
 ## State (2026-10-18, v0.1.0)
 
+- 2026-10-18 **catalog phase 2, track B5 (integration)** on its branch: the real packers run inside `FileOps` (the
+  test stand-in is gone; `Steps` takes `Packer`/`Unpacker` beans), `Unpacker.unpack` returns the hashes of the bytes
+  read from the archive by written name and `Steps` reads the forced tree back as the only verification, `Packer.pack`
+  names entries exactly as given, recovery deletes a crashed 7z pack's `<tmp>.*.spill`; one crypt rewrite (`ops/Crypt`
+  view through the `Packer`, kept; B3's `CryptRewriter` and the unused `PhotoNames` deleted; `Crypt` calls
+  `Cry.decrypt(file, key)` and `Cry.plainName(head, size, key)`, no AES code of its own); `AlbumService.patch(id,
+  Function)` (CatalogApi's text edits computed under the stripe) and `setFlags` (`photoMeta` stores what it learned,
+  no revision), `CatalogRepository.photos`/`photoCount` (PhotosApi has no SQL); `AlbumServiceTest.removeDeletes…`
+  asserted an order the code never promised (the cover's removal vs the released recount), test fixed; copy photos
+  skips a photo copied before under a numbered name (B3's naming rule, which `Planner` lacked; `FileOpsTest`, live). Checks: `:backend:test` 139
+  (1 skipped), three full runs in a row green; `./gradlew build`; live smoke on `backend-demo` (fresh library) of
+  catalog_plan §8 phase 2 end to end, every step green (SPEC O2, O3).
 - 2026-10-18 **catalog phase 1 merged on main** (B3 → B1 → B4 → B2 → F1 → F2 → F3, union-merged docs, two `ScanTest`
   conflicts resolved by hand). Checks on the merge: `:backend:test` 139 (1 skipped), `ng build` 609 kB (warn budget
   600 kB), `ng test` 59, full `./gradlew build` and a live smoke on the packaged jar (see the bullet below). Tracks are
@@ -60,10 +72,7 @@ undo. Reference SPEC IDs.
   pass. Open: live `under`/merge/creditAs/compareCopies (B1), entity context menus and Delete… wiring (F4, hooks
   `EntityTree.contextMenu`, `CopiesPopover.deleteRequested`), `app-copies-popover` to move from `Topbar` to `app.html`.
 - Open after phase 1 (phase 2 = F4 actions + B5 integration, phase 3 = Codex reviews per track, `:spi`, docs):
-  B2 ⇄ B3 contract (`Unpacker.unpack` hashes: as read vs read back; one crypt rewrite — B2 `ops/Crypt` or B3
-  `CryptRewriter`; `*.spill` cleanup in recovery), `AlbumService.patch(id, Function)` (B1) and `setFlags` (B4),
-  `CatalogRepository.photos` (B4 runs SQL itself), `AlbumServiceTest.removeDeletes…` race under load, the mock lacks
-  B1 semantics, `app.html`/`album-card.ts` wiring (`[selection]`, `(contextMenu)`, `[selectionMenu]`, copies popover
+  the backend items are closed by B5 (above); the mock lacks B1 semantics, `app.html`/`album-card.ts` wiring (`[selection]`, `(contextMenu)`, `[selectionMenu]`, copies popover
   host, `.check` z-index), `SettingsDialog.open(page)`, `viewerSortDesc`, settings refetch after a root rename,
   F2 metadata button for flags 0/3, `ng build` 609 kB over the 600 kB warn budget (lazy-load viewer/settings).
 - 2026-10-18 **B3 packers + cry** (branch `claude/catalog-b3-73a732`): `ops/pack` — `Packers` (zip: images STORED,
@@ -197,6 +206,7 @@ undo. Reference SPEC IDs.
 
 | decision | reason |
 |---|---|
+| Operations verify once, by reading the written result back: `Packer.pack` and `Unpacker.unpack` return the hashes of the bytes they read from the source, `Steps` compares them with `Packer.hashes` / `Trees.hashes` of the forced result; the archive crypt rewrite is a `Crypt.view` container packed like any pack (one writer, one verification, the format kept) | a packer that returned read-back hashes would make the manifest verify against itself; one rewrite path instead of two (B2's view, B3's zip-only `CryptRewriter`) keeps the `.cry` format code in `Cry` alone |
 | Catalog: one `entity` table for six kinds (model, studio, photographer, genre, tag, list), `album_link` keyed by an `INT` surrogate `album.seq`, text fields stay the truth and links are derived on every save, `TINYINT` codes, stored visible-album counts | one CRUD, one tree, one picker; compact keys (9 bytes instead of 41); re-index can never disagree with the catalog; trees open with one indexed read ([catalog_plan.md](catalog_plan.md) §2, §9) |
 | Safe-delete = `hidden` flag (index only); Delete = plain confirmed deletion; transformation sources deleted only after byte-for-byte verification; no Recycle Bin | owner's definition; a bin needs AWT (unusable under Spring's headless default) and fails on held zips; verification is the safety |
 | One admission gate (`index/Gate`: SCAN, OP, RESTART, SETTINGS) instead of `running()`/`frozen()` checks; operations snapshot settings and the `.cry` key at admission | two checks are not mutual exclusion; a scan under a root change or a move under a scan cannot be reasoned about |

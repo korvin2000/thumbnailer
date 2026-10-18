@@ -1,6 +1,5 @@
 package thumbnailer.ops;
 
-import static java.nio.file.StandardOpenOption.CREATE_NEW;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -11,13 +10,9 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.FileTime;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,7 +30,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.context.event.EventListener;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -46,19 +40,16 @@ import thumbnailer.album.AlbumService;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.index.Reindexer;
 import thumbnailer.ops.Journal.Phase;
-import thumbnailer.ops.pack.Packer;
-import thumbnailer.ops.pack.Unpacker;
 import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
 import thumbnailer.source.Kind;
 
 /**
- * File operations end to end on real trees under two roots, with the real index (in-memory H2) and a minimal zip
- * packer standing in for track B3's: identity through every kind, conflicts, containment, locked files, cancel, and a
- * crash at every journal transition followed by recovery (files and index both right).
+ * File operations end to end on real trees under two roots, with the real index (in-memory H2) and the real packers
+ * (zip and 7z): identity through every kind, conflicts, containment, locked files, cancel, and a crash at every journal
+ * transition followed by recovery (files and index both right).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class FileOpsTest {
@@ -74,7 +65,6 @@ class FileOpsTest {
 
     @TestConfiguration
     static class Config {
-        @Bean @Primary ZipPacker zipPacker() { return new ZipPacker(); }
         @Bean Results results() { return new Results(); }
     }
 
@@ -315,6 +305,52 @@ class FileOpsTest {
         Files.write(root.resolve("out/a.jpg"), new byte[] {1, 2, 3});
         assertThat(run(copy).done()).isEqualTo(1);
         assertThat(root.resolve("out/a (2).jpg")).hasSameBinaryContentAs(root.resolve("lib/Ph/a.jpg"));
+        assertThat(run(copy).skipped()).as("copied before under a numbered name").extracting(OpResult.Issue::reason)
+                .containsOnly("identical file exists");
+        assertThat(root.resolve("out/a (3).jpg")).doesNotExist();
+    }
+
+    @Test
+    void theRealPackersRunInsideOperationsSevenZipThenZipThenAFolderAgain() throws Exception {
+        dir("lib/Q", "a.jpg", "b.jpg", "notes.txt");
+        dir("lib/S", "a.jpg", "b.jpg");
+        scan(null);
+        var q = albums.patch(at("lib/Q").id(), patch(6, "b.jpg"));
+        catalog.mark(q.internal().seq(), "a.jpg", 7, null);
+        assertThat(run(op(Op.Kind.PACK, List.of(q.id()), "SEVEN_ZIP", null, Op.Conflict.SKIP)).done()).isEqualTo(1);
+        assertThat(repo.find(q.id()).orElseThrow()).extracting(Album::path, Album::kind, Album::rating, Album::cover, Album::coverPinned)
+                .containsExactly(path("lib/Q.7z"), Kind.ARCHIVE, 6, "b.jpg", true);
+        assertThat(run(op(Op.Kind.REPACK, List.of(q.id()), "ZIP", null, Op.Conflict.SKIP)).done()).isEqualTo(1);
+        assertThat(entries(root.resolve("lib/Q.zip"))).containsExactly("a.jpg", "b.jpg", "notes.txt");
+        assertThat(root.resolve("lib/Q.7z")).doesNotExist();
+        assertThat(run(op(Op.Kind.UNPACK, List.of(q.id()), null, null, Op.Conflict.SKIP)).done()).isEqualTo(1);
+        assertThat(root.resolve("lib/Q/b.jpg")).hasBinaryContent(jpeg(1));
+        assertThat(root.resolve("lib/Q.zip")).doesNotExist();
+        var back = repo.find(q.id()).orElseThrow();
+        assertThat(back).extracting(Album::path, Album::kind, Album::rating, Album::cover, Album::coverPinned)
+                .containsExactly(path("lib/Q"), Kind.DIRECTORY, 6, "b.jpg", true);
+        assertThat(catalog.marks(back.internal().seq())).containsOnlyKeys("a.jpg");
+        assertThat(Planner.flatten("X", java.util.Set.of("x/a.jpg", "X/b.jpg"))).as("the top folder's case is ignored")
+                .containsExactlyInAnyOrderEntriesOf(Map.of("x/a.jpg", "a.jpg", "X/b.jpg", "b.jpg"));
+
+        var s = at("lib/S"); // a 7z pack stopped hard leaves its spill files beside the .part: recovery deletes them too
+        var spill = root.resolve("lib/S.7z.part.42.spill");
+        steps.crash = p -> {
+            if (p != Phase.COPYING) return;
+            try {
+                Files.write(spill, new byte[] {1});
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            throw new Crash();
+        };
+        ops.submit(op(Op.Kind.PACK, List.of(s.id()), "SEVEN_ZIP", null, Op.Conflict.SKIP));
+        ops.await();
+        steps.crash = p -> {};
+        steps.recover();
+        assertThat(spill).doesNotExist();
+        assertThat(root.resolve("lib/S/a.jpg")).exists();
+        assertThat(root.resolve("lib/S.7z")).doesNotExist();
     }
 
     @Test
@@ -422,49 +458,5 @@ class FileOpsTest {
         @EventListener void on(OpProgress p) { progress.add(p); }
 
         CompletableFuture<OpResult> future(String id) { return byId.computeIfAbsent(id, k -> new CompletableFuture<>()); }
-    }
-
-    /** A minimal zip packer and unpacker (track B3 brings the real ones): every entry deflated, hashed while written. */
-    static final class ZipPacker implements Packer, Unpacker {
-        @Override
-        public Map<String, Long> pack(AlbumContainer raw, Collection<String> names, Path target, Op.Format format) throws IOException {
-            var hashes = new TreeMap<String, Long>();
-            try (var out = new ZipOutputStream(Files.newOutputStream(target, CREATE_NEW))) {
-                raw.extract(names, (item, in) -> {
-                    out.putNextEntry(new ZipEntry(item.name()));
-                    hashes.put(item.name(), Hashes.copy(in, out));
-                    out.closeEntry();
-                });
-            }
-            return hashes;
-        }
-
-        @Override
-        public Map<String, Long> hashes(Path archive) throws IOException {
-            var hashes = new TreeMap<String, Long>();
-            try (var zip = new ZipFile(archive.toFile())) {
-                for (var e : Collections.list(zip.entries()))
-                    try (var in = zip.getInputStream(e)) {
-                        hashes.put(e.getName(), Hashes.of(in));
-                    }
-            }
-            return hashes;
-        }
-
-        @Override
-        public Map<String, Long> unpack(AlbumContainer raw, Path dir, Map<String, String> nameMap) throws IOException {
-            var hashes = new TreeMap<String, Long>();
-            Files.createDirectories(dir);
-            raw.extract(raw.items().stream().map(AlbumContainer.Item::name).toList(), (item, in) -> {
-                var name = nameMap.getOrDefault(item.name(), item.name());
-                var to = dir.resolve(name);
-                Files.createDirectories(to.getParent());
-                try (var out = Files.newOutputStream(to, CREATE_NEW)) {
-                    hashes.put(name, Hashes.copy(in, out));
-                }
-                Files.setLastModifiedTime(to, FileTime.fromMillis(item.mtime()));
-            });
-            return hashes;
-        }
     }
 }

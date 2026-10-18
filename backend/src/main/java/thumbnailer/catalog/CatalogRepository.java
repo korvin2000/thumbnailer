@@ -77,6 +77,15 @@ public interface CatalogRepository {
     /** {@code rating}/{@code lists} null = unchanged; a photo with neither a rating nor a list loses its row. */
     void mark(int seq, String name, Integer rating, List<Integer> lists);
 
+    /** A photo of a favorites list with the album it lies in ({@code album}: its name). */
+    record Listed(String albumId, String album, long revision, String name, int rating) {}
+
+    /** One page of a list's photos in visible albums, by album path, then photo name. */
+    List<Listed> photos(int listId, int offset, int limit);
+
+    /** How many photos of visible albums the list holds. */
+    int photoCount(int listId);
+
     int version();
 
     void version(int version);

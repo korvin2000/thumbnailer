@@ -48,7 +48,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Albums in SQL ({@code schema.sql}; H2 dialect for {@code MERGE ... KEY} upserts and {@code SHUTDOWN}). Columns hold the effective metadata so search is plain SQL; tags are
- * stored as {@code " a b "} so a tag filter is {@code LIKE '% a %'}; {@code search} is the lower-cased searchable text,
+ * stored as {@code " a b "} for {@link #album} and the search text (tag filters and facets go through {@code album_link},
+ * alias-resolved); {@code search} is the lower-cased searchable text,
  * extended by the aliases of the album's catalog links. {@code seq} (an identity) keys the catalog tables.
  */
 @Repository
@@ -108,7 +109,8 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
         template.execute("DROP TABLE entry");
     }
 
-    private void saveEntries(String albumId, List<Entry> entries) {
+    @Override
+    public void saveEntries(String albumId, List<Entry> entries) {
         jdbc.sql("MERGE INTO entries (album_id, data) KEY (album_id) VALUES (?, ?)").params(albumId, EntryCodec.pack(entries)).update();
     }
 

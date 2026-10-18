@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,12 +29,9 @@ import thumbnailer.ops.Op;
 import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
-import thumbnailer.source.Cry;
 import thumbnailer.source.Kind;
 
 class PackersTest {
-
-    static final byte[] KEY = Cry.key("test");
 
     @TempDir Path dir;
 
@@ -126,23 +122,16 @@ class PackersTest {
     }
 
     @Test
-    void anArchiveHoldingOnlyAFolderOfItsOwnNameIsFlattened() throws IOException {
+    void theNameMapRenamesAndTheHashesAreOfTheBytesReadByWrittenName() throws IOException {
         var files = Map.of("x/a.jpg", "a".getBytes(UTF_8), "X/sub/b.jpg", "b".getBytes(UTF_8), "X/notes.txt", "n".getBytes(UTF_8));
         zip(dir.resolve("X.zip"), files);
-        var out = Files.createDirectory(dir.resolve("X.part"));
+        var out = dir.resolve("X.part"); // created by the unpacker
         try (var raw = containers.openRaw(Kind.ZIP, dir.resolve("X.zip"))) {
-            var map = FolderUnpacker.flatten(raw);
-            assertThat(map).containsExactlyInAnyOrderEntriesOf(Map.of("x/a.jpg", "a.jpg", "X/sub/b.jpg", "sub/b.jpg", "X/notes.txt", "notes.txt"));
-            assertThat(unpacker.unpack(raw, out, map)).containsOnlyKeys("a.jpg", "sub/b.jpg", "notes.txt");
+            assertThat(unpacker.unpack(raw, out, Map.of("x/a.jpg", "a.jpg", "X/sub/b.jpg", "sub/b.jpg", "X/notes.txt", "notes.txt")))
+                    .isEqualTo(Map.of("a.jpg", hash(files.get("x/a.jpg")), "sub/b.jpg", hash(files.get("X/sub/b.jpg")),
+                            "notes.txt", hash(files.get("X/notes.txt"))));
         }
         assertThat(out.resolve("sub/b.jpg")).hasContent("b");
-        zip(dir.resolve("Y.zip"), Map.of("Y/a.jpg", new byte[1], "top.jpg", new byte[1]));
-        zip(dir.resolve("Z.zip"), Map.of("Y/a.jpg", new byte[1]));
-        for (var n : List.of("Y.zip", "Z.zip")) {
-            try (var raw = containers.openRaw(Kind.ZIP, dir.resolve(n))) {
-                assertThat(FolderUnpacker.flatten(raw)).as(n).isEmpty();
-            }
-        }
     }
 
     @Test
@@ -158,72 +147,6 @@ class PackersTest {
         }
         assertThat(out).isEmptyDirectory();
         assertThat(dir.resolve("evil.jpg")).doesNotExist();
-    }
-
-    @Test
-    void archivesAreRewrittenEncryptedThenDecrypted_plaintextHashesVerifyBothWays() throws IOException {
-        var rnd = new SplittableRandom(4);
-        var plain = new LinkedHashMap<String, byte[]>();
-        for (var n : List.of("a.jpg", "b.jpg", "sub/c.png")) plain.put(n, random(rnd, 30_000 + n.length()));
-        var source = new LinkedHashMap<String, byte[]>();
-        source.put("a.jpg", plain.get("a.jpg"));
-        source.put("b.jpg.cry", Cry.encrypt(plain.get("b.jpg"), "b.jpg", KEY)); // already encrypted: kept
-        source.put("notes.txt", "Model: Anna".getBytes(UTF_8));
-        source.put("sub/c.png", plain.get("sub/c.png"));
-        source.put("y.cry", Cry.encrypt(plain.get("a.jpg"), "a.jpg", KEY)); // embeds a name taken on decrypt
-        zip(dir.resolve("C.zip"), source);
-
-        var encrypted = dir.resolve("C.zip.part");
-        CryptRewriter.Result r;
-        try (var raw = containers.openRaw(Kind.ZIP, dir.resolve("C.zip"))) {
-            r = CryptRewriter.rewrite(raw, encrypted, true, KEY);
-        }
-        assertThat(r.nameMap()).isEqualTo(Map.of("a.jpg", "a.jpg.cry", "sub/c.png", "sub/c.png.cry"));
-        assertThat(r.kept()).containsOnlyKeys("b.jpg.cry", "notes.txt", "y.cry");
-        assertThat(r.plain()).isEqualTo(Map.of("a.jpg.cry", hash(plain.get("a.jpg")), "sub/c.png.cry", hash(plain.get("sub/c.png"))));
-        CryptRewriter.verify(encrypted, r, KEY);
-        try (var z = new ZipFile(encrypted.toFile())) {
-            var cry = z.getInputStream(z.getEntry("sub/c.png.cry")).readAllBytes();
-            var back = new ByteArrayOutputStream();
-            assertThat(Cry.decrypt(new ByteArrayInputStream(cry), cry.length, KEY, back)).isEqualTo("c.png");
-            assertThat(back.toByteArray()).isEqualTo(plain.get("sub/c.png"));
-            assertThat(z.getInputStream(z.getEntry("b.jpg.cry")).readAllBytes()).isEqualTo(source.get("b.jpg.cry"));
-        }
-        var tampered = new CryptRewriter.Result(true, r.nameMap(), Map.of("a.jpg.cry", 1L, "sub/c.png.cry", 2L), r.kept());
-        assertThatThrownBy(() -> CryptRewriter.verify(encrypted, tampered, KEY)).isInstanceOf(IOException.class);
-
-        var decrypted = dir.resolve("D.zip.part");
-        try (var raw = containers.openRaw(Kind.ZIP, encrypted)) {
-            r = CryptRewriter.rewrite(raw, decrypted, false, KEY);
-        }
-        assertThat(r.nameMap()).isEqualTo(Map.of("a.jpg.cry", "a.jpg", "b.jpg.cry", "b.jpg", "sub/c.png.cry", "sub/c.png", "y.cry", "a (2).jpg"));
-        assertThat(r.kept()).containsOnlyKeys("notes.txt");
-        CryptRewriter.verify(decrypted, r, KEY);
-        var expected = new HashMap<>(Map.of("notes.txt", source.get("notes.txt"), "a (2).jpg", plain.get("a.jpg")));
-        expected.putAll(plain);
-        assertThat(packers.hashes(decrypted)).isEqualTo(hashes(expected));
-        try (var raw = containers.openRaw(Kind.ZIP, encrypted)) {
-            assertThatThrownBy(() -> CryptRewriter.rewrite(raw, dir.resolve("E.zip.part"), false, Cry.key("wrong")))
-                    .isInstanceOf(IOException.class);
-        }
-    }
-
-    @Test
-    void copiedPhotosSkipIdenticalFilesAndNumberOthers() throws IOException {
-        assertThat(PhotoNames.numbered("a.jpg", 1)).isEqualTo("a.jpg");
-        assertThat(PhotoNames.numbered("a.jpg", 2)).isEqualTo("a (2).jpg");
-        assertThat(PhotoNames.numbered("README", 3)).isEqualTo("README (3)");
-        assertThat(PhotoNames.numbered(".hidden", 2)).isEqualTo(".hidden (2)");
-        assertThat(PhotoNames.numbered("d.x/file", 2)).isEqualTo("d.x/file (2)");
-        assertThat(PhotoNames.numbered("a.jpg.cry", 2)).isEqualTo("a.jpg (2).cry");
-        byte[] x = {1, 2, 3}, y = {4, 5, 6}, z = {7};
-        assertThat(PhotoNames.target(dir, "a.jpg", 3, hash(x))).contains(dir.resolve("a.jpg"));
-        Files.write(dir.resolve("a.jpg"), x);
-        assertThat(PhotoNames.target(dir, "a.jpg", 3, hash(x))).as("the same photo").isEmpty();
-        assertThat(PhotoNames.target(dir, "a.jpg", 3, hash(y))).contains(dir.resolve("a (2).jpg"));
-        Files.write(dir.resolve("a (2).jpg"), y);
-        assertThat(PhotoNames.target(dir, "a.jpg", 3, hash(y))).as("copied before").isEmpty();
-        assertThat(PhotoNames.target(dir, "a.jpg", 1, hash(z))).contains(dir.resolve("a (3).jpg"));
     }
 
     /** An album folder: incompressible images (mixed case, a space, a non-ASCII name), a text sidecar, distinct mtimes. */
@@ -250,7 +173,6 @@ class PackersTest {
     private void unpackRoundTrip(Path archive, Kind kind, Path src, Map<String, byte[]> files) throws IOException {
         var out = Files.createDirectory(dir.resolve(archive.getFileName() + ".part"));
         try (var raw = containers.openRaw(kind, archive)) {
-            assertThat(FolderUnpacker.flatten(raw)).isEmpty();
             assertThat(unpacker.unpack(raw, out, Map.of())).isEqualTo(hashes(files));
         }
         try (Stream<Path> list = Files.list(out)) {

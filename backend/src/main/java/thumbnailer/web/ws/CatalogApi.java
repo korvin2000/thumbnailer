@@ -94,16 +94,9 @@ class CatalogApi {
                 : rewrite(selected.stream().map(Album::id).toList(), a -> catalog.linkPatch(a, entityId, linked)));
     }
 
-    /** One patch per album whose text the edit changes (computed from the album as stored now); returns how many. */
+    /** One patch per album whose text the edit changes, computed under the album's lock from its text then; returns how many. */
     private int rewrite(List<String> ids, Function<Album, AlbumPatch> edit) {
-        int changed = 0;
-        for (var id : ids) {
-            var patch = repo.find(id).map(edit).orElse(null);
-            if (patch == null) continue;
-            albums.patch(id, patch);
-            changed++;
-        }
-        return changed;
+        return (int) ids.stream().filter(id -> albums.patch(id, edit).isPresent()).count();
     }
 
     /** Both albums' files as they are on disk (raw: ciphertext as is), counted as reads so an operation waits for them. */

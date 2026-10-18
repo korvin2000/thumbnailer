@@ -43,6 +43,9 @@ public interface AlbumRepository {
 
     Optional<Entry> entry(String albumId, int index);
 
+    /** Replaces only the stored entry list of a stored album (flags learned later); the album row is untouched. */
+    void saveEntries(String albumId, List<Entry> entries);
+
     /**
      * Inserts or replaces the album; {@code entries == null} keeps the stored entry list. In one transaction it also
      * replaces the album's text links (roles 1–5) by {@code resolution}'s, adjusts the counts of its entities over every
