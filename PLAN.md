@@ -19,10 +19,14 @@ undo. Reference SPEC IDs.
   skips a photo copied before under a numbered name (B3's naming rule, which `Planner` lacked; `FileOpsTest`, live). Checks: `:backend:test` 139
   (1 skipped), three full runs in a row green; `./gradlew build`; live smoke on `backend-demo` (fresh library) of
   catalog_plan §8 phase 2 end to end, every step green (SPEC O2, O3).
+- 2026-10-18 **catalog phase 2 merged on main** (B5 integration `c16326d`, F4 actions `08f001a`): real packers inside
+  FileOps, one crypt path, phase-0 requests closed, every menu and operation flow wired in the UI. Checks on the merge:
+  `:backend:test` 139 (1 skipped), `ng build` 549 kB initial (under budget), `ng test` 76, full `./gradlew build`, live
+  smoke on the packaged jar (`backend-demo`). Next: phase 3 (Codex reviews per track, `:spi` split, docs).
 - 2026-10-18 **catalog phase 1 merged on main** (B3 → B1 → B4 → B2 → F1 → F2 → F3, union-merged docs, two `ScanTest`
   conflicts resolved by hand). Checks on the merge: `:backend:test` 139 (1 skipped), `ng build` 609 kB (warn budget
   600 kB), `ng test` 59, full `./gradlew build` and a live smoke on the packaged jar (see the bullet below). Tracks are
-  not wired together yet: see "Open after phase 1".
+  wired together by phase 2 (B5, F4): see the next bullet and "Open after phase 2".
 - 2026-10-18 **catalog phase 1, track F1 (UI infra) landed** on its branch ([catalog_plan.md](catalog_plan.md) §8): `ContextMenu` as a
   stack of top-layer popovers (nested and lazy submenus, keyboard incl. type-ahead, viewport flipping by the pure `placeMenu`, focus
   returned to the opener), `Confirm` (item list / `showAll`, preflight totals, notes, skipped, consequences, warnings, select/check/
