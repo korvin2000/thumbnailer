@@ -39,7 +39,7 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   stacks above it. Folder choice goes through `FolderPicker.pick()` (promise), never a typed path alone.
 - The settings draft belongs to the library it was seeded from (`SettingsDialog.seededDir`): a `dataDir` change reseeds
   it, so Save can never push one library's roots into another (the server would drop that library's albums).
-- Sidebar state is one pref, `Prefs.sidebar` (`'folders' | 'refine' | 'none'`), not a boolean; the tree owns
+- Sidebar state is one pref, `Prefs.sidebar` (`'folders' | 'refine' | 'none'`; `folders` is the Browse tab, whose tree is picked by `Prefs.groupBy`), not a boolean; the tree owns
   `filters.roots` (always one path, read via `store.folder()`, set via `store.goTo()`), so Refine's badge/Reset use
   `store.refining()`/`resetRefine()` and never count or clear the folder. `store.treeVersion` tells the tree to reload.
 - `TileGrid` needs exactly one projected `<ng-template>` for tiles; the empty state is an input `TemplateRef`.
@@ -52,7 +52,11 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   `catalogChanged`), `OpsStore` (progress, last result); `AlbumStore.onEvent` only routes the events. Display names
   come from `Album.links`; the inputs edit the raw text (`model`, `studio`, …) — never write link names back into it.
 - One `Selection` class (`core/selection.ts`, cap `SELECT_CAP` = 500) for albums, photos and entity rows; plain click
-  = only this id, Ctrl toggles, Shift ranges over the grid order.
+  = only this id, Ctrl toggles, Shift ranges over the grid order. The entity scope is `filters.entities` (ids, all must
+  match) or `filters.missing`; names for its chips come from `CatalogStore.known` (filled by every page and card), never
+  from a second request per chip.
+- Modal `<dialog>`s must keep keyboard focus inside (focus the dialog itself after `showModal()` and after a clicked
+  button disappears): with focus on `body`, Esc reaches `App.onKey` and clears the album selection instead of closing.
 - Dialog-style services return promises: `FolderPicker.pick()`, `Confirm.ask()`, `EntityPicker.pick()`; the context
   menu is `ContextMenu.open(x, y, items)` with data-only `MenuEntry`s built per subject on every open. Their
   components are mounted once in `app.html`.
