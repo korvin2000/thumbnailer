@@ -34,8 +34,13 @@ public final class Names {
     }
 
     public static String join(List<String> names) {
-        return names.stream().map(n -> QUOTE.matcher(n).find() ? '"' + n.replace("\"", "\"\"") + '"' : n).collect(joining(", "));
+        return names.stream().map(n -> QUOTE.matcher(n).find() ? quote(n) : n).collect(joining(", "));
     }
+
+    /** Every name quoted: the text never reads as one name as a whole. */
+    public static String quoted(List<String> names) { return names.stream().map(Names::quote).collect(joining(", ")); }
+
+    private static String quote(String name) { return '"' + name.replace("\"", "\"\"") + '"'; }
 
     private static void add(List<String> names, StringBuilder name) {
         var n = name.toString().strip();

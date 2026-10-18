@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -84,15 +85,17 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
 
     /**
      * One-time upgrade: tombstones were one per content, so removing two copies of a gallery lost the first one's state;
-     * now one per (content, album id). ({@code album.seq} needs none: H2 numbers existing rows when it adds the identity.)
+     * now one per (content, album id). No key at all is an upgrade stopped between its two statements (each DDL commits).
+     * ({@code album.seq} needs none: H2 numbers existing rows when it adds the identity.)
      */
     private void keyTombstonesPerAlbum() {
-        if (jdbc.sql("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS t JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k "
+        int columns = jdbc.sql("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS t JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k "
                 + "ON k.CONSTRAINT_NAME = t.CONSTRAINT_NAME AND k.TABLE_NAME = t.TABLE_NAME "
                 + "WHERE t.TABLE_SCHEMA = 'PUBLIC' AND t.TABLE_NAME = 'REMOVED' AND t.CONSTRAINT_TYPE = 'PRIMARY KEY'")
-                .query(Integer.class).single() != 1) return;
+                .query(Integer.class).single();
+        if (columns == 2) return;
         log.info("Keying tombstones per album");
-        template.execute("ALTER TABLE removed DROP PRIMARY KEY");
+        if (columns == 1) template.execute("ALTER TABLE removed DROP PRIMARY KEY");
         template.execute("ALTER TABLE removed ADD PRIMARY KEY (content_id, id)");
     }
 
@@ -187,7 +190,7 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
         jdbc.sql("SELECT path, kind FROM album WHERE path LIKE ? ESCAPE '!' AND NOT hidden").params(below(parent)).query((RowCallbackHandler) rs -> {
             var rest = rs.getString(1).substring(prefix.length());
             int slash = rest.indexOf('/');
-            if (rest.isEmpty() || slash < 0 && Kind.ZIP.name().equals(rs.getString(2))) return;
+            if (rest.isEmpty() || slash < 0 && !Kind.DIRECTORY.name().equals(rs.getString(2))) return;
             var f = folders.computeIfAbsent(slash < 0 ? rest : rest.substring(0, slash), n -> new int[2]);
             f[0]++;
             if (slash >= 0) f[1] = 1;
@@ -246,11 +249,16 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
         return jdbc.sql("SELECT entity_id FROM album_link WHERE album_seq = ?").params(seq).query(Integer.class).set();
     }
 
-    /** {@code entity.albums}: +1 for an entity linked only after, −1 for one linked only before. */
+    /**
+     * {@code entity.albums}: +1 for an entity linked only after, −1 for one linked only before; rows in id order, so two
+     * saves at once lock shared entity rows in one order (no deadlock).
+     */
     private void count(Set<Integer> before, Set<Integer> after) {
-        var deltas = Stream.concat(after.stream().filter(e -> !before.contains(e)).map(e -> new Object[]{1, e}),
-                before.stream().filter(e -> !after.contains(e)).map(e -> new Object[]{-1, e})).toList();
-        template.batchUpdate("UPDATE entity SET albums = albums + ? WHERE id = ?", deltas);
+        var deltas = new TreeMap<Integer, Integer>();
+        after.forEach(e -> deltas.merge(e, 1, Integer::sum));
+        before.forEach(e -> deltas.merge(e, -1, Integer::sum));
+        template.batchUpdate("UPDATE entity SET albums = albums + ? WHERE id = ?", deltas.entrySet().stream()
+                .filter(d -> d.getValue() != 0).map(d -> new Object[]{d.getValue(), d.getKey()}).toList());
     }
 
     /**
@@ -274,8 +282,8 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
         jdbc.sql("MERGE INTO removed (content_id, id, revision, rating, cover, cover_pinned, edited_json, removed_at, seq, hidden) "
                 + "KEY (content_id, id) SELECT content_id, id, revision, rating, cover, cover_pinned, edited_json, ?, seq, hidden "
                 + "FROM album WHERE id = ?").params(System.currentTimeMillis(), id).update();
-        jdbc.sql("UPDATE entity SET albums = albums - 1 WHERE id IN (SELECT entity_id FROM album_link WHERE album_seq = "
-                + "(SELECT seq FROM album WHERE id = ? AND NOT hidden))").params(id).update();
+        count(jdbc.sql("SELECT l.entity_id FROM album_link l JOIN album a ON a.seq = l.album_seq WHERE a.id = ? AND NOT a.hidden")
+                .params(id).query(Integer.class).set(), Set.of());
         jdbc.sql("DELETE FROM entries WHERE album_id = ?").params(id).update();
         jdbc.sql("DELETE FROM album WHERE id = ?").params(id).update();
     }

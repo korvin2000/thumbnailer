@@ -146,10 +146,11 @@ class JdbcAlbumRepositoryTest {
         repo.save(at("4", ROOT + "/C/y.zip", Kind.ZIP), List.of());
         repo.save(at("5", ROOT + "/B/z", Kind.DIRECTORY), List.of());
         repo.save(at("6", ROOT + "/C", Kind.DIRECTORY), List.of());
+        repo.save(at("7", ROOT + "/d.7z", Kind.ARCHIVE), List.of());
         assertThat(repo.folders(ROOT)).as("an archive directly below is no folder; names ignore case").containsExactly(
                 new Folder("a", ROOT + "/a", 1, false), new Folder("B", ROOT + "/B", 1, true), new Folder("C", ROOT + "/C", 3, true));
         assertThat(repo.folders(ROOT + "/C")).containsExactly(new Folder("x", ROOT + "/C/x", 1, false));
-        assertThat(repo.folders(DRIVE)).containsExactly(new Folder("albums", ROOT, 6, true));
+        assertThat(repo.folders(DRIVE)).containsExactly(new Folder("albums", ROOT, 7, true));
     }
 
     @Test
@@ -224,6 +225,17 @@ class JdbcAlbumRepositoryTest {
         upgraded.delete("y");
         assertThat(t.queryForObject("SELECT COUNT(*) FROM removed WHERE content_id = 'cx'", Integer.class)).isEqualTo(2);
         assertThat(upgraded.find("a").orElseThrow().hidden()).isFalse();
+    }
+
+    @Test
+    void aTombstoneKeyDroppedByAnInterruptedUpgradeIsAddedOnStart() {
+        var t = new JdbcTemplate(db);
+        t.execute("ALTER TABLE removed DROP PRIMARY KEY"); // stopped between the upgrade's two statements
+        new JdbcAlbumRepository(t, JSON, Path.of("build"));
+        assertThat(t.queryForList("SELECT k.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS c JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k "
+                + "ON k.CONSTRAINT_NAME = c.CONSTRAINT_NAME AND k.TABLE_NAME = c.TABLE_NAME WHERE c.TABLE_SCHEMA = 'PUBLIC' "
+                + "AND c.TABLE_NAME = 'REMOVED' AND c.CONSTRAINT_TYPE = 'PRIMARY KEY' ORDER BY k.ORDINAL_POSITION", String.class))
+                .containsExactly("CONTENT_ID", "ID");
     }
 
     @Test

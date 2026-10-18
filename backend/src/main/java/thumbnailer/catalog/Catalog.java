@@ -40,10 +40,10 @@ import tools.jackson.databind.node.ObjectNode;
 
 /**
  * The catalog: entities, their names and links. One read-write lock: album saves resolve under the read lock (and
- * write only to create a missing entity); merges, renames, aliases, credits, deletes, list memberships and the backfill
- * take the write lock and never an album's lock (the order is album stripe, then catalog): what must change album text
- * is a separate step through {@code AlbumService.patch}, for which this class computes the edits ({@link #linkPatch},
- * {@link #creditPatch}). Changes are announced as {@link CatalogEvent}s after the lock.
+ * write only to create a missing entity); merges, renames, aliases, credits, deletes, list memberships, photo marks and
+ * the backfill take the write lock and never an album's lock (the order is album stripe, then catalog): what must change
+ * album text is a separate step through {@code AlbumService.patch}, for which this class computes the edits
+ * ({@link #linkPatch}, {@link #creditPatch}). Changes are announced as {@link CatalogEvent}s after the lock.
  */
 @Service
 public class Catalog {
@@ -123,14 +123,27 @@ public class Catalog {
         return get(id);
     }
 
-    /** Removes the entities with their names and links; the caller first rewrites the texts of their albums ({@link #linkPatch}). */
-    public void delete(List<Integer> ids) {
-        var kinds = write(() -> ids.stream().distinct().map(id -> {
-            var e = find(id);
-            repo.delete(id);
-            return e.kind();
-        }).distinct().toList());
-        events.publishEvent(new CatalogEvent(kinds));
+    /**
+     * Removes the entities with their names and links; the caller first rewrites the texts of their albums
+     * ({@link #linkPatch}). Returns, not deleted, those an album's text still links to (a save named one after its
+     * rewrite: deleting would leave that text without its link), unless {@code force}.
+     */
+    public List<Integer> delete(List<Integer> ids, boolean force) {
+        var left = new ArrayList<Integer>();
+        var kinds = EnumSet.noneOf(EntityKind.class);
+        write(() -> {
+            for (var id : ids.stream().distinct().toList()) {
+                var e = find(id);
+                if (!force && e.kind() != EntityKind.LIST && !repo.albumIds(id, null).isEmpty()) left.add(id);
+                else {
+                    repo.delete(id);
+                    kinds.add(e.kind());
+                }
+            }
+            return null;
+        });
+        if (!kinds.isEmpty()) events.publishEvent(new CatalogEvent(List.copyOf(kinds)));
+        return left;
     }
 
     /** Auto entities become confirmed ones. */
@@ -215,12 +228,16 @@ public class Catalog {
         });
     }
 
-    /** The edit that writes {@code alias} for every name of the album's model text that resolves to the model; null when none says otherwise. */
-    public AlbumPatch creditPatch(Album album, int modelId, String alias) {
+    /**
+     * The edit that writes {@code alias} for every name of the album's model text that resolves to the model; null when
+     * none says otherwise or the album's studio text no longer names the studio.
+     */
+    public AlbumPatch creditPatch(Album album, int modelId, int studioId, String alias) {
         var credited = cut(alias.strip());
         return read(() -> {
             var names = names(EntityKind.MODEL, texts(meta(album), EntityKind.MODEL));
-            if (names.stream().noneMatch(n -> n.is(modelId) && !n.written().equals(credited))) return null;
+            if (names.stream().noneMatch(n -> n.is(modelId) && !n.written().equals(credited))
+                    || names(EntityKind.STUDIO, texts(meta(album), EntityKind.STUDIO)).stream().noneMatch(n -> n.is(studioId))) return null;
             var seen = new HashSet<String>();
             return text(EntityKind.MODEL, names.stream().map(n -> n.is(modelId) ? credited : n.written())
                     .filter(w -> seen.add(norm(EntityKind.MODEL, w))).toList());
@@ -260,10 +277,13 @@ public class Catalog {
 
     public int photoCount(int listId) { return read(() -> repo.photoCount(listId)); }
 
-    /** Rates a photo or sets its lists (null = unchanged); {@code lists} must be favorites lists. */
+    /**
+     * Rates a photo or sets its lists (null = unchanged); {@code lists} must be favorites lists. Under the write lock: a
+     * mark keeps the half it does not set, so two at once must not interleave (nor with an album save renaming marks).
+     */
     public void mark(int seq, String name, Integer rating, List<Integer> lists) {
         if (rating != null && (rating < 0 || rating > 10)) throw new IllegalArgumentException("Rating must be 0..10");
-        read(() -> {
+        write(() -> {
             for (var id : lists == null ? List.<Integer>of() : lists)
                 if (repo.find(id).filter(e -> e.kind() == EntityKind.LIST).isEmpty()) throw new IllegalArgumentException("No favorites list " + id);
             repo.mark(seq, name, rating, lists);
@@ -451,9 +471,13 @@ public class Catalog {
         return new AlbumMeta(null, a.model(), a.studio(), a.photographer(), null, null, a.tags(), a.genres());
     }
 
-    /** The edited text of a kind's field: a name list ({@code ""} when empty); genres as a list. */
-    private static AlbumPatch text(EntityKind kind, List<String> names) {
+    /**
+     * The edited text of a kind's field: a name list ({@code ""} when empty; every name quoted when the list as written
+     * is itself a name of the kind, which would resolve whole); genres as a list.
+     */
+    private AlbumPatch text(EntityKind kind, List<String> names) {
         var s = Names.join(names);
+        if (kind != EntityKind.GENRE && names.size() > 1 && repo.resolve(kind, norm(kind, s)).isPresent()) s = Names.quoted(names);
         return switch (kind) {
             case MODEL -> new AlbumPatch(null, s, null, null, null, null, null, null, null, null, null, null, null);
             case STUDIO -> new AlbumPatch(null, null, s, null, null, null, null, null, null, null, null, null, null);

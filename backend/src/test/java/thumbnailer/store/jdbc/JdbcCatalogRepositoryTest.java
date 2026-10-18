@@ -9,7 +9,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
@@ -210,12 +212,37 @@ class JdbcCatalogRepositoryTest {
     }
 
     @Test
-    void photoMarksFollowSwapsAndChainsInTheAlbumSaveAndAFailedRenameUndoesIt() {
+    void savesSwappingTheirEntitiesAtOnceNeverDeadlock() throws Exception {
+        int a = model("A", "a"), b = model("B", "b");
         var tx = transactional(albums, AlbumRepository.class);
-        tx.save(album("a", false), List.of());
+        var toA = new Resolution(List.of(new Link(a, EntityKind.MODEL, null, null)), "");
+        var toB = new Resolution(List.of(new Link(b, EntityKind.MODEL, null, null)), "");
+        tx.save(album("x", false), List.of(), toA, new Save(false, true, false, Map.of()));
+        tx.save(album("y", false), List.of(), toB, new Save(false, true, false, Map.of()));
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            for (int round = 0; round < 100; round++) {
+                var go = new CyclicBarrier(2);
+                boolean even = round % 2 == 0; // x: A → B while y: B → A, then back
+                var saves = Stream.of("x", "y").map(id -> pool.submit(() -> {
+                    go.await(10, TimeUnit.SECONDS);
+                    tx.save(album(id, false), null, id.equals("x") == even ? toB : toA, new Save(true, true, false, Map.of()));
+                    return id;
+                })).toList();
+                for (var s : saves) s.get(30, TimeUnit.SECONDS);
+            }
+        }
+        assertThat(counts(a, b)).containsExactly(1, 1);
+    }
+
+    @Test
+    void photoMarksFollowSwapsAndChainsInTheAlbumSaveAndAFailedRenameUndoesIt() {
+        int m = model("Mira", "mira");
+        var mira = new Resolution(List.of(new Link(m, EntityKind.MODEL, null, null)), "");
+        var tx = transactional(albums, AlbumRepository.class);
+        tx.save(album("a", false), List.of(), mira, new Save(false, true, false, Map.of()));
         int s = seq("a");
         for (int i : new int[]{1, 2, 3, 4, 6, 7}) catalog.mark(s, i + ".jpg", i, null);
-        tx.save(album("a", false), null, Resolution.NONE, new Save(true, true, false,
+        tx.save(album("a", false), null, mira, new Save(true, true, false,
                 Map.of("1.jpg", "2.jpg", "2.jpg", "1.jpg", "3.jpg", "4.jpg", "4.jpg", "5.jpg", "7.jpg", "6.jpg")));
         assertThat(catalog.marks(s)).as("swapped, chained; 6.jpg is now the photo that was 7.jpg").containsExactlyInAnyOrderEntriesOf(Map.of(
                 "1.jpg", new PhotoMark(2, List.of()), "2.jpg", new PhotoMark(1, List.of()), "4.jpg", new PhotoMark(3, List.of()),
@@ -225,6 +252,8 @@ class JdbcCatalogRepositoryTest {
                 Map.of("1.jpg", "x.jpg", "2.jpg", "x.jpg")))).isInstanceOf(DuplicateKeyException.class);
         assertThat(albums.find("a").orElseThrow().hidden()).as("the album row rolled back with the marks").isFalse();
         assertThat(catalog.marks(s)).containsOnlyKeys("1.jpg", "2.jpg", "4.jpg", "5.jpg", "6.jpg");
+        assertThat(catalog.albumLinks(s)).as("and with its links and counts").extracting(Link::entity).containsExactly(m);
+        assertThat(counts(m)).containsExactly(1);
     }
 
     private int model(String name, String norm) {

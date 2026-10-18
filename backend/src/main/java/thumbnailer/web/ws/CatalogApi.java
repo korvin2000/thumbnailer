@@ -1,17 +1,18 @@
 package thumbnailer.web.ws;
 
-import static java.util.stream.Collectors.toMap;
-
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -36,6 +37,8 @@ import thumbnailer.source.Containers;
 class CatalogApi {
 
     private static final Event OK = new Event.Ok(null);
+    /** The last round of an entity delete removes the links left (one whose text no longer resolves to it cannot be rewritten). */
+    private static final int DELETE_ROUNDS = 3;
 
     private final Catalog catalog;
     private final AlbumRepository repo;
@@ -59,9 +62,12 @@ class CatalogApi {
             case Request.GetEntity(var entityId) -> new Event.EntityCard(catalog.get(entityId));
             case Request.SaveEntity(var entity) -> new Event.EntityCard(catalog.save(entity));
             case Request.DeleteEntities(var ids) -> {
-                for (var id : ids)
-                    if (catalog.entity(id).kind() != EntityKind.LIST) rewrite(catalog.albumIds(id), a -> catalog.linkPatch(a, id, false));
-                catalog.delete(ids);
+                var left = ids; // a save may name one again between its rewrite and its delete: that album is rewritten next round
+                for (int round = 1; !left.isEmpty(); round++) {
+                    for (var id : left)
+                        if (catalog.entity(id).kind() != EntityKind.LIST) rewrite(catalog.albumIds(id), a -> catalog.linkPatch(a, id, false));
+                    left = catalog.delete(left, round == DELETE_ROUNDS);
+                }
                 yield OK;
             }
             case Request.MergeEntities(var from, var into) -> new Event.EntityCard(catalog.get(catalog.merge(from, into).id()));
@@ -70,7 +76,7 @@ class CatalogApi {
                 yield OK;
             }
             case Request.CreditAs(var model, var studio, var alias, var roles) -> {
-                rewrite(catalog.creditAs(model, studio, alias, roles), a -> catalog.creditPatch(a, model, alias));
+                rewrite(catalog.creditAs(model, studio, alias, roles), a -> catalog.creditPatch(a, model, studio, alias));
                 yield new Event.EntityCard(catalog.get(model));
             }
             case Request.BulkUpdate(var ids, var query, var patch) -> {
@@ -113,24 +119,30 @@ class CatalogApi {
 
     /**
      * The entry names whose bytes differ: present in one only, of another size, or another SHA-256 of their streamed
-     * bytes (one extraction pass per container, so a solid archive is read once).
+     * bytes (one extraction pass per container, so a solid archive is read once). A name listed more than once in
+     * either container always differs: extraction by name reads only one of its occurrences.
      */
     static List<String> differing(AlbumContainer a, AlbumContainer b) throws IOException {
-        var sizes = sizes(a);
-        var others = sizes(b);
-        var differing = new TreeSet<String>();
+        var duplicates = new HashSet<String>();
+        var sizes = sizes(a, duplicates);
+        var others = sizes(b, duplicates);
+        var differing = new TreeSet<>(duplicates);
         var same = new ArrayList<String>();
         var names = new TreeSet<>(sizes.keySet());
         names.addAll(others.keySet());
-        for (var name : names) (Objects.equals(sizes.get(name), others.get(name)) ? same : differing).add(name);
+        for (var name : names)
+            (!duplicates.contains(name) && Objects.equals(sizes.get(name), others.get(name)) ? same : differing).add(name);
         var digests = digests(a, same);
         var otherDigests = digests(b, same);
         for (var name : same) if (!Arrays.equals(digests.get(name), otherDigests.get(name))) differing.add(name);
         return List.copyOf(differing);
     }
 
-    private static Map<String, Long> sizes(AlbumContainer c) {
-        return c.items().stream().collect(toMap(AlbumContainer.Item::name, AlbumContainer.Item::bytes, (x, y) -> x));
+    /** Size by name; a name seen twice goes to {@code duplicates}. */
+    private static Map<String, Long> sizes(AlbumContainer c, Set<String> duplicates) {
+        var sizes = new HashMap<String, Long>();
+        for (var i : c.items()) if (sizes.putIfAbsent(i.name(), i.bytes()) != null) duplicates.add(i.name());
+        return sizes;
     }
 
     private static Map<String, byte[]> digests(AlbumContainer c, List<String> names) throws IOException {
