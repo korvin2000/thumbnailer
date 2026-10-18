@@ -81,12 +81,18 @@ class PhotosApiTest {
         var text = (Event.Text) photos.handle(new Request.AlbumText(album.id(), "Model Bio.txt"));
         assertThat(text).isEqualTo(new Event.Text("Model Bio.txt", "Анна, 25 лет"));
         assertThatThrownBy(() -> photos.handle(new Request.AlbumText(album.id(), "a.jpg"))).isInstanceOf(IllegalArgumentException.class);
+        Files.writeString(root.resolve("secret.txt"), "outside the album");
+        for (var outside : List.of("../secret.txt", Containers.normalize(root.resolve("secret.txt"))))
+            assertThatThrownBy(() -> photos.handle(new Request.AlbumText(album.id(), outside))).as(outside).isInstanceOf(IllegalArgumentException.class);
 
         var meta = (Event.PhotoMetaRows) photos.handle(new Request.PhotoMeta(album.id(), 0));
         assertThat(meta.rows()).contains(new Event.PhotoMetaRows.Row("Exif IFD0", "Artist", "Ivan"))
                 .anyMatch(r -> r.dir().equals("JPEG") && r.tag().equals("Image Width"));
 
         int list = catalog.save(new EntitySave(null, EntityKind.LIST, "Fav", 0, null, List.of(), null)).entity().id();
+        albums.quiesce(List.of(album.id())); // an operation renaming the album's files: a mark waits for it or is refused
+        assertThatThrownBy(() -> photos.handle(new Request.MarkPhoto(album.id(), "b.jpg", 5, List.of(list)))).hasMessage(AlbumService.BUSY);
+        albums.release(List.of(album.id()));
         photos.handle(new Request.MarkPhoto(album.id(), "b.jpg", 5, List.of(list)));
         var page = (Event.PhotoList) photos.handle(new Request.Photos(list, 0, 10));
         assertThat(page.total()).isEqualTo(1);
@@ -97,6 +103,22 @@ class PhotosApiTest {
         assertThat(((Event.PhotoList) photos.handle(new Request.Photos(list, 0, 10))).total()).as("hidden albums do not count").isZero();
     }
 
+    @Test
+    void photoMetaReadsTheWholeFileWhenTheHeadEndsBeforeTheMetadata() throws IOException {
+        var t = root.resolve("T");
+        Files.createDirectories(t);
+        Files.write(t.resolve("a.jpg"), skipped(withArtist(jpeg(72, 52), "Ivan"), 3)); // APP11 x 3, then APP1: past the head
+        Files.write(t.resolve("b.jpg"), jpeg(92, 62));
+        settings.set(new Settings(List.of(new Settings.Root(root.toString(), List.of())), List.of(), false, null, null, null));
+        scans.scan(null, () -> false);
+
+        var album = byName("T");
+        assertThat(repo.entries(album.id()).getFirst().flags()).as("the head ends before the frame header: unknown").isZero();
+        var meta = (Event.PhotoMetaRows) photos.handle(new Request.PhotoMeta(album.id(), 0));
+        assertThat(meta.rows()).as("a head parse that stopped early is not the answer").contains(new Event.PhotoMetaRows.Row("Exif IFD0", "Artist", "Ivan"));
+        assertThat(repo.entries(album.id()).getFirst().flags()).isEqualTo(Entry.META_KNOWN | Entry.META);
+    }
+
     private Album byName(String name) {
         return repo.byRoot(Containers.normalize(root)).stream().filter(a -> a.name().equals(name)).findFirst().orElseThrow();
     }
@@ -104,6 +126,18 @@ class PhotosApiTest {
     private static byte[] jpeg(int w, int h) throws IOException {
         var out = new ByteArrayOutputStream();
         ImageIO.write(new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB), "jpg", out);
+        return out.toByteArray();
+    }
+
+    /** Inserts {@code n} APP11 segments of 60000 bytes (a type metadata-extractor skips) right after SOI. */
+    private static byte[] skipped(byte[] jpeg, int n) {
+        var out = new ByteArrayOutputStream();
+        out.write(jpeg, 0, 2);
+        for (int i = 0; i < n; i++) {
+            out.writeBytes(new byte[] {(byte) 0xFF, (byte) 0xEB, (byte) (60_002 >> 8), (byte) 60_002});
+            out.writeBytes(new byte[60_000]);
+        }
+        out.write(jpeg, 2, jpeg.length - 2);
         return out.toByteArray();
     }
 

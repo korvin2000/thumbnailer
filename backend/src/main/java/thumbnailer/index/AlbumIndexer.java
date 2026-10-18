@@ -10,13 +10,14 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -42,7 +43,9 @@ import thumbnailer.source.Kind;
 
 /**
  * Builds an album from an open container: entry probes and their metadata flags, the {@link Extraction} context (text
- * members read with the image heads, in one pass), extracted metadata, the bio file, statistics, cover thumbnail.
+ * members read with the image heads, in one pass; a sequential archive's pass also takes the heads the built-in
+ * extractors read, {@code album.json} and the first image, which it keeps), extracted metadata, the bio file,
+ * statistics, cover thumbnail.
  * Unchanged files reuse their stored probe and the stored cover; covers render through {@link
  * AlbumService#renderCover}, which bounds them.
  */
@@ -97,16 +100,24 @@ class AlbumIndexer {
         }
         var later = new ArrayList<String>(); // formats the head alone cannot probe
         var indexer = Thread.currentThread();
+        boolean sequential = container.sequential();
+        var batch = new LinkedHashSet<>(todo);
+        batch.addAll(budget.keySet());
+        if (sequential) // in the pass too, kept by the container for the built-in extractors' head reads: no pass of their own
+            Stream.concat(images.stream().limit(1), items.stream().filter(i -> Extraction.fileName(i.name()).equals("album.json")).limit(1))
+                    .forEach(i -> batch.add(i.name()));
+        var probing = Set.copyOf(todo);
         try { // the container picks the read order: one decompression pass for a solid archive, maybe on its threads
-            container.heads(Stream.concat(todo.stream(), budget.keySet().stream()).toList(), ImageProbe.HEAD, (name, head) -> {
+            container.heads(List.copyOf(batch), ImageProbe.HEAD, (name, head) -> {
                 if (indexer.isInterrupted()) throw new InterruptedIOException(); // shutting down
                 lane.giveWay();
                 var allowed = budget.get(name);
                 if (allowed != null) { // a text member, never an image
-                    var text = Extraction.decode(head.length <= allowed ? head : Arrays.copyOf(head, allowed), allowed < bytes(items, name));
+                    var text = Extraction.decode(head, Math.min(head.length, allowed), head.length < bytes(items, name));
                     synchronized (probes) { texts.put(name, text); }
                     return;
                 }
+                if (!probing.contains(name)) return; // read for the extractors only
                 try {
                     var probe = ImageProbe.probe(head); // pure: a sink must not read the container
                     int f = flags(head);
@@ -120,7 +131,7 @@ class AlbumIndexer {
                 }
             });
             synchronized (probes) {} // what the sink wrote on 7-Zip's threads is visible from here on
-            if (container.sequential()) { // each file costs a pass over the ones packed before it: all in one pass
+            if (sequential) { // each file costs a pass over the ones packed before it: all in one pass
                 container.heads(later, Integer.MAX_VALUE, (name, whole) -> {
                     if (indexer.isInterrupted()) throw new InterruptedIOException();
                     Object probe;

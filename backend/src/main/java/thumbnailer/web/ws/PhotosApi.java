@@ -8,7 +8,6 @@ import com.drew.metadata.xmp.XmpDirectory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,12 +30,15 @@ import thumbnailer.source.Exclusions;
 /**
  * Answers the single-photo messages: marks, the photos of a favorites list, an image's metadata (what it learns about
  * an entry's metadata is stored back as {@link Entry#flags}), an album's text files. File reads are counted album reads
- * ({@link AlbumService#read}: refused while an operation holds the album) in a turn on the UI's lane of the album's disk.
+ * ({@link AlbumService#read}: refused while an operation holds the album) in a turn on the UI's lane of the album's disk;
+ * a mark checks its name against the entries inside such a read, so an operation renaming them cannot land in between.
  */
 @Component
 class PhotosApi {
 
     static final int PAGE = 500, TEXT = Extraction.TEXT_TOTAL, VALUE = 4096;
+    /** The largest file {@code photoMeta} reads whole (a 7-Zip member is read whole onto the heap). */
+    static final long WHOLE = 256L << 20;
 
     private final Catalog catalog;
     private final AlbumRepository repo;
@@ -55,11 +57,13 @@ class PhotosApi {
     Event handle(Request.PhotosRequest request) throws IOException {
         return switch (request) {
             case Request.MarkPhoto(var albumId, var name, var rating, var lists) -> {
-                var album = album(albumId);
-                if (repo.entries(albumId).stream().noneMatch(e -> e.name().equals(name)))
-                    throw new IllegalArgumentException("No entry " + name);
-                int seq = album.internal().seq();
-                catalog.mark(seq, name, rating, lists);
+                int seq;
+                try (var _ = albums.read(albumId)) { // an operation renaming the files waits for the mark, or refuses it (busy)
+                    seq = album(albumId).internal().seq();
+                    if (repo.entries(albumId).stream().noneMatch(e -> e.name().equals(name)))
+                        throw new IllegalArgumentException("No entry " + name);
+                    catalog.mark(seq, name, rating, lists);
+                }
                 yield new Event.PhotoMarks(albumId, catalog.marks(seq));
             }
             case Request.Photos(var listId, var offset, var limit) -> photos(listId, Math.max(0, offset), Math.clamp(limit, 0, PAGE));
@@ -75,8 +79,10 @@ class PhotosApi {
                 if (name == null || !Extraction.isText(name)) throw new IllegalArgumentException("Not a text file: " + name);
                 var album = album(albumId);
                 yield new Event.Text(name, read(album, c -> {
-                    var b = c.head(name, TEXT + 1);
-                    return Extraction.decode(b.length > TEXT ? Arrays.copyOf(b, TEXT) : b, b.length > TEXT);
+                    var item = c.items().stream().filter(i -> i.name().equals(name)).findFirst() // a member, never a path out of it
+                            .orElseThrow(() -> new IllegalArgumentException("No text " + name));
+                    var b = c.head(name, TEXT + 4); // lookahead: the charset is chosen on more than is shown
+                    return Extraction.decode(b, Math.min(b.length, TEXT), b.length < item.bytes());
                 }));
             }
         };
@@ -96,18 +102,22 @@ class PhotosApi {
     }
 
     /**
-     * metadata-extractor over the head; the whole file when the head alone does not parse (metadata past it); null
-     * when neither parses (a format it does not read: no metadata to show).
+     * metadata-extractor over the head; the whole file (up to {@link #WHOLE}) when the head alone does not parse, or
+     * parses without an Exif/XMP block while it is only a prefix (the parser stops quietly where a skipped segment runs
+     * past it); null when nothing parses (a format it does not read: no metadata to show).
      */
     private static Metadata metadata(AlbumContainer c, Entry entry) throws IOException {
         try {
-            return ImageMetadataReader.readMetadata(new ByteArrayInputStream(c.head(entry.name(), ImageProbe.HEAD)));
+            var head = c.head(entry.name(), ImageProbe.HEAD);
+            var meta = ImageMetadataReader.readMetadata(new ByteArrayInputStream(head));
+            if (head.length < ImageProbe.HEAD || (flags(meta) & Entry.META) != 0 || entry.bytes() > WHOLE) return meta;
         } catch (ImageProcessingException | IOException | RuntimeException e) {
-            try (var in = c.open(entry.name())) {
-                return ImageMetadataReader.readMetadata(in);
-            } catch (ImageProcessingException e2) {
-                return null;
-            }
+            if (entry.bytes() > WHOLE) return null;
+        }
+        try (var in = c.open(entry.name())) {
+            return ImageMetadataReader.readMetadata(in);
+        } catch (ImageProcessingException e) {
+            return null;
         }
     }
 

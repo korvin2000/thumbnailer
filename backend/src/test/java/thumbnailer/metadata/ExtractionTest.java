@@ -17,14 +17,21 @@ class ExtractionTest {
     @Test
     void decodesByBomThenStrictUtf8ThenCp1251() {
         var text = "Модель: Анна №1";
-        assertThat(Extraction.decode(bytes(new byte[] {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF}, text.getBytes(UTF_8)), false)).isEqualTo(text);
-        assertThat(Extraction.decode(bytes(new byte[] {(byte) 0xFF, (byte) 0xFE}, text.getBytes(UTF_16LE)), false)).isEqualTo(text);
-        assertThat(Extraction.decode(text.getBytes(UTF_8), false)).isEqualTo(text);
-        assertThat(Extraction.decode(text.getBytes(Charset.forName("windows-1251")), false)).as("not UTF-8").isEqualTo(text);
+        var bom = bytes(new byte[] {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF}, text.getBytes(UTF_8));
+        assertThat(Extraction.decode(bom, bom.length, false)).isEqualTo(text);
+        var utf16 = bytes(new byte[] {(byte) 0xFF, (byte) 0xFE}, text.getBytes(UTF_16LE));
+        assertThat(Extraction.decode(utf16, utf16.length, false)).isEqualTo(text);
         var utf8 = text.getBytes(UTF_8);
-        assertThat(Extraction.decode(Arrays.copyOf(utf8, 5), true)).as("cut inside the third letter: dropped").isEqualTo("Мо");
-        assertThat(Extraction.decode(Arrays.copyOf(utf8, 4), true)).isEqualTo("Мо");
-        assertThat(Extraction.decode(Arrays.copyOf(utf8, 5), false)).as("not a prefix: invalid UTF-8").isNotEqualTo("Мо");
+        assertThat(Extraction.decode(utf8, utf8.length, false)).isEqualTo(text);
+        var cp1251 = text.getBytes(Charset.forName("windows-1251"));
+        assertThat(Extraction.decode(cp1251, cp1251.length, false)).as("not UTF-8").isEqualTo(text);
+        assertThat(Extraction.decode(Arrays.copyOf(utf8, 5), 5, true)).as("cut inside the third letter: dropped").isEqualTo("Мо");
+        assertThat(Extraction.decode(Arrays.copyOf(utf8, 4), 4, true)).isEqualTo("Мо");
+        assertThat(Extraction.decode(Arrays.copyOf(utf8, 5), 5, false)).as("not a prefix: invalid UTF-8").isNotEqualTo("Мо");
+        assertThat(Extraction.decode(utf8, 5, false)).as("cut at n, the rest read only to choose the charset").isEqualTo("Мо");
+        assertThat(Extraction.decode(Arrays.copyOf(bom, 8), 8, true)).as("with a BOM too: no replacement character").isEqualTo("Мо");
+        var ascii = new byte[] {'a', 'b', 'c', (byte) 0xD0, 'd'};
+        assertThat(Extraction.decode(ascii, 4, true)).as("CP1251 seen past the cut keeps the last letter").isEqualTo("abcР");
     }
 
     @Test
