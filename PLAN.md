@@ -7,6 +7,10 @@ undo. Reference SPEC IDs.
 
 ## State (2026-10-18, v0.1.0)
 
+- 2026-10-18 **catalog phase 1 merged on main** (B3 → B1 → B4 → B2 → F1 → F2 → F3, union-merged docs, two `ScanTest`
+  conflicts resolved by hand). Checks on the merge: `:backend:test` 139 (1 skipped), `ng build` 609 kB (warn budget
+  600 kB), `ng test` 59, full `./gradlew build` and a live smoke on the packaged jar (see the bullet below). Tracks are
+  not wired together yet: see "Open after phase 1".
 - 2026-10-18 **catalog phase 1, track F1 (UI infra) landed** on its branch ([catalog_plan.md](catalog_plan.md) §8): `ContextMenu` as a
   stack of top-layer popovers (nested and lazy submenus, keyboard incl. type-ahead, viewport flipping by the pure `placeMenu`, focus
   returned to the opener), `Confirm` (item list / `showAll`, preflight totals, notes, skipped, consequences, warnings, select/check/
@@ -17,7 +21,7 @@ undo. Reference SPEC IDs.
   `ng test` 42; every piece exercised in the mock UI. Not wired yet (F4 / phase 0 files): `[selection]="store.selection"` and
   `(contextMenu)` on the grid, `[selectionMenu]` on the location bar, and `album-card.ts` needs `.check { z-index: 1 }` (the scrim
   paints over the check corner).
-- 2026-10-18 **catalog phase 0 (backbone) landed**, uncommitted: [catalog_plan.md](catalog_plan.md) §8 phase 0 —
+- 2026-10-18 **catalog phase 0 (backbone) landed** (commit `1ac4fa5`): [catalog_plan.md](catalog_plan.md) §8 phase 0 —
   schema (`entity`, `alias`, `album_link`, `entity_link`, `photo`, `photo_link`, `meta`; `album.seq/hidden/bio`;
   `removed` PK `(content_id, id)` + `seq/hidden`, migrated on start), records (`AlbumMeta.genres`, `AlbumPatch`
   date/genres/hidden/addTags/removeTags, `AlbumQuery` entities/missing/hidden/duplicates/genres, `Album`
@@ -55,18 +59,19 @@ undo. Reference SPEC IDs.
   link chips, shot date, `ui/copies-popover.ts` (Compare before Delete…). Checks: `ng build` 556 kB, `ng test` 42; mock
   pass. Open: live `under`/merge/creditAs/compareCopies (B1), entity context menus and Delete… wiring (F4, hooks
   `EntityTree.contextMenu`, `CopiesPopover.deleteRequested`), `app-copies-popover` to move from `Topbar` to `app.html`.
-- Open after phase 0 (each owned by a track): `Catalog.resolve` returns no links (B1), merge/creditAs/compareCopies/
-  entities-under/genres filter/alias-resolved filters (B1), every operation item (B2), packers (B3), `Entry.flags`
-  always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4). `ops/Manifest`
-  and `Journal` records are B2's.
+- Open after phase 1 (phase 2 = F4 actions + B5 integration, phase 3 = Codex reviews per track, `:spi`, docs):
+  B2 ⇄ B3 contract (`Unpacker.unpack` hashes: as read vs read back; one crypt rewrite — B2 `ops/Crypt` or B3
+  `CryptRewriter`; `*.spill` cleanup in recovery), `AlbumService.patch(id, Function)` (B1) and `setFlags` (B4),
+  `CatalogRepository.photos` (B4 runs SQL itself), `AlbumServiceTest.removeDeletes…` race under load, the mock lacks
+  B1 semantics, `app.html`/`album-card.ts` wiring (`[selection]`, `(contextMenu)`, `[selectionMenu]`, copies popover
+  host, `.check` z-index), `SettingsDialog.open(page)`, `viewerSortDesc`, settings refetch after a root rename,
+  F2 metadata button for flags 0/3, `ng build` 609 kB over the 600 kB warn budget (lazy-load viewer/settings).
 - 2026-10-18 **B3 packers + cry** (branch `claude/catalog-b3-73a732`): `ops/pack` — `Packers` (zip: images STORED,
   text DEFLATED; 7z through 7-Zip-JBinding, level 0 = Copy non-solid, written at runtime by the vendored native;
   `hashes` by reopening), `FolderUnpacker` (one pass, flatten + name map, containment, read-back), `CryptRewriter`
   (+ `verify`), `PhotoNames`; `SevenZipContainer.extract` (one pass, fail-closed); streaming `Cry.encrypt`/`decrypt`.
   Not wired: B2 calls them. Checks: `:backend:test` 111 (1 skipped), all B3 tests green; `AlbumServiceTest.removeDeletes…`
   fails under full-suite load (phase-0 race: `blob.remove` vs the released `recount` thread; passes alone).
-  entities-under/genres filter/alias-resolved filters (B1), packers (B3), `Entry.flags`
-  always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4).
 
 - 2026-10-18 **catalog B2 ops core**: `ops/FileOps` runs every operation of catalog_plan.md §4.5 item by item through
   `Planner` (sources, destinations, conflicts, containment, space, preflight wording) and `Steps` (journaled
@@ -126,11 +131,11 @@ undo. Reference SPEC IDs.
 ## Next (ordered)
 
 0. **Catalog, operations, viewer** — models/studios/photographers/genres/favorites as linked entities, confirmed and
-   journaled file operations (move, Recycle Bin delete, hide, pack/unpack/repack, `.cry` encrypt/decrypt, copy photos),
+   journaled file operations (move, delete, hide, pack/unpack/repack, `.cry` encrypt/decrypt, copy photos),
    duplicate galleries by content stamp, multi-selection + context menus, grouped sidebar trees, entity cards, viewer
    rework (sort/filter/scale/full screen/slideshow/photo marks/copy targets/bio/metadata), plugin contracts for
    extraction and covers. Plan, data model, wire additions and the parallel track breakdown:
-   [catalog_plan.md](catalog_plan.md) (2026-10-18, under review). Changes INTENT (library writable through
+   [catalog_plan.md](catalog_plan.md) (phases 0 and 1 merged 2026-10-18; next phase 2 F4 + B5, then phase 3). Changes INTENT (library writable through
    operations only; photos can be marked). Subsumes items 1 (cover strategies as beans + ServiceLoader) and 4 (date
    in `AlbumPatch`).
 1. **C2/N6 pluggable cover strategies** — `CoverSelector` takes ordered `List<CoverStrategy>` beans instead of the

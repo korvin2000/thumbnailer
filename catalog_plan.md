@@ -1,6 +1,6 @@
 # Catalog plan — models, studios, photographers, genres, favorites, file operations, viewer
 
-Status: draft v2.1, 2026-10-18, from [todo/goals.txt](todo/goals.txt), [todo/ModelCard.md](todo/ModelCard.md),
+Status: v2.1; phases 0 and 1 merged on main 2026-10-18 (see PLAN.md State); plan from [todo/goals.txt](todo/goals.txt), [todo/ModelCard.md](todo/ModelCard.md),
 [todo/StudioCard.md](todo/StudioCard.md), the owner's duplicate-detection request (§3.6) and the owner's direction
 on safe-delete and the data model (§2.1, §4.1). v1 was reviewed by Codex (gpt-6-astra, xhigh) and an Opus pass;
 every finding is folded in or answered in §9; Windows/JDK facts come from probes. **Phase 0 (§8) landed
