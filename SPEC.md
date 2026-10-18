@@ -92,14 +92,14 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 
 | ID | requirement | status | evidence |
 |---|---|---|---|
-| K1 | Entities of six kinds (model, studio/agency, photographer, genre, tag, favorites list) in one table with aliases; album text fields resolve into links on every save; display names from links | ◐ | `catalog/Catalog.resolve` (B1), `schema.sql` tables, `JdbcCatalogRepositoryTest` |
-| K2 | Auto-created entities flagged until confirmed; rename keeps the old name as an alias; merge unions links; delete unlinks | ◐ | `Catalog.save/confirm/delete` (phase 0), `merge` (B1) |
+| K1 | Entities of six kinds (model, studio/agency, photographer, genre, tag, favorites list) in one table with aliases; album text fields resolve into links on every save; display names from links | ◐ | `Catalog.resolving` (whole text first, insert-or-get under the write lock, aliases on links, alias search text) and the start backfill, `schema.sql` tables, `CatalogTest`, `ScanTest` (auto entities after a scan, old database backfilled), `JdbcCatalogRepositoryTest`; display from links in the UI: F3 |
+| K2 | Auto-created entities flagged until confirmed; rename keeps the old name as an alias; merge unions links; delete unlinks | ✅ | `Catalog.save/confirm/merge/creditAs`, `CatalogApi` (delete and link/unlink rewrite album text by patches first), `CatalogTest`, `ScanTest.curationRewritesAlbumTextThroughPatchesAndCopiesCompareByteForByte`; tree actions: F3/F4 |
 | K3 | Cards: model (profile, studios table with credited alias and roles, genres, own hashtags), studio (roster, photographers, genres), photographer, genre, list; derived facts read-only, curated facts editable | ○ | F3, `ui/entity-card.ts` |
 | K4 | Sidebar grouped by Folders / Studios / Models / Photographers / Genres / Favorites with counts, Unassigned rows, batch confirm/merge/delete | ○ | F3, `ui/entity-tree.ts` |
-| K5 | Filters by entity id, by missing role, by genre; `model:`/`studio:`/`by:`/`#tag` resolve through aliases; facets from links | ◐ | `JdbcAlbumRepository.Where` (`entities`, `missing` phase 0; aliases B1) |
+| K5 | Filters by entity id, by missing role, by genre; `model:`/`studio:`/`by:`/`#tag` resolve through aliases; facets from links | ✅ | `JdbcAlbumRepository.Where` (`entities`, `missing`, `named` through aliases for model/studio/photographer/tags/genres), `facets` (one `GROUP BY` over links), `JdbcAlbumRepositoryTest.entityFiltersResolveThroughAnyAliasAndFacetsCountTheLinks`; genre input in Refine: F3 |
 | K6 | Favorites lists for albums and photos; photo ratings 1–10 by entry name | ◐ | `CatalogRepository.mark` (phase 0), viewer UI (F2) |
 | K7 | Hidden = safe-delete: index only, excluded from default views and counts, visible in the Hidden view, reconciliation unaffected | ◐ | `JdbcAlbumRepositoryTest` hidden rules (phase 0), Views strip (F3) |
-| K8 | Copies by content stamp: `copies` per page, copy list with Compare, Duplicates view | ◐ | `copies` (phase 0), `compareCopies` (B1), UI (F3) |
+| K8 | Copies by content stamp: `copies` per page, copy list with Compare, Duplicates view | ◐ | `copies` (phase 0), `compareCopies` (raw files, SHA-256 per entry; `ScanTest`), UI (F3) |
 | K9 | Multi-selection (≤ 500), context menus on albums, folders, entities, photos; confirm dialogs for every operation | ◐ | `core/selection.spec.ts` (phase 0), F1/F4 |
 
 ## O — Operations ([catalog_plan.md](catalog_plan.md) §4)

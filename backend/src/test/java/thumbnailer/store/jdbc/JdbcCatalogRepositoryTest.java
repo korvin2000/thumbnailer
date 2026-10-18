@@ -85,12 +85,12 @@ class JdbcCatalogRepositoryTest {
         int a = model("Aurora", "aurora"), b = model("bella", "bella"), c = model("Cleo", "cleo");
         catalog.addAlias(c, EntityKind.MODEL, "a_lias");
         catalog.adjust(Map.of(b, 5, c, 2));
-        assertThat(catalog.list(EntityKind.MODEL, null, false, 0, 10)).extracting(Entity::id).containsExactly(a, b, c);
-        assertThat(catalog.list(EntityKind.MODEL, null, true, 0, 2)).extracting(Entity::id).containsExactly(b, c);
-        assertThat(catalog.list(EntityKind.MODEL, "a", false, 0, 10)).extracting(Entity::id).containsExactly(a, c);
-        assertThat(catalog.list(EntityKind.MODEL, "a_", false, 0, 10)).as("LIKE wildcards are literal").extracting(Entity::id).containsExactly(c);
-        assertThat(catalog.count(EntityKind.MODEL, "a")).isEqualTo(2);
-        assertThat(catalog.list(EntityKind.STUDIO, null, false, 0, 10)).isEmpty();
+        assertThat(catalog.list(EntityKind.MODEL, null, null, false, 0, 10)).extracting(Entity::id).containsExactly(a, b, c);
+        assertThat(catalog.list(EntityKind.MODEL, null, null, true, 0, 2)).extracting(Entity::id).containsExactly(b, c);
+        assertThat(catalog.list(EntityKind.MODEL, "a", null, false, 0, 10)).extracting(Entity::id).containsExactly(a, c);
+        assertThat(catalog.list(EntityKind.MODEL, "a_", null, false, 0, 10)).as("LIKE wildcards are literal").extracting(Entity::id).containsExactly(c);
+        assertThat(catalog.count(EntityKind.MODEL, "a", null)).isEqualTo(2);
+        assertThat(catalog.list(EntityKind.STUDIO, null, null, false, 0, 10)).isEmpty();
     }
 
     @Test

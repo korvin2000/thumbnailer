@@ -10,8 +10,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +39,7 @@ import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.Entry;
 import thumbnailer.album.Facets;
 import thumbnailer.album.Link;
+import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.EntityKind;
 import thumbnailer.catalog.Resolution;
 import thumbnailer.source.Containers;
@@ -124,17 +125,21 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
         return jdbc.sql("SELECT COUNT(*) FROM album" + w.sql()).params(w.params()).query(Integer.class).single();
     }
 
+    /** One {@code GROUP BY} over the text links of the matching albums: primary names, top 50 per role. */
     @Override
     public Facets facets(AlbumQuery q) {
         var w = Where.of(q);
-        List<Map<String, Integer>> counts = Stream.generate(HashMap<String, Integer>::new).limit(4)
-                .collect(Collectors.toList());
-        jdbc.sql("SELECT tags, model, studio, photographer FROM album" + w.sql()).params(w.params())
-                .query((RowCallbackHandler) rs -> {
-                    Arrays.stream(rs.getString(1).split(" ")).forEach(tag -> count(counts.get(0), tag));
-                    for (int i = 2; i <= 4; i++) count(counts.get(i - 1), rs.getString(i));
+        var top = new EnumMap<EntityKind, List<Facets.Count>>(EntityKind.class);
+        jdbc.sql("SELECT l.role, e.name, COUNT(*) AS n FROM album_link l JOIN entity e ON e.id = l.entity_id WHERE l.role <> 6 "
+                        + "AND l.album_seq IN (SELECT seq FROM album" + w.sql() + ") GROUP BY l.role, l.entity_id, e.name, e.sort_name "
+                        + "ORDER BY l.role, n DESC, e.sort_name")
+                .params(w.params()).query((RowCallbackHandler) rs -> {
+                    var counts = top.computeIfAbsent(EntityKind.of(rs.getInt(1)), k -> new ArrayList<>());
+                    if (counts.size() < 50) counts.add(new Facets.Count(rs.getString(2), rs.getInt(3)));
                 });
-        return new Facets(top(counts.get(0)), top(counts.get(1)), top(counts.get(2)), top(counts.get(3)), List.of());
+        return new Facets(top.getOrDefault(EntityKind.TAG, List.of()), top.getOrDefault(EntityKind.MODEL, List.of()),
+                top.getOrDefault(EntityKind.STUDIO, List.of()), top.getOrDefault(EntityKind.PHOTOGRAPHER, List.of()),
+                top.getOrDefault(EntityKind.GENRE, List.of()));
     }
 
     @Override
@@ -391,16 +396,6 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
         } + (sort == AlbumQuery.Sort.NAME_DESC ? "sort_name DESC, id" : "sort_name, id");
     }
 
-    private static void count(Map<String, Integer> counts, String value) {
-        if (value != null && !value.isBlank()) counts.merge(value, 1, Integer::sum);
-    }
-
-    private static List<Facets.Count> top(Map<String, Integer> counts) {
-        return counts.entrySet().stream()
-                .sorted(Map.Entry.<String, Integer>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
-                .limit(50).map(e -> new Facets.Count(e.getKey(), e.getValue())).toList();
-    }
-
     /** The LIKE pattern of every path strictly below directory {@code dir}. */
     private static String below(String dir) { return Where.escape(Containers.prefix(dir)) + "%"; }
 
@@ -418,11 +413,14 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
                         "entity" + i, entities.get(i));
             w.add("NOT EXISTS (SELECT 1 FROM album_link WHERE album_seq = album.seq AND role = :missing)", "missing",
                     q.missing() == null ? null : q.missing().code());
-            if (q.genres() != null && !q.genres().isEmpty()) throw new UnsupportedOperationException("not implemented: genres filter");
             w.add("search LIKE :text ESCAPE '!'", "text", q.text() == null || q.text().isBlank() ? null : "%" + escape(q.text().strip().toLowerCase(Locale.ROOT)) + "%");
-            w.add("LOWER(model) = :model", "model", lower(q.model()));
-            w.add("LOWER(studio) = :studio", "studio", lower(q.studio()));
-            w.add("LOWER(photographer) = :photographer", "photographer", lower(q.photographer()));
+            w.named("model", EntityKind.MODEL, q.model());
+            w.named("studio", EntityKind.STUDIO, q.studio());
+            w.named("photographer", EntityKind.PHOTOGRAPHER, q.photographer());
+            var genres = q.genres() == null ? List.<String>of() : q.genres().stream().filter(Objects::nonNull).toList();
+            for (int i = 0; i < genres.size(); i++) w.named("genre" + i, EntityKind.GENRE, genres.get(i));
+            var tags = q.tags() == null ? List.<String>of() : q.tags().stream().filter(Objects::nonNull).toList();
+            for (int i = 0; i < tags.size(); i++) w.named("tag" + i, EntityKind.TAG, tags.get(i));
             w.add("kind = :kind", "kind", q.kind() == null ? null : q.kind().name());
             w.add("bytes >= :minBytes", "minBytes", q.minBytes());
             w.add("bytes <= :maxBytes", "maxBytes", q.maxBytes());
@@ -434,8 +432,6 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
             w.add("shot_date <= :dateTo", "dateTo", q.dateTo());
             w.add("rating >= :minRating", "minRating", q.minRating());
             w.add("rating <= :maxRating", "maxRating", q.maxRating());
-            var tags = q.tags() == null ? List.<String>of() : q.tags().stream().filter(Objects::nonNull).map(AlbumMeta::tag).toList();
-            for (int i = 0; i < tags.size(); i++) w.add("tags LIKE :tag" + i + " ESCAPE '!'", "tag" + i, "% " + escape(tags.get(i)) + " %");
             var roots = q.roots() == null ? List.<String>of() : q.roots().stream().filter(Objects::nonNull).toList();
             var anyRoot = new ArrayList<String>();
             for (int i = 0; i < roots.size(); i++) {
@@ -454,9 +450,17 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
             params.put(param, value);
         }
 
-        String sql() { return conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions); }
+        /**
+         * Linked to the entity of the kind known by this name (any alias, normalized like resolution): one alias primary
+         * key lookup and one probe of the album's link key; a name no entity has matches nothing. Blank = no filter.
+         */
+        void named(String param, EntityKind kind, String name) {
+            add("EXISTS (SELECT 1 FROM alias n JOIN album_link l ON l.entity_id = n.entity_id WHERE n.kind = " + kind.code()
+                    + " AND n.norm = :" + param + " AND l.album_seq = album.seq AND l.role = " + kind.code() + ")", param,
+                    name == null || name.isBlank() ? null : Catalog.norm(kind, name));
+        }
 
-        private static String lower(String s) { return s == null ? null : s.strip().toLowerCase(Locale.ROOT); }
+        String sql() { return conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions); }
 
         static String escape(String s) {
             return s.replace("!", "!!").replace("%", "!%").replace("_", "!_");
