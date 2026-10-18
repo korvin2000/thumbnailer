@@ -79,7 +79,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   derived from them by `Catalog.resolving` inside every save, which runs `repo.save(album, entries, resolution, Save)`
   under the catalog read lock (album, links, count deltas, renamed photo marks and the alias-extended `search` in one
   transaction); `Album.links` is display data. Lock
-  order stripe → catalog read/write lock, never back: catalog writes (merge, rename, alias, delete, list membership, backfill) never
+  order stripe → catalog read/write lock, never back: catalog writes (merge, rename, alias, delete, list membership, photo mark, backfill) never
   take an album stripe; what must change album text goes through `patch`/`unlink` as a separate step. Catalog
   changes broadcast `catalogChanged` and never bump `revision`. `hidden` is filtered in `Where.of`, `folders`,
   `rootStats`, `stats` — **never in `UNDER`** (`stamps`, `byRoot`, `reroot` must see hidden albums). `album.seq`
@@ -87,7 +87,8 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   by one `UPDATE` on adoption) and stays with the tombstone (`removed` PK `(content_id, id)`, newest wins).
   `entity.albums` changes only in `JdbcAlbumRepository.save` (its own deltas over every role from the links it
   replaces and `Save.visibleBefore/After`; skipped under a scan), `setListLink` (a row really changed, album visible),
-  `delete` (run under the catalog read lock, `Catalog.reading`, inside the stripe) and `recount()`.
+  `delete` (run under the catalog read lock, `Catalog.reading`, inside the stripe) and `recount()`; `save` and
+  `delete` update entity rows in ascending id order (`count`), else two saves under the shared read lock deadlock.
 - One admission gate (`index/Gate`): SCAN, OP, RESTART (never released), SETTINGS (root/path-map saves). Scans,
   operations, library switch/optimize and such saves take it by compare-and-set; two `running()` checks are not
   mutual exclusion. An operation snapshots `Settings` and the `.cry` key at admission.

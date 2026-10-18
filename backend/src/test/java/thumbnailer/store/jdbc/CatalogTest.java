@@ -11,9 +11,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.framework.ProxyFactory;
@@ -38,6 +40,7 @@ import thumbnailer.catalog.Entity;
 import thumbnailer.catalog.EntityKind;
 import thumbnailer.catalog.EntityLink;
 import thumbnailer.catalog.EntitySave;
+import thumbnailer.catalog.PhotoMark;
 import thumbnailer.source.Kind;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -198,12 +201,77 @@ class CatalogTest {
         assertThat(catalog.get(ariell)).extracting(Card::aliases, Card::links).containsExactly(List.of("nikka", "nikki"),
                 List.of(new Card.Relation(repo.find(studio).orElseThrow(), "Nikki", "Glamour")));
         assertThat(search("nikki")).containsExactly("a");
-        assertThat(catalog.creditPatch(a, ariell, "Nikki")).extracting(AlbumPatch::model).isEqualTo("Nikki, Mira");
-        assertThat(catalog.creditPatch(b, ariell, "Nikki")).isNull();
+        assertThat(catalog.creditPatch(a, ariell, studio, "Nikki")).extracting(AlbumPatch::model).isEqualTo("Nikki, Mira");
+        assertThat(catalog.creditPatch(b, ariell, studio, "Nikki")).isNull();
+        var moved = album("a", meta("Nikka, Mira", "Other", null, null), AlbumMeta.EMPTY, false);
+        assertThat(catalog.creditPatch(moved, ariell, studio, "Nikki")).as("its studio changed since creditAs listed it").isNull();
         assertThatThrownBy(() -> catalog.creditAs(ariell, studio, "Mira", null)).hasMessage("\"Mira\" is Mira; merge instead?");
         catalog.creditAs(ariell, studio, "Nikki", null);
         assertThat(repo.entityLinks(ariell)).as("roles null = unchanged").containsExactly(new EntityLink(studio, "Nikki", "Glamour"));
         assertThat(catalog.albumIds(mira)).containsExactly("a");
+    }
+
+    @Test
+    void aListEditNeverResolvesWholeToAnotherEntity() {
+        int alice = entity(EntityKind.MODEL, "Alice"), bob = entity(EntityKind.MODEL, "Bob"), carol = entity(EntityKind.MODEL, "Carol");
+        entity(EntityKind.MODEL, "Alice, Bob");
+        var a = album("a", meta("Alice", null, null, null), AlbumMeta.EMPTY, false);
+        save(edited(a, catalog.linkPatch(a, bob, true)));
+        assertThat(links("a")).extracting(Link::entity).as("not the entity named \"Alice, Bob\"").containsExactlyInAnyOrder(alice, bob);
+        var b = album("b", meta("Alice, Bob, Carol", null, null, null), AlbumMeta.EMPTY, false);
+        save(edited(b, catalog.linkPatch(b, carol, false)));
+        assertThat(links("b")).extracting(Link::entity).containsExactlyInAnyOrder(alice, bob);
+    }
+
+    @Test
+    void aDeleteLeavesAnEntityThatATextNamedAfterItsRewriteUntilForced() {
+        save("a", meta("Mira", null, null, null), AlbumMeta.EMPTY);
+        int mira = repo.resolve(EntityKind.MODEL, "mira").orElseThrow(), list = entity(EntityKind.LIST, "Best");
+        save(edited(albums.find("a").orElseThrow(), catalog.linkPatch(albums.find("a").orElseThrow(), mira, false))); // the rewrite
+        save("b", meta("Mira", null, null, null), AlbumMeta.EMPTY); // a save naming her meanwhile
+        events.clear();
+        assertThat(catalog.delete(List.of(mira, list), false)).as("still linked: rewritten again first").containsExactly(mira);
+        assertThat(links("b")).extracting(Link::entity).containsExactly(mira);
+        assertThat(repo.find(list)).isEmpty();
+        assertThat(events).containsExactly(new CatalogEvent(List.of(EntityKind.LIST)));
+        save(edited(albums.find("b").orElseThrow(), catalog.linkPatch(albums.find("b").orElseThrow(), mira, false)));
+        assertThat(catalog.delete(List.of(mira), false)).isEmpty();
+        assertThat(repo.find(mira)).isEmpty();
+
+        save("c", meta("Zoe", null, null, null), AlbumMeta.EMPTY);
+        int zoe = repo.resolve(EntityKind.MODEL, "zoe").orElseThrow();
+        assertThat(catalog.delete(List.of(zoe), true)).as("forced: the links go too").isEmpty();
+        assertThat(links("c")).isEmpty();
+    }
+
+    @Test
+    void aPhotoMarkWaitsForTheCatalogWriteLockAndKeepsTheHalfItDoesNotSet() throws Exception {
+        save("a", meta(null, null, null, null), AlbumMeta.EMPTY);
+        int seq = albums.find("a").orElseThrow().internal().seq(), list = entity(EntityKind.LIST, "Best");
+        var reading = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            pool.submit(() -> catalog.reading(() -> { // an album save in flight
+                reading.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    throw new IllegalStateException(e);
+                }
+            }));
+            try {
+                reading.await(10, TimeUnit.SECONDS);
+                var rated = pool.submit(() -> catalog.mark(seq, "x.jpg", 7, null));
+                assertThatThrownBy(() -> rated.get(300, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+                release.countDown();
+                rated.get(10, TimeUnit.SECONDS);
+            } finally {
+                release.countDown();
+            }
+        }
+        catalog.mark(seq, "x.jpg", null, List.of(list));
+        catalog.mark(seq, "x.jpg", 8, null);
+        assertThat(catalog.marks(seq)).containsExactly(Map.entry("x.jpg", new PhotoMark(8, List.of(list))));
     }
 
     @Test
@@ -280,6 +348,11 @@ class CatalogTest {
 
     private static AlbumMeta meta(String model, String studio, List<String> tags, List<String> genres) {
         return new AlbumMeta(null, model, studio, null, null, null, tags, genres);
+    }
+
+    /** The album with a model text edit applied, as {@code AlbumService.patch} applies it. */
+    private static Album edited(Album a, AlbumPatch p) {
+        return a.withEdits(new AlbumMeta(null, p.model(), null, null, null, null, null, null).over(a.internal().edited()));
     }
 
     private static AlbumMeta effective(Album a) {

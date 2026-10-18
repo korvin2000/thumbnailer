@@ -22,6 +22,8 @@ class NamesTest {
         assertThat(Names.join(names)).isEqualTo("Ellena, \"Smith, John\", \"a;b\", \"Ann \"\"Bee\"\" Cee\", Black and White");
         assertThat(Names.parse(Names.join(names))).isEqualTo(names);
         assertThat(Names.join(List.of())).isEmpty();
+        assertThat(Names.quoted(List.of("Alice", "Ann \"Bee\""))).isEqualTo("\"Alice\", \"Ann \"\"Bee\"\"\"");
+        assertThat(Names.parse(Names.quoted(names))).isEqualTo(names);
     }
 
     @Test
