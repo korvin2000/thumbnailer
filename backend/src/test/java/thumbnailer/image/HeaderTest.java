@@ -81,6 +81,23 @@ class HeaderTest {
         assertThat(Header.meta(write("tiff"))).as("tiff: its IFDs").isTrue();
         assertThat(Header.meta(write("gif"))).isFalse();
         assertThat(Header.meta(Arrays.copyOf(plain, 3))).as("not parsed: unknown").isNull();
+        int sos = sos(plain);
+        var out2 = new ByteArrayOutputStream();
+        out2.write(plain, 0, sos);
+        out2.writeBytes(exif(ByteOrder.LITTLE_ENDIAN, 1, "A", null));
+        out2.write(plain, sos, plain.length - sos);
+        var late = out2.toByteArray();
+        assertThat(Header.meta(late)).as("APP1 between SOF and SOS").isTrue();
+        assertThat(Header.meta(Arrays.copyOf(late, sos))).as("cut between SOF and that APP1: unknown, not none").isNull();
+        assertThat(Header.parse(MemorySegment.ofArray(Arrays.copyOf(late, sos)))).as("the size is known all the same")
+                .extracting(Header::width, Header::height).containsExactly(64, 48);
+    }
+
+    /** The offset of a JPEG's SOS marker. */
+    private static int sos(byte[] jpeg) {
+        int i = 2;
+        while ((jpeg[i + 1] & 255) != 0xDA) i += 2 + ((jpeg[i + 2] & 255) << 8 | jpeg[i + 3] & 255);
+        return i;
     }
 
     private static byte[] write(String format) throws IOException {

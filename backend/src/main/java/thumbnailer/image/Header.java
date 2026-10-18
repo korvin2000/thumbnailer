@@ -11,12 +11,13 @@ import thumbnailer.image.ImageProbe.Exif;
 
 /**
  * An image's stored size and the three EXIF tags the app reads (IFD0 Orientation and Artist, Exif-IFD DateTimeOriginal)
- * from a prefix of the file, without a decoder or a metadata tree: JPEG by walking the markers up to the first SOFn,
- * TIFF by its IFD0, PNG by IHDR and an {@code eXIf} chunk before the image data, GIF by its logical screen, BMP by its
- * DIB header. {@link #parse} returns null for any other format, or when the facts lie past the prefix. {@code meta}:
- * the walk saw a metadata block (a JPEG APP1, a TIFF's IFDs, a PNG {@code eXIf}).
+ * from a prefix of the file, without a decoder or a metadata tree: JPEG by walking the markers up to SOS (the size
+ * from the first SOFn), TIFF by its IFD0, PNG by IHDR and an {@code eXIf} chunk before the image data, GIF by its
+ * logical screen, BMP by its DIB header. {@link #parse} returns null for any other format, or when the facts lie past the prefix. {@code meta}:
+ * the walk saw a metadata block (a JPEG APP1, a TIFF's IFDs, a PNG {@code eXIf}); null when the prefix ended before
+ * the walk could tell (a JPEG cut between its SOFn and SOS).
  */
-public record Header(int width, int height, Exif exif, boolean meta) {
+public record Header(int width, int height, Exif exif, Boolean meta) {
 
     private static final DateTimeFormatter EXIF_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss");
 
@@ -48,30 +49,35 @@ public record Header(int width, int height, Exif exif, boolean meta) {
         return h != null && h.width > 0 && h.height > 0 ? h : null;
     }
 
+    /** The size from the first SOFn; the walk goes on to SOS for an APP1 after it (cut short before SOS: meta unknown unless seen). */
     private static Header jpeg(MemorySegment d) {
         long n = d.byteSize();
         Exif exif = Exif.NONE;
         boolean app1 = false;
+        int width = -1, height = -1;
         try {
             for (long i = 2; i + 4 <= n; ) {
-                if (u8(d, i) != 0xFF) return null;
+                if (u8(d, i) != 0xFF) break;
                 int m = u8(d, i + 1);
                 if (m == 0xFF) { i++; continue; } // fill byte
                 if (m == 0x01 || m >= 0xD0 && m <= 0xD8) { i += 2; continue; } // standalone markers
-                if (m == 0xD9 || m == 0xDA) return null; // EOI / SOS before any frame header
+                if (m == 0xD9 || m == 0xDA) return width < 0 ? null : new Header(width, height, exif, app1); // EOI / SOS: all seen
                 long seg = i + 4, end = i + 2 + u16(d, i + 2, false);
                 app1 |= m == 0xE1; // Exif or XMP
                 if (m == 0xE1 && exif == Exif.NONE && seg + 14 <= n && u8(d, seg) == 'E' && u8(d, seg + 1) == 'x'
                         && u8(d, seg + 2) == 'i' && u8(d, seg + 3) == 'f' && u8(d, seg + 4) == 0)
                     exif = tiff(d.asSlice(seg + 6, Math.min(end, n) - seg - 6)).exif;
-                if (m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC)
-                    return seg + 5 <= n ? new Header(u16(d, seg + 3, false), u16(d, seg + 1, false), exif, app1) : null;
+                if (width < 0 && m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) {
+                    if (seg + 5 > n) return null;
+                    width = u16(d, seg + 3, false);
+                    height = u16(d, seg + 1, false);
+                }
                 i = end;
             }
         } catch (IndexOutOfBoundsException truncated) {
             // a length or offset pointing past the prefix: nothing more to learn from it
         }
-        return null;
+        return width < 0 ? null : new Header(width, height, exif, app1 ? true : null);
     }
 
     /** IHDR, then the chunks before the image data for {@code eXIf}; null when the prefix ends before IDAT. */

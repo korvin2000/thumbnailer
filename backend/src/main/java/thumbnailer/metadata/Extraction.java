@@ -76,32 +76,36 @@ public record Extraction(String name, String path, Kind kind, List<Entry> images
     public static String fileName(String entry) { return entry.substring(entry.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT); }
 
     /**
-     * Text by its BOM (UTF-8, UTF-16 LE/BE), else strict UTF-8, else CP1251. {@code cut}: the bytes are a prefix of the
-     * file, so an incomplete UTF-8 sequence at the end is dropped rather than taken for CP1251.
+     * The first {@code n} bytes of {@code b} as text, in the charset all of {@code b} shows (read past {@code n} for
+     * that): its BOM (UTF-8, UTF-16 LE/BE), else strict UTF-8, else CP1251. {@code more}: the file goes on past
+     * {@code b}, so an incomplete UTF-8 sequence at its end is not taken for CP1251. A character cut at {@code n}
+     * (short of the file's end) is dropped.
      */
-    public static String decode(byte[] b, boolean cut) {
-        if (b.length >= 3 && (b[0] & 255) == 0xEF && (b[1] & 255) == 0xBB && (b[2] & 255) == 0xBF) return new String(b, 3, b.length - 3, UTF_8);
-        if (b.length >= 2 && (b[0] & 255) == 0xFF && (b[1] & 255) == 0xFE) return new String(b, 2, (b.length - 2) & ~(cut ? 1 : 0), UTF_16LE);
-        if (b.length >= 2 && (b[0] & 255) == 0xFE && (b[1] & 255) == 0xFF) return new String(b, 2, (b.length - 2) & ~(cut ? 1 : 0), UTF_16BE);
-        int n = cut ? complete(b) : b.length;
+    public static String decode(byte[] b, int n, boolean more) {
+        boolean cut = more || n < b.length;
+        if (b.length >= 3 && (b[0] & 255) == 0xEF && (b[1] & 255) == 0xBB && (b[2] & 255) == 0xBF)
+            return new String(b, 3, Math.max(0, (cut ? complete(b, n) : n) - 3), UTF_8);
+        if (b.length >= 2 && (b[0] & 255) == 0xFF && (b[1] & 255) == 0xFE) return new String(b, 2, Math.max(0, n - 2) & ~(cut ? 1 : 0), UTF_16LE);
+        if (b.length >= 2 && (b[0] & 255) == 0xFE && (b[1] & 255) == 0xFF) return new String(b, 2, Math.max(0, n - 2) & ~(cut ? 1 : 0), UTF_16BE);
         try {
-            return UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(b, 0, n)).toString();
+            UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(b, 0, more ? complete(b, b.length) : b.length));
+            return new String(b, 0, cut ? complete(b, n) : n, UTF_8); // a prefix of valid UTF-8, ending on a whole character
         } catch (CharacterCodingException e) {
-            return new String(b, Charset.forName("windows-1251"));
+            return new String(b, 0, n, Charset.forName("windows-1251"));
         }
     }
 
-    /** The length without a trailing incomplete UTF-8 sequence. */
-    private static int complete(byte[] b) {
-        for (int i = b.length - 1, back = 0; i >= 0 && back < 4; i--, back++) {
+    /** {@code end}, less a trailing incomplete UTF-8 sequence before it. */
+    private static int complete(byte[] b, int end) {
+        for (int i = end - 1, back = 0; i >= 0 && back < 4; i--, back++) {
             int c = b[i] & 255;
-            if (c < 0x80) return b.length; // ASCII: nothing open
+            if (c < 0x80) return end; // ASCII: nothing open
             if (c >= 0xC0) { // a lead byte: is its sequence whole?
                 int need = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;
-                return back + 1 >= need ? b.length : i;
+                return back + 1 >= need ? end : i;
             }
         }
-        return b.length;
+        return end;
     }
 }

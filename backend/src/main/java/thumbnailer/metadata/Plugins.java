@@ -2,9 +2,9 @@ package thumbnailer.metadata;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 import java.util.function.ToIntFunction;
@@ -18,7 +18,10 @@ public final class Plugins {
 
     private Plugins() {}
 
-    /** A provider that cannot be loaded or constructed is skipped with one warning; ties keep beans first, then discovery order. */
+    /**
+     * A provider that cannot be loaded, constructed or ordered is skipped with one warning; {@code order} is asked once
+     * per element; ties keep beans first, then discovery order.
+     */
     public static <T> List<T> load(Class<T> spi, Collection<? extends T> beans, ToIntFunction<T> order) {
         var chain = new ArrayList<T>(beans);
         var known = new HashSet<Class<?>>();
@@ -34,7 +37,13 @@ public final class Plugins {
                 log.warn("Skipping a {} provider: {}", spi.getSimpleName(), e.getMessage());
             }
         }
-        chain.sort(Comparator.comparingInt(order));
-        return List.copyOf(chain);
+        var ordered = new ArrayList<Map.Entry<T, Integer>>();
+        for (var e : chain)
+            try {
+                ordered.add(Map.entry(e, order.applyAsInt(e)));
+            } catch (RuntimeException x) {
+                log.warn("Skipping a {} provider: {}.order() failed: {}", spi.getSimpleName(), e.getClass().getName(), x.toString());
+            }
+        return ordered.stream().sorted(Map.Entry.comparingByValue()).map(Map.Entry::getKey).toList(); // a stable sort
     }
 }
