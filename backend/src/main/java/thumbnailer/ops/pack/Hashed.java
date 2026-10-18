@@ -54,5 +54,8 @@ final class Hashed extends FilterInputStream {
 
     long hash() { return hash.getAsLong(); }
 
-    long count() { return count; }
+    /** Fails unless exactly the {@code size} bytes the listing promised came through (negative: unknown, e.g. a decrypted size). */
+    void expect(String name, long size) throws IOException {
+        if (size >= 0 && count != size) throw new IOException(name + ": " + count + " bytes, listed " + size);
+    }
 }

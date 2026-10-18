@@ -1,5 +1,8 @@
 package thumbnailer.ops.pack;
 
+import static java.nio.file.StandardOpenOption.CREATE_NEW;
+import static java.nio.file.StandardOpenOption.WRITE;
+
 import java.io.BufferedOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
@@ -25,8 +28,9 @@ final class ZipPacker implements Closeable {
 
     private final ZipOutputStream zip;
 
+    /** A new {@code target}: never one that was there, nor what a link there points to. */
     ZipPacker(Path target) throws IOException {
-        zip = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(target), 64 << 10));
+        zip = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(target, CREATE_NEW, WRITE), 64 << 10));
     }
 
     /** Packs the named files of {@code raw} through one {@link AlbumContainer#extract} pass; returns their hashes by name. */
@@ -38,7 +42,7 @@ final class ZipPacker implements Closeable {
         return hashes;
     }
 
-    /** Adds entry {@code name} with the bytes of {@code in} ({@code size} a hint) and time {@code mtime} (≤ 0: none); returns their hash. */
+    /** Adds entry {@code name} with the {@code size} bytes of {@code in} (another count fails) and time {@code mtime} (≤ 0: none); returns their hash. */
     long put(String name, long mtime, long size, InputStream in) throws IOException {
         var e = new ZipEntry(name);
         if (mtime > 0) e.setLastModifiedTime(FileTime.fromMillis(mtime));
@@ -58,6 +62,7 @@ final class ZipPacker implements Closeable {
             zip.putNextEntry(e);
             h.copyTo(zip);
         }
+        h.expect(name, size);
         zip.closeEntry();
         return h.hash();
     }

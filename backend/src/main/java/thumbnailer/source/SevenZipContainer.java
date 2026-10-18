@@ -69,6 +69,7 @@ public final class SevenZipContainer implements AlbumContainer {
     private boolean solid, wrapped;
     private List<Item> items;
     private final Map<String, Ref> refs = new HashMap<>(); // wrapped: index = position in the tar
+    private final Map<String, String> refused = new HashMap<>(); // listed, but extract fails on it: why
     private final Map<String, byte[]> kept = new HashMap<>();
     private long keptBytes;
 
@@ -102,7 +103,7 @@ public final class SevenZipContainer implements AlbumContainer {
 
                     @Override public boolean entry(String entry, long size, long mtime) {
                         if (exclusions.excludes(prefix + entry)) return false;
-                        refs.put(entry, new Ref(list.size(), size));
+                        if (refs.put(entry, new Ref(list.size(), size)) != null) refused.put(entry, "Duplicate entry name");
                         list.add(new Item(entry, size, mtime));
                         int n = (int) Math.min(size, KEEP);
                         head = keptBytes + n <= BUDGET ? new byte[n] : null;
@@ -125,7 +126,10 @@ public final class SevenZipContainer implements AlbumContainer {
                     if (backslashes) path = path.replace('\\', '/');
                     if (exclusions.excludes(prefix + path)) continue;
                     long size = a.getProperty(i, PropID.SIZE) instanceof Long l ? l : 0;
-                    refs.put(path, new Ref(i, size));
+                    if (refs.put(path, new Ref(i, size)) != null) refused.put(path, "Duplicate entry name");
+                    else if (a.getProperty(i, PropID.SYM_LINK) instanceof String s && !s.isEmpty()
+                            || a.getProperty(i, PropID.HARD_LINK) instanceof String h && !h.isEmpty())
+                        refused.put(path, "Link entry"); // 7-Zip hands out a link's target name (or nothing) as its bytes
                     list.add(new Item(path, size, a.getProperty(i, PropID.LAST_MODIFICATION_TIME) instanceof Date d ? d.getTime() : 0));
                 }
             }
@@ -265,7 +269,7 @@ public final class SevenZipContainer implements AlbumContainer {
     /**
      * Every named file whole, in packing order, in one native pass (a solid archive or a wrapped tar decompresses
      * once): each is buffered and handed on as it completes, possibly on a 7-Zip thread. Fail-closed: a missing,
-     * damaged or mis-sized file fails the call.
+     * damaged or mis-sized file, a link, a name listed twice or a wrapped tar whose stream is damaged fails the call.
      */
     @Override
     public void extract(Collection<String> names, EntrySink sink) throws IOException {
@@ -275,6 +279,7 @@ public final class SevenZipContainer implements AlbumContainer {
         for (var n : names) {
             var item = byName.get(n);
             if (item == null) throw new FileNotFoundException(n);
+            if (refused.containsKey(n)) throw new IOException(refused.get(n) + " " + n + " in " + file.getFileName());
             if (item.bytes() > Integer.MAX_VALUE - 8) throw new IOException("Too large to extract at once: " + n);
             wanted.put(refs.get(n).index, item);
         }
@@ -283,18 +288,19 @@ public final class SevenZipContainer implements AlbumContainer {
         var done = new AtomicInteger();
         IntFunction<Chunks> collect = i -> new Chunks() {
             final Item item = wanted.get(i);
-            final byte[] buf = new byte[(int) item.bytes()];
+            byte[] buf = new byte[(int) Math.min(item.bytes(), 16 << 20)]; // beyond, it grows with the bytes: a header may lie
             int at;
 
             @Override
             public void accept(byte[] b, int off, int len) throws SevenZipException {
-                if (len > buf.length - at) pass.fail(damaged(item));
+                if (len > item.bytes() - at) pass.fail(damaged(item));
+                if (len > buf.length - at) buf = Arrays.copyOf(buf, (int) Math.min(item.bytes(), Math.max(at + len, 2L * buf.length)));
                 at += copy(b, off, len, buf, at);
             }
 
             @Override
             public void end(boolean ok) throws SevenZipException {
-                if (!ok || at < buf.length) pass.fail(damaged(item));
+                if (!ok || at < item.bytes()) pass.fail(damaged(item));
                 try {
                     sink.accept(item, new ByteArrayInputStream(buf));
                 } catch (IOException e) {
@@ -319,6 +325,7 @@ public final class SevenZipContainer implements AlbumContainer {
 
                 @Override public void end() throws SevenZipException { out.end(true); }
             }, pass);
+            if (pass.damaged) throw new IOException("Damaged archive " + file.getFileName()); // its files came unchecked
         } else {
             run(wanted.keySet().stream().mapToInt(Integer::intValue).sorted().toArray(), collect, pass);
         }
@@ -360,7 +367,7 @@ public final class SevenZipContainer implements AlbumContainer {
             @Override public synchronized Throwable fillInStackTrace() { return this; }
         };
         final Thread owner = Thread.currentThread();
-        volatile boolean stopped;
+        volatile boolean stopped, damaged; // damaged: 7-Zip found a wrapped tar's stream broken (a CRC) after its files
         volatile IOException failure;
 
         void stop() throws SevenZipException {
@@ -427,11 +434,15 @@ public final class SevenZipContainer implements AlbumContainer {
         if (!found[0]) throw new FileNotFoundException(entry);
     }
 
-    /** Decompresses the wrapped tar once, or until a visitor stops the pass. */
+    /** Decompresses the wrapped tar once, or until a visitor stops the pass; marks the pass damaged on a bad stream result. */
     private void tar(TarStream.Visitor v, Pass pass) throws IOException {
         var tar = new TarStream(v);
-        Chunks all = (b, off, len) -> tar.write(b);
-        run(new int[] {0}, i -> all, pass == null ? new Pass() : pass);
+        var p = pass == null ? new Pass() : pass;
+        var all = new Chunks() {
+            @Override public void accept(byte[] b, int off, int len) throws SevenZipException { tar.write(b); }
+            @Override public void end(boolean ok) { p.damaged |= !ok && !p.stopped; }
+        };
+        run(new int[] {0}, i -> all, p);
     }
 
     /** One native extract over sorted {@code indices}; a stop is success, a sink failure is rethrown. */
@@ -478,9 +489,9 @@ public final class SevenZipContainer implements AlbumContainer {
             raf = new RandomAccessFile(file.toFile(), "r");
             arc = SevenZip.openInArchive(null, new RandomAccessFileInStream(raf));
             solid = Boolean.TRUE.equals(arc.getArchiveProperty(PropID.SOLID));
-            var inner = String.valueOf(arc.getStringProperty(0, PropID.PATH)).toLowerCase(Locale.ROOT);
-            wrapped = STREAMS.contains(arc.getArchiveFormat()) && arc.getNumberOfItems() == 1 // inner name, else ours
-                    && (inner.endsWith(".tar") || TARRED.matcher(file.getFileName().toString()).matches());
+            wrapped = STREAMS.contains(arc.getArchiveFormat()) && arc.getNumberOfItems() == 1 // inner name, else ours (item 0 only if there is one)
+                    && (String.valueOf(arc.getStringProperty(0, PropID.PATH)).toLowerCase(Locale.ROOT).endsWith(".tar")
+                    || TARRED.matcher(file.getFileName().toString()).matches());
         }
         return arc;
     }

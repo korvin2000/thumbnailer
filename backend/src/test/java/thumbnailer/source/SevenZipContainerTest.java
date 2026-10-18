@@ -4,19 +4,26 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
+import java.util.stream.IntStream;
+import java.util.zip.Deflater;
+import java.util.zip.GZIPOutputStream;
 import net.sf.sevenzipjbinding.ArchiveFormat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import thumbnailer.source.Archives.TarEntry;
 
 class SevenZipContainerTest {
 
@@ -113,6 +120,67 @@ class SevenZipContainerTest {
             Files.write(bad, bytes);
             try (var c = new SevenZipContainer(bad, Exclusions.NONE)) {
                 assertThatThrownBy(() -> c.extract(asked, (i, in) -> {})).as(name).isInstanceOf(IOException.class);
+            }
+        }
+    }
+
+    @Test
+    void namesListedTwiceAndLinksAreListedButExtractRefusesThem() throws IOException {
+        var one = "1111".getBytes(StandardCharsets.UTF_8);
+        var tar = Archives.tar(List.of(new TarEntry("a.jpg", one, '0', ""), new TarEntry("d.jpg", one, '0', ""),
+                new TarEntry("d.jpg", "2222".getBytes(StandardCharsets.UTF_8), '0', ""),
+                new TarEntry("l.jpg", new byte[0], '2', "a.jpg"), new TarEntry("h.jpg", new byte[0], '1', "a.jpg")));
+        Files.write(dir.resolve("t.tar"), tar);
+        Files.write(dir.resolve("t.tar.gz"), Archives.gzip(tar)); // links in a wrapped tar are not listed (TarStream)
+        for (var name : List.of("t.tar", "t.tar.gz")) {
+            try (var c = new SevenZipContainer(dir.resolve(name), Exclusions.NONE)) {
+                assertThat(c.items()).as(name).extracting(AlbumContainer.Item::name).containsSubsequence("d.jpg", "d.jpg");
+                assertThatThrownBy(() -> c.extract(List.of("a.jpg", "d.jpg"), (i, in) -> {})).as(name)
+                        .isInstanceOf(IOException.class).hasMessageContaining("Duplicate entry name d.jpg");
+                var read = new LinkedHashMap<String, byte[]>();
+                c.extract(List.of("a.jpg"), (i, in) -> read.put(i.name(), in.readAllBytes()));
+                assertThat(read).as(name).containsOnlyKeys("a.jpg");
+            }
+        }
+        try (var c = new SevenZipContainer(dir.resolve("t.tar"), Exclusions.NONE)) {
+            for (var link : List.of("l.jpg", "h.jpg"))
+                assertThatThrownBy(() -> c.extract(List.of(link), (i, in) -> {})).isInstanceOf(IOException.class).hasMessageContaining("Link entry " + link);
+        }
+    }
+
+    @Test
+    void aWrappedTarWhoseStreamIsDamagedFailsExtract() throws IOException {
+        var bytes = new ByteArrayOutputStream();
+        try (var gz = new GZIPOutputStream(bytes) {{ def.setLevel(Deflater.NO_COMPRESSION); }}) { // stored: the bytes stay findable
+            gz.write(Archives.tar(files));
+        }
+        var gz = bytes.toByteArray();
+        var probe = Arrays.copyOfRange(files.get("b.jpg"), 1000, 1032);
+        int at = IntStream.range(0, gz.length - 32).filter(i -> Arrays.equals(gz, i, i + 32, probe, 0, 32)).findFirst().orElseThrow();
+        gz[at + 16] ^= 1; // inflates fine; only the gzip CRC at the end tells
+        Files.write(dir.resolve("bad.tar.gz"), gz);
+        try (var c = new SevenZipContainer(dir.resolve("bad.tar.gz"), Exclusions.NONE)) {
+            var names = c.items().stream().map(AlbumContainer.Item::name).toList();
+            assertThat(names).hasSize(files.size());
+            assertThatThrownBy(() -> c.extract(names, (i, in) -> {})).isInstanceOf(IOException.class).hasMessageContaining("Damaged archive");
+        }
+    }
+
+    @Test
+    void aSizeTheHeaderInventsIsNeverAllocated() throws IOException {
+        var tar = new ByteArrayOutputStream();
+        tar.write(Archives.header("big.jpg", 0x7FFF_FFF0L, '0', ""));
+        tar.write("abcd".getBytes(StandardCharsets.UTF_8));
+        tar.write(new byte[508 + 1024]); // its padding and the end: 2 GiB short of what the header says
+        Files.write(dir.resolve("big.tar"), tar.toByteArray());
+        Files.write(dir.resolve("big.tar.gz"), Archives.gzip(tar.toByteArray())); // no index: the header's size reaches the buffer
+        var threads = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+        for (var name : List.of("big.tar", "big.tar.gz")) {
+            try (var c = new SevenZipContainer(dir.resolve(name), Exclusions.NONE)) {
+                assertThat(c.items()).as(name).extracting(AlbumContainer.Item::bytes).containsExactly(0x7FFF_FFF0L);
+                long before = threads.getTotalThreadAllocatedBytes();
+                assertThatThrownBy(() -> c.extract(List.of("big.jpg"), (i, in) -> {})).as(name).isInstanceOf(IOException.class);
+                assertThat(threads.getTotalThreadAllocatedBytes() - before).as(name + ": heap bytes for 1.5 KiB read").isLessThan(64L << 20);
             }
         }
     }

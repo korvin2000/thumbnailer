@@ -52,10 +52,10 @@ final class SevenZipPacker {
         var items = names.stream().sorted(ORDER).map(n -> byName.get(n)).toList();
         int missing = items.indexOf(null);
         if (missing >= 0) throw new FileNotFoundException(names.stream().sorted(ORDER).toList().get(missing));
+        Files.createFile(target); // a new file: never one that was there, nor what a link there points to
         var relay = new Relay(target);
         var reader = Thread.ofPlatform().daemon().name("pack-read").start(() -> relay.produce(raw, items));
         try (var raf = new RandomAccessFile(target.toFile(), "rw"); var out = SevenZip.openOutArchive7z()) {
-            raf.setLength(0);
             out.setLevel(0);
             out.createArchive(new RandomAccessFileOutStream(raf), items.size(), new IOutCreateCallback<IOutItem7z>() {
                 @Override public void setOperationResult(boolean ok) {}
@@ -77,20 +77,32 @@ final class SevenZipPacker {
         } catch (SevenZipException e) {
             relay.end(new IOException("7-Zip could not write " + target.getFileName() + ": " + e.getMessage(), e));
         } finally {
+            relay.finish(); // 7-Zip is done: its last stream closes
             relay.end(null);
-            join(reader);
-            relay.clean();
+            try {
+                join(reader, relay);
+            } finally {
+                relay.clean();
+            }
         }
         if (relay.failure != null) throw relay.failure; // the pass's own failure first: it stopped 7-Zip
         if (relay.hashes.size() < items.size()) throw new IOException("Not every entry reached " + target.getFileName());
         return relay.hashes;
     }
 
-    private static void join(Thread t) throws InterruptedIOException {
-        try {
-            t.join();
-        } catch (InterruptedException e) {
-            t.interrupt();
+    /** Waits for the pass; interrupted, it stops the pass and still waits: nothing reads {@code raw} once pack returns. */
+    private static void join(Thread t, Relay relay) throws InterruptedIOException {
+        boolean interrupted = false;
+        while (t.isAlive()) {
+            try {
+                t.join();
+            } catch (InterruptedException e) {
+                interrupted = true;
+                relay.end(new InterruptedIOException());
+                t.interrupt();
+            }
+        }
+        if (interrupted) {
             Thread.currentThread().interrupt();
             throw new InterruptedIOException();
         }
@@ -100,7 +112,7 @@ final class SevenZipPacker {
      * The meeting point of the pass (producer) and 7-Zip (consumer): the entry 7-Zip {@code wanted} streams to it
      * directly while the pass waits; any other is spilled, then read from its file when asked for.
      */
-    private static final class Relay {
+    static final class Relay {
         final Map<String, Long> hashes = new ConcurrentHashMap<>();
         final Map<String, Path> spilled = new HashMap<>();
         final Path target;
@@ -112,14 +124,16 @@ final class SevenZipPacker {
 
         Relay(Path target) { this.target = target; }
 
+        /** The pass; however it ends, the relay ends with it, or 7-Zip would wait for its next entry forever. */
         void produce(AlbumContainer raw, Collection<Item> items) {
             try {
                 raw.extract(items.stream().map(Item::name).toList(), this::accept);
                 end(null);
             } catch (IOException e) {
                 end(e);
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
                 end(new IOException(e));
+                if (e instanceof Error error) throw error;
             }
         }
 
@@ -151,6 +165,7 @@ final class SevenZipPacker {
                     h.copyTo(out);
                 }
             }
+            h.expect(item.name(), item.bytes()); // 7-Zip stores what it got: a short source would verify
             synchronized (this) {
                 hashes.put(item.name(), h.hash()); // a spilled entry is complete from here on
                 notifyAll();
@@ -187,7 +202,7 @@ final class SevenZipPacker {
             }
         }
 
-        /** The entry 7-Zip read last is done: the pass goes on, a spill file closes. */
+        /** The entry 7-Zip read last is done (only 7-Zip's side knows): the pass goes on, a spill file closes. */
         private synchronized void finish() {
             offered = null;
             try (var c = current) {
@@ -198,10 +213,11 @@ final class SevenZipPacker {
             notifyAll();
         }
 
+        /** Either side is done (null) or failed; 7-Zip may still be reading its stream, which stays open. */
         synchronized void end(IOException e) {
             if (failure == null) failure = e;
             ended = true;
-            finish();
+            notifyAll();
         }
 
         /** Spill files go once 7-Zip and the pass are done. */

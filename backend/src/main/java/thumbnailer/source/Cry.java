@@ -130,8 +130,9 @@ public class Cry {
             left -= k;
             var plain = cipher.update(buf, 0, k);
             if (skip < 0) { // the first chunk holds the length field and the whole name (≤ 32769 bytes)
-                skip = 2 + nameLength(plain);
-                if (f < 0 || skip != size - HEADER - f) throw new IOException("Not a .cry file for this password");
+                int l = nameLength(plain);
+                if (!header(f, l, size)) throw new IOException("Not a .cry file for this password");
+                skip = 2 + l;
                 int end = 2;
                 while (end < skip && plain[end] != 0) end++;
                 name = new String(plain, 2, end - 2, UTF_8);
@@ -166,8 +167,8 @@ public class Cry {
         } catch (GeneralSecurityException e) {
             throw new IOException(e);
         }
-        int end = 2, stop = 2 + nameLength(plain);
-        if (size >= 0 && stop != size - HEADER - ByteBuffer.wrap(head).getInt()) throw new IOException("Not a .cry file for this password");
+        int end = 2, l = nameLength(plain), stop = 2 + l;
+        if (!header(ByteBuffer.wrap(head).getInt(), l, size)) throw new IOException("Not a .cry file for this password");
         while (end < Math.min(stop, blocks) && plain[end] != 0) end++;
         if (end == blocks && end < stop) throw new IOException("The head ends inside the name");
         return new String(plain, 2, end - 2, UTF_8);
@@ -330,8 +331,7 @@ public class Cry {
         /** The bytes before the image (length field and name) once the header predicts L; a wrong key fails here. */
         private int skip(String name, int f, long size, byte[] plain) throws IOException {
             int l = nameLength(plain);
-            boolean ok = f >= 0 && (size < 0 ? l <= 32767 : (size - HEADER) % 16 == 0 && l == size - HEADER - 2 - f);
-            if (!ok) throw refuse(name);
+            if (!header(f, l, size)) throw refuse(name);
             return 2 + l;
         }
 
@@ -348,6 +348,14 @@ public class Cry {
 
     /** The padded name's length, from the first two plaintext bytes (biased by 32768). */
     private static int nameLength(byte[] plain) { return ((plain[0] & 0xFF) << 8 | plain[1] & 0xFF) ^ 0x8000; }
+
+    /**
+     * Whether image length {@code f} and padded name length {@code l} are what the writer gives a file of {@code size}
+     * bytes (negative = unknown): every reader checks this before it touches the name; a wrong key fails it.
+     */
+    private static boolean header(long f, int l, long size) {
+        return f >= 0 && l <= 32767 && (size < 0 || (size - HEADER) % 16 == 0 && l == size - HEADER - 2 - f);
+    }
 
     private static Cipher aes(int mode, byte[] key) {
         try {

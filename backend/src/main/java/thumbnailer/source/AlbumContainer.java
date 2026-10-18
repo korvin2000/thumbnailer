@@ -78,16 +78,18 @@ public interface AlbumContainer extends Closeable {
 
     /**
      * Feeds {@code sink} every named file whole, in the order that reads the container fastest. Fail-closed, unlike
-     * {@link #heads}: a file that cannot be read fails the call. Containers that read only front to back override it
-     * with one pass.
+     * {@link #heads}: a file that cannot be read, or a name listed twice (which one is meant?), fails the call.
+     * Containers that read only front to back override it with one pass.
      */
     default void extract(Collection<String> names, EntrySink sink) throws IOException {
-        var items = items().stream().collect(Collectors.toMap(Item::name, i -> i, (a, b) -> a));
-        for (var name : names) {
-            var item = items.get(name);
-            if (item == null) throw new FileNotFoundException(name);
-            try (var in = open(name)) {
-                sink.accept(item, in);
+        var items = items().stream().collect(Collectors.groupingBy(Item::name));
+        for (var n : names) {
+            var same = items.getOrDefault(n, List.of());
+            if (same.size() != 1) throw same.isEmpty() ? new FileNotFoundException(n) : new IOException("Duplicate entry name " + n + " in " + name());
+        }
+        for (var n : names) {
+            try (var in = open(n)) {
+                sink.accept(items.get(n).getFirst(), in);
             }
         }
     }

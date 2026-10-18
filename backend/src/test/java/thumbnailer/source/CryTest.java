@@ -213,6 +213,25 @@ public class CryTest {
         assertThatThrownBy(() -> Cry.encrypt(new ByteArrayInputStream(new byte[11]), 10, "a.jpg", KEY, sink)).isInstanceOf(IOException.class);
     }
 
+    @Test
+    void headersTheWriterCannotProduceAreRefusedBeforeTheNameIsRead() throws Exception {
+        var huge = crafted(15, 65535, ("n".repeat(65535) + "imagebytes12345").getBytes(UTF_8)); // L > 32767, consistent with F
+        assertThatThrownBy(() -> Cry.decrypt(huge, KEY)).isExactlyInstanceOf(IOException.class);
+        assertThatThrownBy(() -> Cry.plainName(huge, huge.length, KEY)).isExactlyInstanceOf(IOException.class);
+        assertThatThrownBy(() -> Cry.plainName(huge, KEY)).isExactlyInstanceOf(IOException.class);
+        var negative = crafted(-16, 30, "a".getBytes(UTF_8)); // F < 0, L consistent with it
+        assertThatThrownBy(() -> Cry.plainName(negative, negative.length, KEY)).isExactlyInstanceOf(IOException.class);
+        assertThatThrownBy(() -> Cry.plainName(negative, KEY)).isExactlyInstanceOf(IOException.class);
+    }
+
+    /** A .cry file with any header: F, alg 1, then AES of the biased L and {@code rest}, zero-padded to whole blocks. */
+    private static byte[] crafted(int f, int l, byte[] rest) throws GeneralSecurityException {
+        var plain = ByteBuffer.allocate((2 + rest.length + 15) & ~15).putShort((short) (l - 32768)).put(rest).array();
+        var c = Cipher.getInstance("AES/ECB/NoPadding");
+        c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(KEY, "AES"));
+        return ByteBuffer.allocate(5 + plain.length).putInt(f).put((byte) 1).put(c.doFinal(plain)).array();
+    }
+
     /** Through the streaming writer, fed a few bytes per read. */
     private static byte[] streamed(byte[] plain, String name) throws IOException {
         var out = new ByteArrayOutputStream();

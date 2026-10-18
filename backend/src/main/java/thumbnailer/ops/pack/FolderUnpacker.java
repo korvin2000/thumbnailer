@@ -14,8 +14,8 @@ import org.springframework.stereotype.Component;
 import thumbnailer.source.AlbumContainer;
 
 /**
- * The {@link Unpacker}: one {@link AlbumContainer#extract} pass into the caller's {@code <name>.part/} directory,
- * structure and times kept, every name contained (catalog_plan.md §4.4); the flatten map comes from the caller.
+ * The {@link Unpacker}: one {@link AlbumContainer#extract} pass into the caller's {@code <name>.part/} directory, created
+ * here, structure and times kept, every name contained (catalog_plan.md §4.4); the flatten map comes from the caller.
  */
 @Component
 public class FolderUnpacker implements Unpacker {
@@ -28,10 +28,11 @@ public class FolderUnpacker implements Unpacker {
      */
     @Override
     public Map<String, Long> unpack(AlbumContainer raw, Path dir, Map<String, String> nameMap) throws IOException {
-        var root = dir.normalize();
+        var root = dir.toAbsolutePath().normalize();
         var targets = new HashMap<String, Path>();
         for (var item : raw.items()) targets.put(item.name(), contained(root, nameMap.getOrDefault(item.name(), item.name())));
-        Files.createDirectories(root);
+        Files.createDirectories(root.getParent());
+        Files.createDirectory(root); // ours alone: never a directory (or a link to one) that was there
         var read = new ConcurrentHashMap<String, Long>(); // the sink may run on 7-Zip's threads
         raw.extract(targets.keySet(), (item, in) -> {
             var file = targets.get(item.name());
@@ -40,7 +41,7 @@ public class FolderUnpacker implements Unpacker {
             try (var out = Files.newOutputStream(file, StandardOpenOption.CREATE_NEW)) {
                 h.copyTo(out);
             }
-            if (h.count() != item.bytes()) throw new IOException(item.name() + ": " + h.count() + " bytes, listed " + item.bytes());
+            h.expect(item.name(), item.bytes());
             if (item.mtime() > 0) Files.setLastModifiedTime(file, FileTime.fromMillis(item.mtime()));
             read.put(root.relativize(file).toString().replace('\\', '/'), h.hash());
         });

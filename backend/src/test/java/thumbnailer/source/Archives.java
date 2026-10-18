@@ -25,17 +25,25 @@ public final class Archives {
     private Archives() {}
 
     public static byte[] tar(Map<String, byte[]> files) throws IOException {
+        return tar(files.entrySet().stream().map(e -> new TarEntry(e.getKey(), e.getValue(), '0', "")).toList());
+    }
+
+    /** A tar entry: {@code type} '0' a file of {@code data}, '1' a hard or '2' a symbolic link to {@code link}. */
+    public record TarEntry(String name, byte[] data, char type, String link) {}
+
+    /** {@code entries} in order; a name may repeat. */
+    public static byte[] tar(List<TarEntry> entries) throws IOException {
         var out = new ByteArrayOutputStream();
-        for (var e : files.entrySet()) {
-            var name = e.getKey().getBytes(StandardCharsets.UTF_8);
+        for (var e : entries) {
+            var name = e.name().getBytes(StandardCharsets.UTF_8);
             if (name.length > 100) {
-                out.write(header("././@LongLink", name.length + 1, 'L'));
+                out.write(header("././@LongLink", name.length + 1, 'L', ""));
                 out.write(name);
                 out.write(new byte[512 - name.length % 512]);
             }
-            out.write(header(e.getKey().length() > 100 ? e.getKey().substring(0, 100) : e.getKey(), e.getValue().length, '0'));
-            out.write(e.getValue());
-            out.write(new byte[(512 - e.getValue().length % 512) % 512]);
+            out.write(header(e.name().length() > 100 ? e.name().substring(0, 100) : e.name(), e.data().length, e.type(), e.link()));
+            out.write(e.data());
+            out.write(new byte[(512 - e.data().length % 512) % 512]);
         }
         out.write(new byte[1024]);
         return out.toByteArray();
@@ -82,7 +90,8 @@ public final class Archives {
         }
     }
 
-    private static byte[] header(String name, long size, char type) {
+    /** A ustar header block claiming {@code size} bytes, whatever follows it. */
+    static byte[] header(String name, long size, char type, String link) {
         var h = new byte[512];
         var n = name.getBytes(StandardCharsets.UTF_8);
         System.arraycopy(n, 0, h, 0, Math.min(n.length, 100));
@@ -90,6 +99,7 @@ public final class Archives {
         put(h, 124, "%011o".formatted(size));
         put(h, 136, "%011o".formatted(1_700_000_000L));
         h[156] = (byte) type;
+        put(h, 157, link);
         put(h, 257, "ustar");
         put(h, 263, "00");
         for (int i = 148; i < 156; i++) h[i] = ' ';
