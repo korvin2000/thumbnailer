@@ -40,6 +40,7 @@ final class Journal {
     private final Path file, manifests;
     private final JsonMapper json;
     private final Map<String, Line> lines = new LinkedHashMap<>();
+    private boolean unread; // the last read failed: writing now would replace records nobody has recovered
 
     Journal(JsonMapper json, @Value("${thumbnailer.library-dir:${thumbnailer.data-dir}}") Path dir) {
         this.file = dir.resolve("ops.journal");
@@ -47,11 +48,13 @@ final class Journal {
         this.json = json;
     }
 
-    /** The lines on disk (what a previous run left), read again. */
+    /** The lines on disk (what a previous run left), read again; until a read succeeds, every write fails. */
     List<Line> read() throws IOException {
         lines.clear();
+        unread = true;
         if (Files.exists(file))
             for (var l : Files.readAllLines(file, UTF_8)) if (!l.isBlank()) put(json.readValue(l, Line.class));
+        unread = false;
         return List.copyOf(lines.values());
     }
 
@@ -65,6 +68,7 @@ final class Journal {
     }
 
     void line(Manifest m, Phase phase, String file, Long hash) throws IOException {
+        writable();
         put(new Line(m.op(), m.item(), phase, file, hash));
         flush();
     }
@@ -73,6 +77,7 @@ final class Journal {
 
     /** The item is done (or rolled back): its line goes, then its manifest, then its operation's folder once empty. */
     void remove(String op, int item) throws IOException {
+        writable();
         lines.remove(op + '/' + item);
         flush();
         var p = path(op, item);
@@ -95,6 +100,10 @@ final class Journal {
     private void put(Line l) { lines.put(l.op() + '/' + l.item(), l); }
 
     private Path path(String op, int item) { return manifests.resolve(op).resolve(item + ".json"); }
+
+    private void writable() throws IOException {
+        if (unread) throw new IOException("The operations journal cannot be read");
+    }
 
     private void flush() throws IOException {
         var out = new ArrayList<String>();

@@ -52,19 +52,22 @@ class ImageController {
         this.settings = settings;
     }
 
+    /** The album and entry are looked up inside the read, so an operation's quiesce waits for the whole request (busy → 503). */
     @GetMapping("/cover")
     ResponseEntity<byte[]> cover(@PathVariable String albumId, WebRequest request) {
-        if (albums.busy(albumId)) return busy();
-        var album = album(albumId);
-        return request.checkNotModified(etag(album, settings.get().covers().epoch())) ? null : image(album, albums.cover(album));
+        try (var _ = albums.read(albumId)) {
+            var album = album(albumId);
+            return request.checkNotModified(etag(album, settings.get().covers().epoch())) ? null : image(album, albums.cover(album));
+        }
     }
 
     @GetMapping("/{index}/thumb")
     ResponseEntity<byte[]> thumb(@PathVariable String albumId, @PathVariable int index, WebRequest request) {
-        if (albums.busy(albumId)) return busy();
-        var album = album(albumId);
-        return request.checkNotModified(etag(album, settings.get().thumbs().epoch())) ? null
-                : image(album, albums.thumb(album, entry(albumId, index)));
+        try (var _ = albums.read(albumId)) {
+            var album = album(albumId);
+            return request.checkNotModified(etag(album, settings.get().thumbs().epoch())) ? null
+                    : image(album, albums.thumb(album, entry(albumId, index)));
+        }
     }
 
     /** Streamed: the read of the album lasts until the stream is closed, so an operation's quiesce waits for it. */

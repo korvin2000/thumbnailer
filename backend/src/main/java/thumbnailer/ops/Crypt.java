@@ -5,7 +5,10 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -20,13 +23,13 @@ import thumbnailer.source.Cry;
 
 /**
  * Encrypting and decrypting with an operation's own key through {@link Cry}'s format code (its container wrap uses the
- * session's key, which may be gone by the time the operation runs): the name map of a container, the transform of one
- * file (an encryption is checked by a round trip before anything is written), and the view an archive is rewritten
+ * session's key, which may be gone by the time the operation runs): the name map of a container, the streamed transform
+ * of one file (read back afterwards: an encryption must decrypt to what was read), and the view an archive is rewritten
  * through by the {@link thumbnailer.ops.pack.Packer}, so a rewrite verifies like any pack.
  */
 final class Crypt {
 
-    private static final int HEAD = 4096; // the header and the blocks holding any real name
+    static final int HEAD = 4096; // the header and the blocks holding any real name
 
     private Crypt() {}
 
@@ -48,7 +51,7 @@ final class Crypt {
             if (!encrypt && !plain.containsKey(n)) throw new IOException("Unreadable: " + n);
             int slash = n.lastIndexOf('/') + 1;
             var to = encrypt ? n + ".cry" : n.substring(0, slash) + plain.get(n);
-            for (int k = 2; taken.contains(to.toLowerCase(Locale.ROOT)); k++)
+            for (int k = 2; taken.contains(to.toLowerCase(Locale.ROOT)) || taken.contains(to.toLowerCase(Locale.ROOT) + ".part"); k++) // .part: its staging file
                 to = encrypt ? n.substring(0, slash) + Trees.numbered(n.substring(slash), k, true) + ".cry"
                         : n.substring(0, slash) + Trees.numbered(plain.get(n), k, true);
             taken.add(to.toLowerCase(Locale.ROOT));
@@ -57,12 +60,15 @@ final class Crypt {
         return names;
     }
 
-    /** The embedded base name of a {@code .cry} file of {@code size} bytes, or an IOException when the key does not fit. */
+    /**
+     * The embedded base name of a {@code .cry} file of {@code size} bytes, or an IOException when the key does not fit or
+     * the name would not stay in its folder (a drive-relative {@code D:x.jpg}, {@code .}, {@code ..}).
+     */
     static String name(byte[] head, long size, byte[] key) throws IOException {
         var name = Cry.plainName(head, size, key);
         int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
         name = name.substring(slash + 1);
-        if (name.isBlank() || name.equals("..")) throw new IOException("No usable name inside");
+        if (name.isBlank() || name.equals(".") || !Trees.safe(name)) throw new IOException("No usable name inside");
         return name;
     }
 
@@ -72,6 +78,31 @@ final class Crypt {
         var out = Cry.encrypt(bytes, name.substring(name.lastIndexOf('/') + 1), key);
         if (!Arrays.equals(Cry.decrypt(out, key), bytes)) throw new IOException("Encryption does not read back: " + name);
         return out;
+    }
+
+    /** Copies {@code in}, decrypted when {@code encrypted} (a file of {@code size} bytes), into {@code out}; returns the hash of the plain bytes. */
+    static long plain(InputStream in, long size, byte[] key, boolean encrypted, OutputStream out) throws IOException {
+        var plain = new Hashes.Out(out);
+        if (encrypted) Cry.decrypt(in, size, key, plain);
+        else in.transferTo(plain);
+        return plain.hash();
+    }
+
+    /** Streams file {@code from} (named {@code name}) encrypted under its base name, or decrypted, into {@code out}; returns the hash of the plain bytes. */
+    static long write(Path from, String name, OutputStream out, byte[] key, boolean encrypt) throws IOException {
+        try (var in = new Hashes.In(Files.newInputStream(from))) {
+            if (!encrypt) return plain(in, Files.size(from), key, true, out);
+            Cry.encrypt(in, Files.size(from), name.substring(name.lastIndexOf('/') + 1), key, out);
+            return in.hash();
+        }
+    }
+
+    /** Reads {@code f} back, decrypting it when {@code encrypted}: returns its hash, or fails unless its plain bytes hash to {@code plain}. */
+    static long readBack(Path f, long plain, byte[] key, boolean encrypted) throws IOException {
+        try (var in = new Hashes.In(Files.newInputStream(f))) {
+            if (plain(in, Files.size(f), key, encrypted, OutputStream.nullOutputStream()) != plain) throw new IOException("does not read back as written");
+            return in.hash();
+        }
     }
 
     /**
@@ -113,7 +144,7 @@ final class Crypt {
     }
 
     /** The size {@link Cry#encrypt} gives a file of {@code bytes} under the base name of {@code name}. */
-    private static long encryptedSize(long bytes, String name) {
+    static long encryptedSize(long bytes, String name) {
         int n = name.substring(name.lastIndexOf('/') + 1).getBytes(UTF_8).length;
         return 5 + 2 + n + (16 - (bytes + 2 + n) % 16) % 16 + bytes;
     }

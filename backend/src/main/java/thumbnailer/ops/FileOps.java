@@ -94,6 +94,7 @@ public class FileOps {
         if (w.isAlive()) {
             w.interrupt();
             w.join(Duration.ofSeconds(10));
+            if (w.isAlive()) log.error("An operation is still running at shutdown; its journaled item is recovered on the next start");
         }
     }
 
@@ -127,11 +128,11 @@ public class FileOps {
                     else (Trees.inUse(e) ? p.skipped : p.failed).add(new OpResult.Issue(item.path(), why));
                 }
             }
+        } finally { // after the hold closed: a client may submit the next operation as soon as it sees the result;
+            p.current = null; // an Error (out of memory) ends the operation too, without a further item
+            p.publish(true);
+            events.publishEvent(new OpResult(id, p.done, List.copyOf(p.skipped), List.copyOf(p.failed)));
         }
-        // the gate is open again before the result: a client may submit the next operation as soon as it sees it
-        p.current = null;
-        p.publish(true);
-        events.publishEvent(new OpResult(id, p.done, List.copyOf(p.skipped), List.copyOf(p.failed)));
     }
 
     /** The operation's turn: its source's root disk, read like a scan. */

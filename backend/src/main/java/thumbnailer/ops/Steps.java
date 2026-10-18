@@ -120,7 +120,8 @@ class Steps {
                     line(m, COPYING, null, null); // before the manifest names a tmp: a COPYING line never deletes tmp = src
                     return copy(journal.save(m.copying()), key, turn);
                 } catch (IOException | RuntimeException e) {
-                    journal.remove(m.op(), m.item()); // nothing moved
+                    // a case-only rename moves twice: once the source left its name, recovery finishes from the halfway name
+                    if (Trees.present(path(m.src()))) journal.remove(m.op(), m.item()); // nothing moved
                     throw e;
                 }
                 return finish(m, REBASING, key, turn);
@@ -135,18 +136,27 @@ class Steps {
     /** Whether item {@code item} of operation {@code op} is still journaled (a recovery finishes it). */
     boolean pending(String op, int item) { return journal.has(op, item); }
 
-    /** Finishes or rolls back every journaled item (§4.7 recovery table); one that fails again stays journaled. */
+    /**
+     * Finishes or rolls back every journaled item (§4.7 recovery table); one that fails again stays journaled. A journal
+     * that cannot be read is left as it is, and every item fails before it touches anything until it can be.
+     */
     void recover() {
         List<Line> lines;
         try {
             lines = journal.read();
         } catch (IOException | RuntimeException e) {
-            log.error("The operations journal cannot be read; nothing is recovered", e);
+            log.error("The operations journal cannot be read; nothing is recovered and no operation runs", e);
             return;
         }
         for (var l : lines) {
             try {
-                var m = journal.manifest(l);
+                Manifest m;
+                try {
+                    m = journal.manifest(l);
+                } catch (NoSuchFileException e) { // no manifest: the item never wrote anything
+                    remove(l);
+                    continue;
+                }
                 var held = quiesce(m);
                 try {
                     resume(m, l);
@@ -154,8 +164,6 @@ class Steps {
                     albums.release(held);
                 }
                 log.info("Recovered {} {} (item {} of operation {}) from {}", m.kind(), m.src(), m.item(), m.op(), l.phase());
-            } catch (NoSuchFileException e) { // no manifest: the item never wrote anything
-                remove(l);
             } catch (IOException | RuntimeException e) {
                 log.warn("Item {} of operation {} stays journaled at {}: {}", l.item(), l.op(), l.phase(), Trees.reason(e));
             }
@@ -176,8 +184,11 @@ class Steps {
         switch (l.phase()) {
             case COPYING -> rollback(m);
             case VERIFIED, DISPOSING -> {
-                if (m.tmp() != null && Files.exists(path(m.tmp()), NOFOLLOW_LINKS)) verify(m); // before the source goes
-                finish(m, DISPOSING, null, Disks.Hold.NONE);
+                if (m.tmp() != null) { // the result is only at tmp until installing: no verified result, no disposal
+                    if (!Files.exists(path(m.tmp()), NOFOLLOW_LINKS)) throw new IOException("The verified result of " + m.src() + " is missing");
+                    verify(m); // before the source goes
+                }
+                finish(m, l.phase(), null, Disks.Hold.NONE);
             }
             default -> finish(m, l.phase(), null, Disks.Hold.NONE);
         }
@@ -185,7 +196,7 @@ class Steps {
 
     private String copy(Manifest m, byte[] key, Disks.Hold turn) throws IOException {
         try {
-            m = journal.save(write(m, key));
+            m = journal.save(write(m.withStamp(applies(DISPOSING, m) ? stamp(m) : null), key));
             verify(m);
         } catch (IOException | RuntimeException e) {
             rollback(m);
@@ -194,10 +205,17 @@ class Steps {
         return finish(m, VERIFIED, key, turn);
     }
 
-    /** The phases from {@code from} on that apply to the item, each journaled before it runs; then checkpoint and done. */
+    /**
+     * The phases from {@code from} on that apply to the item, each journaled before it runs; then checkpoint and done.
+     * A source that changed while it was copied (another program wrote to it) is kept and the result goes.
+     */
     private String finish(Manifest m, Phase from, byte[] key, Disks.Hold turn) throws IOException {
         for (var p : Phase.values()) {
             if (p.compareTo(from) < 0 || !applies(p, m)) continue;
+            if (p == DISPOSING && from == VERIFIED && changed(m)) {
+                rollback(m);
+                throw new IOException("changed during the operation");
+            }
             line(m, p, null, null);
             switch (p) {
                 case DISPOSING -> dispose(m);
@@ -238,15 +256,12 @@ class Steps {
                     hashes = unpacker.unpack(raw, tmp, m.names());
                 }
             }
-            case COPY_PHOTOS -> {
+            case COPY_PHOTOS -> { // streamed: a .cry member decrypted on the way
                 var name = m.names().keySet().iterator().next();
-                byte[] bytes;
-                try (var raw = containers.openRaw(m.container(), src); var in = raw.open(name)) {
-                    bytes = in.readAllBytes();
+                try (var raw = containers.openRaw(m.container(), src); var in = raw.open(name); var out = Files.newOutputStream(tmp, CREATE_NEW)) {
+                    long size = raw.items().stream().filter(i -> i.name().equals(name)).findFirst().orElseThrow().bytes();
+                    hashes = Map.of("", Crypt.plain(in, size, key, Cry.is(name), out));
                 }
-                if (Cry.is(name)) bytes = Cry.decrypt(bytes, key);
-                Files.write(tmp, bytes, CREATE_NEW);
-                hashes = Map.of("", Hashes.of(bytes));
             }
             default -> { // PACK, REPACK, CRYPT: an archive, written in one pass
                 var raw = containers.openRaw(m.container(), src);
@@ -274,16 +289,24 @@ class Steps {
             throw new IOException("The result does not read back as written: " + m.tmp());
     }
 
+    /** The source's files as the item disposes them: a PACK only its own files, else the whole tree or file. */
+    private long stamp(Manifest m) throws IOException { return Trees.stamp(path(m.src()), m.kind() == PACK ? m.names().keySet() : null); }
+
+    /** Whether the source no longer reads as when its copy began: a file added, gone, resized or touched (or unreadable). */
+    private boolean changed(Manifest m) {
+        try {
+            return m.stamp() != null && stamp(m) != m.stamp();
+        } catch (IOException | RuntimeException e) {
+            return true;
+        }
+    }
+
     /** Deletes the partial result, and what a 7z pack spilled beside it ({@code <tmp>.<n>.spill}) when it never got to its cleanup. */
     private void rollback(Manifest m) throws IOException {
-        if (m.tmp() != null && !m.atomic()) {
+        if (m.tmp() != null && !m.atomic()) { // the planner admits no item whose tmp or spills existed before it
             var tmp = path(m.tmp());
             Trees.delete(tmp);
-            var spill = tmp.getFileName() + ".";
-            if (ARCHIVES.contains(m.kind())) try (var spills = Files.newDirectoryStream(tmp.getParent(), f -> // no glob: names hold [ ]
-                    f.getFileName().toString().startsWith(spill) && f.getFileName().toString().endsWith(".spill"))) {
-                for (var f : spills) Trees.delete(f);
-            }
+            if (ARCHIVES.contains(m.kind())) for (var f : Trees.spills(tmp)) Trees.delete(f);
         }
         journal.remove(m.op(), m.item());
     }
@@ -379,19 +402,21 @@ class Steps {
         int left = 0;
         for (var e : m.names().entrySet()) {
             Path from = dir.resolve(e.getKey()), to = dir.resolve(e.getValue()), tmp = Trees.part(to);
-            long hash;
+            long hash, plain;
+            boolean created = false;
             line(m, COPYING, e.getKey(), null);
             try {
-                var out = Crypt.transform(e.getKey(), Files.readAllBytes(from), key, m.encrypt());
-                Files.write(tmp, out, CREATE_NEW);
+                try (var out = Files.newOutputStream(tmp, CREATE_NEW)) { // streamed, never the whole file in memory
+                    created = true;
+                    plain = Crypt.write(from, e.getKey(), out, key, m.encrypt());
+                }
                 Files.setLastModifiedTime(tmp, Files.getLastModifiedTime(from));
                 Trees.sync(tmp);
-                hash = Hashes.of(out);
-                if (Trees.hashes(tmp).get("") != hash) throw new IOException("does not read back as written");
+                hash = Crypt.readBack(tmp, plain, key, m.encrypt()); // an encryption must decrypt back to what was read
                 line(m, DISPOSING, e.getKey(), hash); // verified: recovery checks the hash again before the source goes
                 Trees.retry(() -> Files.delete(from));
             } catch (IOException | RuntimeException x) { // nothing deleted: this file stays as it was
-                Files.deleteIfExists(tmp);
+                if (created) Files.deleteIfExists(tmp); // never a file this attempt did not create
                 if (left++ == 0) first = e.getKey() + ": " + Trees.reason(x);
                 continue;
             }

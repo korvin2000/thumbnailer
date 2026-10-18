@@ -75,6 +75,35 @@ class CryptTest {
         }
     }
 
+    @Test
+    void anEmbeddedNameThatWouldLeaveItsFolderIsRefused() throws IOException {
+        for (var name : List.of("D:stolen.jpg", "..", ".")) {
+            var file = Cry.encrypt(new byte[100], name, KEY);
+            assertThatThrownBy(() -> Crypt.name(file, file.length, KEY)).as(name).isInstanceOf(IOException.class);
+        }
+        var file = Cry.encrypt(new byte[100], "dir\\a.jpg", KEY);
+        assertThat(Crypt.name(file, file.length, KEY)).isEqualTo("a.jpg");
+    }
+
+    @Test
+    void filesAreEncryptedAndDecryptedStreamedAndReadBack() throws IOException {
+        var plain = random(new SplittableRandom(7), 200_000);
+        Path from = Files.write(dir.resolve("a.jpg"), plain), cry = dir.resolve("a.jpg.cry"), back = dir.resolve("back.jpg");
+        long hash;
+        try (var out = Files.newOutputStream(cry)) {
+            hash = Crypt.write(from, "x/a.jpg", out, KEY, true);
+        }
+        assertThat(hash).isEqualTo(Hashes.of(plain));
+        assertThat(Cry.decrypt(Files.readAllBytes(cry), KEY)).isEqualTo(plain);
+        assertThat(Crypt.readBack(cry, hash, KEY, true)).as("the hash of the file as written").isEqualTo(Hashes.of(Files.readAllBytes(cry)));
+        assertThatThrownBy(() -> Crypt.readBack(cry, hash + 1, KEY, true)).hasMessage("does not read back as written");
+        try (var out = Files.newOutputStream(back)) {
+            assertThat(Crypt.write(cry, "a.jpg.cry", out, KEY, false)).isEqualTo(hash);
+        }
+        assertThat(back).hasBinaryContent(plain);
+        assertThat(Crypt.readBack(back, hash, KEY, false)).isEqualTo(hash);
+    }
+
     /** One rewrite as {@code Steps} runs it: names, the view, one pack; the pack's hashes must read back. Returns the renames. */
     private Map<String, String> rewrite(Kind kind, Path src, Path target, boolean encrypt, Op.Format format) throws IOException {
         Map<String, String> names, all = new LinkedHashMap<>();

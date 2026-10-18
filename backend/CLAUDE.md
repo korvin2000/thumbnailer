@@ -96,8 +96,13 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   operation asserts the identity; the scan keeps the path-gone heuristic of `commit(base, …)`). It reads through
   `Containers.openRaw` (unwrapped: ciphertext as is, `Exclusions.NONE`) — the one exception to "containers always
   come wrapped by `Cry`" besides `compareCopies`. A busy album (`AlbumService.quiesce`) answers 503 on `/img`: every
-  `/img` read of an album's files is an `AlbumService.read` (counted; refused once busy) and `quiesce` waits ≤ 5 s for those
-  in flight, gallery passes included.
+  `/img` request (its album and entry lookup included) runs inside an `AlbumService.read` (counted; refused once busy) and `quiesce` waits ≤ 5 s for those
+  in flight, gallery passes included. An operation deletes a source only after its verified result exists and only
+  while the source's `Trees.stamp` (names, sizes, mtimes, in the manifest) is unchanged; it never writes over or
+  deletes a staging file (`.part`, `.spill`) it did not create (the `Planner` refuses items where one exists); a
+  journal it cannot read is never rewritten (`Journal` refuses every write until a read succeeds); containment is
+  checked on real paths too (links resolved); `Reindexer.reindex` is idempotent (a replay maps no names twice) and
+  never indexes `.cry` entries with a key that does not open them.
 - The `root` column is informational: scans, pruning, folders and the root filter select by path prefix
   (`path = dir OR path LIKE 'dir/%' ESCAPE '!'`, index `album_path`); `retainRoots` (on `setSettings` and at every scan
   start) re-roots the albums of a removed root that lie under a configured one and removes the rest.
