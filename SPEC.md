@@ -118,6 +118,8 @@ PLAN items and commit messages. When behaviour changes, update the row here and 
 | O4 | Bulk metadata assignment (model, studio, photographer, genre, tags add/remove, rating, shot date) to a selection or a tree node's albums | ◐ | `bulkUpdate` (phase 0), menus (F4) |
 | O5 | Viewer: sort (name, size, date, dimensions, rating, random), min-size filter, five scale modes, full screen with slideshow, photo favorites and ratings, copy to 1 of 10 targets with skip-identical and auto-rename, metadata view, bio text | ○ | F2, B4 |
 | O6 | Plugin contracts: `Extraction` context for extractors and cover strategies, beans + `ServiceLoader`, later a `:spi` module | ◐ | `metadata/Extraction`, `Plugins.load` (beans + `META-INF/services`, by `order()`, failures skipped), built-ins registered both ways; `MetadataTest`, `CoverSelectorTest`, `ExtractionTest`; `:spi` module: phase 3 |
+| O5 | Viewer: sort (name, size, date, dimensions, rating, random), min-size filter, five scale modes, full screen with slideshow, photo favorites and ratings, copy to 1 of 10 targets with skip-identical and auto-rename, metadata view, bio text | ◐ | UI complete against the mock: `ui/album-viewer.ts`, `ui/viewer/photo-order.ts` (+ spec), `ui/viewer/lightbox.ts`, `ui/viewer/meta-dialog.ts`, `ui/settings/appearance-page.ts` (viewer defaults), keys in `keyboard-page.ts`/README; live `photoMeta`/`albumText` wait for B4, `COPY_PHOTOS` for B2 (the viewer shows the server's error as a toast) |
+| O6 | Plugin contracts: `Extraction` context for extractors and cover strategies, beans + `ServiceLoader`, later a `:spi` module | ○ | B4, phase 3 |
 
 ## N — Platform and non-functional
 

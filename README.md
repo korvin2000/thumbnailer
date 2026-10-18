@@ -92,3 +92,7 @@ open `http://localhost:4200/?live` to talk to a running backend. Frontend unit t
 (also in the folder tree: `→` expand, `←` collapse) · `Shift`+arrows / `Shift`+click extend the selection, `Ctrl`+click or
 `Ctrl+Space` toggle, `Ctrl+A` select all (≤ 500) · `Shift+F10` album menu · `H` hide · `Delete` delete… · `Enter` open ·
 `C` use photo as cover · `Esc` clear the selection, close
+(also in the folder tree: `→` expand, `←` collapse) · `Enter` open · `C` use photo as cover · `Esc` close
+
+Viewer: `F11` full screen · `Space` slideshow · `S` scale mode · `R` reshuffle · `1`–`9` `0` copy to target · `Ctrl+1…0` rate · `F` favorites ·
+`M` metadata · `B` bio · `C` cover · `Ctrl`/`Shift`+click, `Ctrl+A` select photos · `Esc` close
