@@ -1,4 +1,4 @@
-package thumbnailer.metadata;
+package thumbnailer.spi;
 
 import static java.nio.charset.StandardCharsets.UTF_16BE;
 import static java.nio.charset.StandardCharsets.UTF_16LE;
@@ -13,9 +13,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import thumbnailer.album.Entry;
-import thumbnailer.source.AlbumContainer;
-import thumbnailer.source.Kind;
 
 /**
  * Everything an extractor or cover strategy may look at; built once per index by the indexer, shared by both chains.

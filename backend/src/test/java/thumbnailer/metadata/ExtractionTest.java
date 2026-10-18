@@ -9,8 +9,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
-import thumbnailer.album.Entry;
-import thumbnailer.source.AlbumContainer.Item;
+import thumbnailer.spi.AlbumContainer.Item;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Extraction;
 
 class ExtractionTest {
 

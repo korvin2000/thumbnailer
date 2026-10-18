@@ -1,8 +1,9 @@
 package thumbnailer.cover;
 
 import java.util.Optional;
-import thumbnailer.album.Entry;
-import thumbnailer.metadata.Extraction;
+import thumbnailer.spi.CoverStrategy;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Extraction;
 
 /** A class-path provider (test resources' {@code META-INF/services}) after the built-ins: the sample image. */
 public class PluginStrategy implements CoverStrategy {

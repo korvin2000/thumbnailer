@@ -19,6 +19,13 @@ undo. Reference SPEC IDs.
   skips a photo copied before under a numbered name (B3's naming rule, which `Planner` lacked; `FileOpsTest`, live). Checks: `:backend:test` 139
   (1 skipped), three full runs in a row green; `./gradlew build`; live smoke on `backend-demo` (fresh library) of
   catalog_plan §8 phase 2 end to end, every step green (SPEC O2, O3).
+- 2026-10-18 **phase 3 closed**: cross-track integration (`entities.unused`, `preflight.keyVerified`, `reveal { path }`,
+  compare reports sub-folders, foreign `.part` never adopted, tar links refused, results indexed with the operation's
+  key, `setFlags` by the entry read) and the `:spi` split of catalog_plan §5: `thumbnailer.spi` (`AlbumContainer`,
+  `Entry`, `AlbumMeta`, `Kind`, `Extraction`, `MetadataExtractor`, `CoverStrategy`; JDK only; hashing defaults in the
+  backend `Stamps`), the file-name parser as the first plugin `:plugins:names` (ServiceLoader, bundled in the jar;
+  configured genres stay in the backend `GenreExtractor`). Checks: backend 171 + plugin 4 tests, full build, smoke on
+  the jar (plugin loaded under Boot's nested-jar loader: auto entities from file names).
 - 2026-10-18 **catalog phase 3: Codex reviews and fixes on main**: five Codex reviews of the merged code (B1/B2
   `gpt-6-astra` high, B3/B4/UI `gpt-6.1-sol` xhigh; 88 findings, each verified against the code by an Opus reader before
   fixing) and the fixes per track (four backend branches merged, UI fixed in place): recovery replays no longer delete
@@ -100,12 +107,15 @@ undo. Reference SPEC IDs.
   `frontend-demo` preview server (dev UI on :4201 proxied to `backend-demo`). Checks: `ng test` 76 (+31), `ng build` under budget; mock
   pass of every menu and operation flow; live on `backend-demo`: assign, favorites, hide/unhide, preflights (albums, folder, root rename),
   `under`, a list's photos. Not exercised live: running an operation from the UI, merge/credited-as/rename of live entities (B5's smoke).
-- Open after phase 2 (phase 3 = Codex reviews per track, `:spi`, docs): backend requests from F4 — `reveal {path}` for a
-  folder (today the first album below stands in), `catalogChanged {kinds:[LIST]}` after `markPhoto` so list grids and counts follow
-  other clients, `photoMeta` stores flags 1/3 but the reply carries none (the UI refetches `album`); the `.cry` password card still
-  lives on the Folders page (§7.6 wants Operations); stale `thumbnailer.recent.*` picks can fail with `No entity N` (F1 picker).
-  Not verified: a real second volume and the `AtomicMoveNotSupportedException` fallback, an operation run from the UI live,
-  full screen in a real browser.
+- Open after phase 3 (deferred by the review fixes, each small and self-contained): quarantine of journaled src/dst
+  paths against scans while a recovery is pending (Reconciler/ScanService + a key-set trigger that runs `Steps.recover`
+  under the gate); batching `AlbumRepository.entries(Collection)` for the photos page (N+1); COPY_PHOTOS as one pass per
+  archive; streaming `Crypt.view` instead of one whole member in memory; UI re-preflight when the conflict policy
+  changes in the confirm dialog; mock notes for FOLDER_* operations; the `.cry` password card still on the Folders page
+  (§7.6 wants Operations). Owner decision pending: removing an alias that album texts still use — refuse (like rename)
+  or keep today's behaviour (links stay, a later save may spawn a duplicate auto entity). Not verified on a real
+  machine: a second volume and the `AtomicMoveNotSupportedException` fallback, Explorer reveal, full screen in a real
+  browser.
 - 2026-10-18 **B3 packers + cry** (branch `claude/catalog-b3-73a732`): `ops/pack` — `Packers` (zip: images STORED,
   text DEFLATED; 7z through 7-Zip-JBinding, level 0 = Copy non-solid, written at runtime by the vendored native;
   `hashes` by reopening), `FolderUnpacker` (one pass, flatten + name map, containment, read-back), `CryptRewriter`

@@ -95,6 +95,15 @@ npm --prefix frontend start                    # Angular dev server on :4200, pr
 The dev server defaults to an **in-browser mock dataset** (`?mock`), so the UI can be developed without the backend;
 open `http://localhost:4200/?live` to talk to a running backend. Frontend unit tests: `npm --prefix frontend test`.
 
+## Plugins
+
+Metadata extractors and cover strategies are plugins against a small JDK-only contract, the Gradle module `:spi`
+(package `thumbnailer.spi`: `MetadataExtractor`, `CoverStrategy`, the `Extraction` context they read, `AlbumMeta`,
+`Entry`, `AlbumContainer`, `Kind`). A plugin is a jar that depends on `:spi` only and lists its classes in
+`META-INF/services/thumbnailer.spi.MetadataExtractor` (or `.CoverStrategy`); on the class path it joins the built-in
+chain by its `order()`. The sample is [plugins/names](plugins/names/) (the studio-release file-name parser), bundled
+into the jar; recipe in [backend/CLAUDE.md](backend/CLAUDE.md#extending-recipes).
+
 ## Keyboard
 
 `/` search · `E` folders tab · `F` refine tab · `I` details panel · `T` theme · `[` `]` albums per row · arrows move

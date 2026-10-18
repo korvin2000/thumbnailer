@@ -32,16 +32,18 @@ import thumbnailer.catalog.Catalog;
 import thumbnailer.cover.CoverSelector;
 import thumbnailer.image.Limiter;
 import thumbnailer.image.Render;
-import thumbnailer.image.Thumbnailer;
 import thumbnailer.image.Thumbnailer.Thumb;
+import thumbnailer.image.Thumbnailer;
 import thumbnailer.index.Gate;
 import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Disks;
 import thumbnailer.source.Exclusions;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Kind;
 
 /**
  * The single owner of album mutation. Mutations of one album are serialized (striped locks) and re-read the stored

@@ -3,7 +3,7 @@ package thumbnailer.ops.pack;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.spi.AlbumContainer;
 
 /** Extracts archives for unpack (catalog_plan.md §4.5, track B3). */
 public interface Unpacker {

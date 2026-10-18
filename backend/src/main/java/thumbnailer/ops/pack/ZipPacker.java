@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.spi.AlbumContainer;
 
 /**
  * Writes a zip in one pass with the JDK (catalog_plan.md §4.5 {@code auto}): images STORED (already compressed; read

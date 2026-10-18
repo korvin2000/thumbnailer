@@ -1,2 +1,2 @@
 rootProject.name = "thumbnailer"
-include("backend", "frontend")
+include("spi", "plugins:names", "backend", "frontend")

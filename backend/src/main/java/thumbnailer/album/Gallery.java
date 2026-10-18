@@ -17,10 +17,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import thumbnailer.image.Limiter;
 import thumbnailer.image.Render;
-import thumbnailer.image.Thumbnailer;
 import thumbnailer.image.Thumbnailer.Thumb;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.image.Thumbnailer;
 import thumbnailer.source.Disks;
+import thumbnailer.spi.AlbumContainer;
 
 /**
  * The entry thumbnails of an archive that reads only front to back (solid 7z/RAR, a compressed tar): one pass in

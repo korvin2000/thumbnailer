@@ -3,7 +3,7 @@ package thumbnailer.album;
 import java.time.LocalDate;
 import java.util.List;
 import thumbnailer.catalog.EntityKind;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.Kind;
 
 /**
  * Search criteria; a null field means "no filter". {@code entities}: linked to every one; {@code missing}: no link of

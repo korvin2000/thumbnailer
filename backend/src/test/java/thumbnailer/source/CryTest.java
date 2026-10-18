@@ -32,6 +32,7 @@ import net.sf.sevenzipjbinding.ArchiveFormat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import thumbnailer.image.ImageProbe;
+import thumbnailer.spi.AlbumContainer;
 
 /**
  * Against {@code cry-golden.tsv}: files written by xanderView's own {@code Encryptor.encrypt0} with the password
@@ -168,7 +169,7 @@ public class CryTest {
     void storedSignaturesCarryTheKeyStateOfEncryptedMembersOnly() throws IOException {
         Files.write(dir.resolve("a.jpg"), new byte[]{1});
         var plain = Cry.wrap(new DirectoryContainer(dir, Exclusions.NONE), KEY);
-        var sig = plain.signature();
+        var sig = Stamps.signature(plain);
         assertThat(Cry.signature(plain)).isEqualTo(sig + "+");
         assertThat(Cry.matches(sig + "+", plain)).isTrue();
         assertThat(Cry.matches(sig, plain)).as("indexed before .cry support: once more").isFalse();
@@ -176,10 +177,10 @@ public class CryTest {
         Files.write(dir.resolve("b.cry"), Cry.encrypt(new byte[]{2}, "b.jpg", KEY));
         var keyed = Cry.wrap(new DirectoryContainer(dir, Exclusions.NONE), KEY);
         var locked = Cry.wrap(new DirectoryContainer(dir, Exclusions.NONE), null);
-        sig = keyed.signature();
+        sig = Stamps.signature(keyed);
         assertThat(Cry.signature(keyed)).isEqualTo(sig + Cry.tag(KEY));
         assertThat(Cry.signature(locked)).isEqualTo(sig + "+locked");
-        assertThat(keyed.contentId()).as("identity does not depend on the key").isEqualTo(locked.contentId());
+        assertThat(Stamps.contentId(keyed)).as("identity does not depend on the key").isEqualTo(Stamps.contentId(locked));
         assertThat(Cry.matches(sig + Cry.tag(KEY), keyed)).isTrue();
         assertThat(Cry.matches(sig + Cry.tag(KEY), locked)).as("no key now: kept as indexed").isTrue();
         assertThat(Cry.matches(sig + "+locked", keyed)).isFalse();

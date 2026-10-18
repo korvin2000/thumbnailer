@@ -5,7 +5,9 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import thumbnailer.album.AlbumMeta;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Extraction;
+import thumbnailer.spi.MetadataExtractor;
 
 /** The extractor chain (beans and class-path providers, by order); a failing extractor is skipped, never fatal for the album. */
 @Component

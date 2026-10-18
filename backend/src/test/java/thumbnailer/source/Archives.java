@@ -18,6 +18,7 @@ import net.sf.sevenzipjbinding.SevenZip;
 import net.sf.sevenzipjbinding.impl.OutItemFactory;
 import net.sf.sevenzipjbinding.impl.RandomAccessFileOutStream;
 import net.sf.sevenzipjbinding.util.ByteArrayStream;
+import thumbnailer.spi.AlbumContainer;
 
 /** Test archives: GNU tar written by hand (long names as 'L' records), anything 7-Zip writes through 7-Zip-JBinding. */
 public final class Archives {

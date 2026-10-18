@@ -47,25 +47,25 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.util.FileSystemUtils;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumPatch;
-import thumbnailer.album.Entry;
+import thumbnailer.album.AlbumRepository.Tombstone;
+import thumbnailer.album.AlbumRepository;
+import thumbnailer.album.AlbumService;
+import thumbnailer.album.BlobStore;
 import thumbnailer.album.Link;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.Entity;
 import thumbnailer.catalog.EntityKind;
-import thumbnailer.album.AlbumRepository;
-import thumbnailer.album.AlbumRepository.Tombstone;
-import thumbnailer.album.AlbumService;
-import thumbnailer.album.BlobStore;
 import thumbnailer.image.Render;
 import thumbnailer.ops.FileOps;
 import thumbnailer.ops.Op;
 import thumbnailer.settings.Settings;
-import thumbnailer.source.Cry;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
+import thumbnailer.source.Cry;
 import thumbnailer.source.Disks;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Kind;
 
 /** Scanning end to end against real files, an in-memory H2 and the real MVStore. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)

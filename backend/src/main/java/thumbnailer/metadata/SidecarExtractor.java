@@ -10,8 +10,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import thumbnailer.album.AlbumMeta;
-import thumbnailer.source.AlbumContainer.Item;
+import thumbnailer.spi.AlbumContainer.Item;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Extraction;
+import thumbnailer.spi.MetadataExtractor;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 

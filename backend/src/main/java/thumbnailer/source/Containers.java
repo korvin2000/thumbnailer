@@ -5,6 +5,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /** Registry of {@link ContainerFactory} beans. */
 @Component

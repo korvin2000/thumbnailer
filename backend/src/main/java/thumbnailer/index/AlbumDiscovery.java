@@ -14,10 +14,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Exclusions;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /** Finds albums under a root: directories holding at least {@code min-images} images, and archives. */
 @Component

@@ -2,6 +2,8 @@ package thumbnailer.source;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /** SPI: one container format. Implementations are Spring beans; a new archive format (7z, rar) is one more bean. */
 public interface ContainerFactory {

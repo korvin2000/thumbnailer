@@ -32,12 +32,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumRepository;
-import thumbnailer.album.Entry;
 import thumbnailer.settings.Settings;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Kind;
 
 /**
  * What an operation would do, item by item (catalog_plan.md §4.4, §4.5, §4.8): the sources (albums, folders or one

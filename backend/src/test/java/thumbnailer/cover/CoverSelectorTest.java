@@ -4,7 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import thumbnailer.album.Entry;
+import thumbnailer.spi.CoverStrategy;
+import thumbnailer.spi.Entry;
 
 class CoverSelectorTest {
 
@@ -35,7 +36,7 @@ class CoverSelectorTest {
     @Test
     void classPathStrategiesRunAfterTheBuiltInsByOrderAndAFailingOneIsSkipped() {
         CoverStrategy failing = new CoverStrategy() {
-            @Override public java.util.Optional<Entry> pick(thumbnailer.metadata.Extraction ctx) { throw new IllegalStateException("x"); }
+            @Override public java.util.Optional<Entry> pick(thumbnailer.spi.Extraction ctx) { throw new IllegalStateException("x"); }
             @Override public int order() { return 0; }
         };
         var chained = new CoverSelector(List.of(failing));

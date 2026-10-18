@@ -1,4 +1,4 @@
-package thumbnailer.album;
+package thumbnailer.spi;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -45,7 +45,7 @@ public record AlbumMeta(String name, String model, String studio, String photogr
     }
 
     /** What the columns and the wire carry: explicit empties become absent. */
-    AlbumMeta effective() {
+    public AlbumMeta effective() {
         return new AlbumMeta(blankToNull(name), blankToNull(model), blankToNull(studio), blankToNull(photographer),
                 blankToNull(description), date, tags == null ? List.of() : tags, genres == null ? List.of() : genres);
     }

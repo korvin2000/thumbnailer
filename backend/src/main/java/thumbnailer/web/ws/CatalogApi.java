@@ -29,9 +29,9 @@ import thumbnailer.album.AlbumService;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.EntityKind;
 import thumbnailer.settings.SettingsStore;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /**
  * Answers the catalog messages: entities, their cards and curation, bulk album edits, links and copies. A curation that

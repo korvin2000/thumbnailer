@@ -22,9 +22,9 @@ import net.sf.sevenzipjbinding.SevenZip;
 import net.sf.sevenzipjbinding.SevenZipException;
 import net.sf.sevenzipjbinding.impl.OutItemFactory;
 import net.sf.sevenzipjbinding.impl.RandomAccessFileOutStream;
-import thumbnailer.source.AlbumContainer;
-import thumbnailer.source.AlbumContainer.Item;
 import thumbnailer.source.SevenZipContainer;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.AlbumContainer.Item;
 
 /**
  * Writes a 7z through 7-Zip-JBinding: method Copy (level 0), not solid, so the result reads at random like a stored

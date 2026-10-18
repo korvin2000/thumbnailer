@@ -5,7 +5,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import thumbnailer.album.AlbumRepository.Tombstone;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Kind;
 
 /**
  * An album as stored and sent on the wire; {@link #internal()} never leaves the server. {@code hidden}: safe-deleted

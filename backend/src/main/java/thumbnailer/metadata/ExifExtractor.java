@@ -5,9 +5,11 @@ import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.Objects;
 import org.springframework.stereotype.Component;
-import thumbnailer.album.AlbumMeta;
-import thumbnailer.album.Entry;
 import thumbnailer.image.ImageProbe;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Extraction;
+import thumbnailer.spi.MetadataExtractor;
 
 /** Earliest {@code DateTimeOriginal} (already probed per entry) and the first image's {@code Artist} (its head, during indexing). */
 @Component

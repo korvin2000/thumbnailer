@@ -9,6 +9,7 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
+import thumbnailer.spi.AlbumMeta;
 
 /**
  * A user edit: null = unchanged, {@code ""}/{@code []} = explicit empty, {@code cover: ""} unpins the cover. {@code date}:

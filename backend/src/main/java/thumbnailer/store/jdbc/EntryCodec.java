@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import thumbnailer.album.Entry;
+import thumbnailer.spi.Entry;
 
 /**
  * An album's entries as one compact value instead of one row per image (10M images would be 10M rows, each repeating

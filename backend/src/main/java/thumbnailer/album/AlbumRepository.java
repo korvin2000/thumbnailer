@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import thumbnailer.catalog.Resolution;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Entry;
 
 /**
  * Port: album metadata storage. Implementations are thread-safe. Methods taking a directory select by path prefix (the

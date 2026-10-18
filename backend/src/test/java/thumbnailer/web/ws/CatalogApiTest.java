@@ -6,7 +6,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.spi.AlbumContainer;
 
 class CatalogApiTest {
 

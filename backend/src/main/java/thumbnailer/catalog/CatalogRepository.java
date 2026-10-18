@@ -4,8 +4,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import thumbnailer.album.AlbumMeta;
 import thumbnailer.album.Link;
+import thumbnailer.spi.AlbumMeta;
 
 /**
  * Port: the catalog tables (entities, aliases, album and entity links, photo marks, the catalog version). Plain row

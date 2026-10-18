@@ -49,7 +49,7 @@ import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.Kind;
 
 /**
  * File operations end to end on real trees under two roots, with the real index (in-memory H2) and the real packers
@@ -246,7 +246,7 @@ class FileOpsTest {
         try (var files = Files.list(root.resolve("lib/E"))) {
             assertThat(files.map(f -> f.getFileName().toString()).sorted()).containsExactly("a.jpg.cry", "b.jpg.cry", "c.jpg");
         }
-        assertThat(repo.entries(e.id())).extracting(thumbnailer.album.Entry::name).containsExactly("a.jpg.cry", "b.jpg.cry", "c.jpg");
+        assertThat(repo.entries(e.id())).extracting(thumbnailer.spi.Entry::name).containsExactly("a.jpg.cry", "b.jpg.cry", "c.jpg");
         var manifests = settings.dataDir().resolve("ops");
         if (Files.exists(manifests)) try (var left = Files.list(manifests)) {
             assertThat(left).as("no manifest left").isEmpty();
@@ -370,7 +370,7 @@ class FileOpsTest {
         assertThat(run(other).done()).isEqualTo(1);
         assertThat(root.resolve("lib/G/a.jpg.cry")).exists();
         var encrypted = repo.find(g.id()).orElseThrow();
-        assertThat(repo.entries(g.id())).as("read with the operation's key, not the session's").extracting(thumbnailer.album.Entry::name)
+        assertThat(repo.entries(g.id())).as("read with the operation's key, not the session's").extracting(thumbnailer.spi.Entry::name)
                 .containsExactly("a.jpg.cry", "b.jpg.cry");
         assertThat(encrypted).extracting(Album::path, Album::rating, Album::cover, Album::coverPinned).containsExactly(g.path(), 4, "b.jpg.cry", true);
         assertThat(catalog.marks(g.internal().seq())).containsOnlyKeys("a.jpg.cry");

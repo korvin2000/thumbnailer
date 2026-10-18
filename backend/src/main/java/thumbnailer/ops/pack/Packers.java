@@ -10,9 +10,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 import thumbnailer.ops.Hashes;
 import thumbnailer.ops.Op;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /** The {@link Packer}: {@code AUTO} and {@code ZIP} through {@link ZipPacker}, {@code SEVEN_ZIP} through {@link SevenZipPacker}. */
 @Component

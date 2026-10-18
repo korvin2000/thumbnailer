@@ -1,6 +1,8 @@
 package thumbnailer.metadata;
 
-import thumbnailer.album.AlbumMeta;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Extraction;
+import thumbnailer.spi.MetadataExtractor;
 
 /** A provider that cannot be constructed: skipped with a warning. */
 public class BrokenExtractor implements MetadataExtractor {

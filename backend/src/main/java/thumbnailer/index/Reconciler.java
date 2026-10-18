@@ -18,6 +18,7 @@ import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
 import thumbnailer.source.Disks;
 import thumbnailer.source.Exclusions;
+import thumbnailer.source.Stamps;
 
 /**
  * Compares discovered containers with the stored albums: same path and signature = unchanged; same path, new
@@ -78,7 +79,7 @@ class Reconciler {
                     return false;
                 }
                 // Only changed albums load in full; a moved one is relocated by the commit below only.
-                var base = (stamp != null ? repo.find(stamp.id()) : moved(container.contentId(), path)).orElse(null);
+                var base = (stamp != null ? repo.find(stamp.id()) : moved(Stamps.contentId(container), path)).orElse(null);
                 if (base != null) seen.add(base.id());
                 var indexed = indexer.index(container, root, path, found.kind(), base, turn, lane, Map.of());
                 if (indexed.isEmpty() || cancelled.getAsBoolean()) return false; // cancelled workers publish nothing

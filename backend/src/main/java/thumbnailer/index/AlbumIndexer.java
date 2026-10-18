@@ -26,20 +26,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import thumbnailer.album.Album;
-import thumbnailer.album.AlbumMeta;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
-import thumbnailer.album.Entry;
 import thumbnailer.cover.CoverSelector;
 import thumbnailer.image.Header;
 import thumbnailer.image.ImageProbe;
 import thumbnailer.image.Thumbnailer.Thumb;
-import thumbnailer.metadata.Extraction;
 import thumbnailer.metadata.Metadata;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Cry;
 import thumbnailer.source.Disks;
-import thumbnailer.source.Kind;
+import thumbnailer.source.Stamps;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Extraction;
+import thumbnailer.spi.Kind;
 
 /**
  * Builds an album from an open container: entry probes and their metadata flags, the {@link Extraction} context (text
@@ -216,7 +217,7 @@ class AlbumIndexer {
                 entries.stream().mapToInt(Entry::width).max().orElse(0),
                 entries.stream().mapToInt(Entry::height).max().orElse(0), shotDate,
                 Instant.ofEpochMilli(mtime.getMax()), Instant.now(), null, null, null, null, List.of(), 0, false, bio,
-                List.of(), List.of(), 0, new Album.Internal(container.contentId(), Cry.signature(container), extracted, AlbumMeta.EMPTY, 0));
+                List.of(), List.of(), 0, new Album.Internal(Stamps.contentId(container), Cry.signature(container), extracted, AlbumMeta.EMPTY, 0));
         return Optional.of(new Indexed(album.withEdits(AlbumMeta.EMPTY), List.copyOf(entries), thumb));
     }
 

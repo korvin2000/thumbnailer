@@ -40,11 +40,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import thumbnailer.ops.Hashes;
 import thumbnailer.ops.Op;
-import thumbnailer.source.AlbumContainer;
-import thumbnailer.source.AlbumContainer.Item;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.AlbumContainer.Item;
+import thumbnailer.spi.Kind;
 
 class PackersTest {
 

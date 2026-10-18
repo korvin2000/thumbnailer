@@ -18,8 +18,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Cry;
+import thumbnailer.spi.AlbumContainer;
 
 /**
  * Encrypting and decrypting with an operation's own key through {@link Cry}'s format code (its container wrap uses the

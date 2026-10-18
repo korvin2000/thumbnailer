@@ -15,6 +15,8 @@ repositories { mavenCentral() }
 configurations.all { exclude(group = "org.springframework.boot", module = "spring-boot-starter-tomcat") }
 
 dependencies {
+    implementation(project(":spi")) // the plugin contract (thumbnailer.spi)
+    runtimeOnly(project(":plugins:names")) // sample plugin, found by ServiceLoader like any jar on the class path
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-websocket")
     implementation("org.springframework.boot:spring-boot-web-server") // the server SPI, otherwise only via the Tomcat starter

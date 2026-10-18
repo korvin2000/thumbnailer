@@ -8,7 +8,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import thumbnailer.album.Entry;
+import thumbnailer.spi.Entry;
 
 class EntryCodecTest {
 

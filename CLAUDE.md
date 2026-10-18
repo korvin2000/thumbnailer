@@ -30,6 +30,7 @@ Angular 22 UI, a WebSocket data channel and HTTP image endpoints; albums are dir
 |---|---|
 | full build (UI + backend + tests → `backend/build/libs/thumbnailer-0.1.0.jar`) | `./gradlew build` |
 | backend tests (skip UI build) | `./gradlew -PskipFrontend :backend:test` |
+| plugin tests (sample `:plugins:names`) | `./gradlew :plugins:names:test` |
 | one backend test class / method | `./gradlew -PskipFrontend :backend:test --tests 'thumbnailer.cover.CoverSelectorTest'` (append `.method`) |
 | run backend on :8080 | `./gradlew -PskipFrontend :backend:bootRun` (add `--args='--thumbnailer.demo=true'` for sample albums) |
 | run packaged jar | `java --add-modules jdk.incubator.vector -jar backend/build/libs/thumbnailer-0.1.0.jar [--thumbnailer.demo=true]` (without the module the resampler runs scalar) |
@@ -50,7 +51,8 @@ tests are plain unit tests. No linter is configured.
 ## Architecture in five lines
 
 - Backend = framework-free domain (`album`: records + ports `AlbumRepository`, `BlobStore`) with adapters at the edge
-  (`store/jdbc` H2, `store/tupl` TuplDB covers, `store/mvstore` alternative), SPIs for containers, metadata extractors and cover strategies.
+  (`store/jdbc` H2, `store/tupl` TuplDB covers, `store/mvstore` alternative), SPIs for containers, metadata extractors and cover strategies;
+  the plugin contract types are the JDK-only module `:spi` (`thumbnailer.spi`), the sample plugin `:plugins:names` is bundled (`runtimeOnly`).
 - Scan pipeline: `ScanService` → `AlbumDiscovery` → `Reconciler` (unchanged/changed/moved/new/removed) →
   `AlbumIndexer` → `AlbumService.commit` → Spring event → `AlbumSocket` broadcast.
 - Transport: WS `/ws` JSON messages `{type, id?}` (sealed `Request`/`Event`); HTTP `/img/{id}/…?v={revision}` for bytes.

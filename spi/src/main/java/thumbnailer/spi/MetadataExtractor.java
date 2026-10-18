@@ -1,14 +1,13 @@
-package thumbnailer.metadata;
+package thumbnailer.spi;
 
 import java.io.IOException;
 import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.util.regex.Pattern;
-import thumbnailer.album.AlbumMeta;
 
 /**
  * SPI: a partial {@link AlbumMeta} read from an album's {@link Extraction}. Implementations are Spring beans or
- * {@code META-INF/services} providers (public, no-argument constructor); {@link Metadata} runs them by {@link #order}
+ * {@code META-INF/services} providers (public, no-argument constructor); {@code Metadata} runs them by {@link #order}
  * and merges them so that an earlier extractor's non-blank field wins and tags and genres are unioned.
  */
 public interface MetadataExtractor {

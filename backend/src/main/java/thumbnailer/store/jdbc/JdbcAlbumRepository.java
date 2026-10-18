@@ -34,17 +34,17 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 import thumbnailer.album.Album;
-import thumbnailer.album.AlbumMeta;
 import thumbnailer.album.AlbumQuery;
 import thumbnailer.album.AlbumRepository;
-import thumbnailer.album.Entry;
 import thumbnailer.album.Facets;
 import thumbnailer.album.Link;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.EntityKind;
 import thumbnailer.catalog.Resolution;
 import thumbnailer.source.Containers;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Kind;
 import tools.jackson.databind.json.JsonMapper;
 
 /**

@@ -1,7 +1,9 @@
 package thumbnailer.metadata;
 
 import java.util.List;
-import thumbnailer.album.AlbumMeta;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Extraction;
+import thumbnailer.spi.MetadataExtractor;
 
 /** A class-path provider (test resources' {@code META-INF/services}): tags albums named {@code plugin-*}, nothing else. */
 public class PluginExtractor implements MetadataExtractor {

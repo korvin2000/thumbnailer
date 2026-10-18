@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Map;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumRepository;
-import thumbnailer.album.Entry;
 import thumbnailer.album.Facets;
 import thumbnailer.catalog.Card;
 import thumbnailer.catalog.Entity;
@@ -23,6 +22,7 @@ import thumbnailer.ops.OpResult;
 import thumbnailer.ops.Preflight;
 import thumbnailer.settings.Settings;
 import thumbnailer.source.Disks;
+import thumbnailer.spi.Entry;
 
 /** Server to client messages: replies (carrying the request {@code id}) and broadcasts. */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")

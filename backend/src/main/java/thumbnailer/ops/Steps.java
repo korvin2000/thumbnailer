@@ -48,11 +48,11 @@ import thumbnailer.ops.pack.Packer;
 import thumbnailer.ops.pack.Unpacker;
 import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
 import thumbnailer.source.Disks;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /**
  * One item through its journaled phases (catalog_plan.md §4.7): {@code copying} (the result written to {@code tmp},

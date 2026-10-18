@@ -21,10 +21,12 @@ symbols, so open code only after the map points to it.
 
 - **Backend** (Java 27, Spring Boot 4.1 on Undertow, `:backend`) → [docs/map/backend.md](docs/map/backend.md) · rules [backend/CLAUDE.md](backend/CLAUDE.md)
   `album` (domain + ports + AlbumService) · `source` (dirs/zips) · `image` · `metadata` · `cover` · `index` (scan) ·
-  `settings` · `store` (H2 JDBC, MVStore) · `web` (WS `/ws`, HTTP `/img`) · `demo`
+  `settings` · `store` (H2 JDBC, MVStore) · `web` (WS `/ws`, HTTP `/img`) · `demo`; modules `:spi` (plugin contract, `thumbnailer.spi`) and
+  `:plugins:names` (sample plugin) in the same map
 - **Frontend** (Angular 22, `:frontend`) → [docs/map/frontend.md](docs/map/frontend.md) · rules [frontend/CLAUDE.md](frontend/CLAUDE.md)
   `core/` (model, gateways, store, layout engine, prefs) · `ui/` (components) · `styles/` (tokens, base)
 - **Build/tooling**: [settings.gradle.kts](settings.gradle.kts) · [backend/build.gradle.kts](backend/build.gradle.kts) (bundles UI into `static/`) ·
+  [spi/build.gradle.kts](spi/build.gradle.kts) · [plugins/names/build.gradle.kts](plugins/names/build.gradle.kts) ·
   [frontend/build.gradle.kts](frontend/build.gradle.kts) (npm glue) · [.claude/launch.json](.claude/launch.json) (preview servers `frontend`, `backend`, `backend-demo`) ·
   [.claude/skills/](.claude/skills/) (`compact-code`, `god-style`, `java-sdk-design`) · [.claude/rules/](.claude/rules/) (path-scoped agent rules:
   `docs-sync`, `wire-contract`) · [.claude/settings.json](.claude/settings.json) → Stop hook [.claude/hooks/docs-sync-check.mjs](.claude/hooks/docs-sync-check.mjs)
@@ -44,8 +46,8 @@ symbols, so open code only after the map points to it.
 | user edit behaviour | B `album/AlbumService.patch` · B `album/AlbumMeta.over` · F `core/store.ts` `patch` · F `ui/details-panel.ts` |
 | archive / container kind | a format 7-Zip reads: B `source/SevenZipContainer.EXTENSIONS`; else B `source/` new `ContainerFactory` `@Component` (see `ZipContainer.Factory`) · B `source/Kind` · F `Kind` in `core/model.ts` |
 | image codec / render pipeline | B `image/Thumbnailer` (chain, `GAP`) · B `image/TurboJpeg` · B `image/WebP` · B `image/Resampler` (measure with [scalebench](scalebench/README.md)) · B `image/Header` + `ImageProbe` (probes) · natives: [docs/natives.md](docs/natives.md) |
-| metadata source | B `metadata/` new `MetadataExtractor` `@Component @Order(n)` |
-| cover rule | B `cover/CoverStrategy` constant + `CoverSelector` chain |
+| plugin / metadata extractor | contract `spi/` `thumbnailer.spi.MetadataExtractor` (`Extraction` in, partial `AlbumMeta` out, `order()`); a bundled plugin = a subproject like `plugins/names` (depends on `:spi` only, `META-INF/services/thumbnailer.spi.MetadataExtractor`, backend `runtimeOnly`); a Spring-configured one = B `metadata/` `@Component` (see `GenreExtractor`); chain B `metadata/Metadata` + `Plugins.load` · test `metadata/MetadataTest` · recipe [backend/CLAUDE.md](backend/CLAUDE.md#extending-recipes) |
+| cover rule | `spi/` `thumbnailer.spi.CoverStrategy` impl: B `cover/` `@Component` (see `NameHint`) or a plugin provider · B `cover/CoverSelector` chain |
 | what counts as album / identity / removal | B `index/AlbumDiscovery` · B `index/Reconciler` · B `index/ScanService` (scopes) · B `album/AlbumService.commit`/`retainRoots` (tombstones, re-rooting) · test `index/ScanTest` |
 | thumbnail size/format | B `image/Render` (spec; `epoch()` invalidates stored covers) · B `image/Thumbnailer` · B `image/Resampler` · `settings.json` `covers`/`thumbs` (F `ui/settings/thumbnails-page.ts`) · B `AlbumService` limiters (`coverSlots`, `thumbSlots`) |
 | libraries / restart / optimize | B `settings/Libraries` · B `settings/LibraryLocator` · B `ThumbnailerApplication.restart` · B `web/ws/Library` · B `store/*` `stats`/`compact` · F `ui/settings/library-page.ts` · ARCH §2 `settings`, §3 |

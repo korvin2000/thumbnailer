@@ -67,7 +67,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Identity: `signature` (all files incl. sidecars, with mtime) decides re-index; `contentId` (images, name + bytes)
   decides moves. A move needs the old path to be gone. Stored signatures end in the `.cry` key state (`Cry.signature`,
   compared with `Cry.matches`, which accepts the two valid forms without listing an archive): store and compare through
-  `Cry`, never the raw `container.signature()`; a missing key (session-only, `SettingsStore`) never re-indexes a keyed album. Containers always come wrapped by `Cry` (`Containers.open`); arrays a
+  `Cry`, never the raw `container.signature()` (null unless the container has its own stamp; hash through `Stamps`); a missing key (session-only, `SettingsStore`) never re-indexes a keyed album. Containers always come wrapped by `Cry` (`Containers.open`); arrays a
   container hands out (`head`, `heads`) are never written, 7-Zip keeps them as its head cache.
 - Removal (`Reconciler.Pass.prune`) only for scopes (a root or a folder below one) whose walk completed without cancel
   or errors, and only of albums at or below the scope; an album is marked seen before indexing, so failures never
@@ -137,9 +137,15 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Container kind: a format 7-Zip reads is one more entry in `SevenZipContainer.EXTENSIONS`; anything else is a
   `ContainerFactory` `@Component` (copy `ZipContainer.Factory`), add to `Kind`, mirror `Kind` in
   `frontend/src/app/core/model.ts`.
-- Metadata source: `MetadataExtractor` `@Component` with `order()`, returning a partial `AlbumMeta` from the `Extraction`
-  context; a plugin jar instead registers a public no-argument class in `META-INF/services/thumbnailer.metadata.MetadataExtractor`.
-- Cover rule: `CoverStrategy` `@Component` with `order()` (or `META-INF/services/thumbnailer.cover.CoverStrategy`).
+- Metadata source: implement `thumbnailer.spi.MetadataExtractor` (`order()`, a partial `AlbumMeta` from the `Extraction`
+  context). Needs Spring config → a `@Component` in `metadata/` (see `GenreExtractor`). Otherwise a plugin: copy
+  `plugins/names` (a `java-library` subproject depending on `:spi` only, no Spring; a public no-argument class listed in
+  `src/main/resources/META-INF/services/thumbnailer.spi.MetadataExtractor`), `include` it in `settings.gradle.kts` and
+  bundle it with `runtimeOnly(project(":plugins:<name>"))` in `backend/build.gradle.kts`; `Plugins.load` finds it.
+- Cover rule: `thumbnailer.spi.CoverStrategy` `@Component` in `cover/` with `order()`, or a plugin provider
+  (`META-INF/services/thumbnailer.spi.CoverStrategy`).
+- SPI types (`spi/`, `thumbnailer.spi`) depend on the JDK only: backend helpers stay in the backend (`source/Stamps`
+  hashes a container's listing; `AlbumContainer.signature()`/`contentId()` are only its own stamp or null).
 - Storage engine: new package under `store/`, implement the port, `@ConditionalOnProperty` on a new value.
 - WS message: record in `web/ws/Request` or `Event` with `@JsonTypeName`, a `case` in `AlbumSocket.handle`, then the
   frontend mirror (see `.claude/rules/wire-contract.md`).

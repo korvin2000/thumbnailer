@@ -3,8 +3,9 @@ package thumbnailer.cover;
 import java.util.Comparator;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
-import thumbnailer.album.Entry;
-import thumbnailer.metadata.Extraction;
+import thumbnailer.spi.CoverStrategy;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Extraction;
 
 /** The smallest file: usually a prepared cover or a preview, and the cheapest decode. */
 @Component

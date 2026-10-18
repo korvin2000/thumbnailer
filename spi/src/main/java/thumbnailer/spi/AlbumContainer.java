@@ -1,24 +1,16 @@
-package thumbnailer.source;
+package thumbnailer.spi;
 
-import com.dynatrace.hash4j.hashing.HashStream64;
-import com.dynatrace.hash4j.hashing.Hashing;
 import java.io.Closeable;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 /** An opened album (a directory or an archive): lists its files and streams their bytes. */
@@ -108,43 +100,24 @@ public interface AlbumContainer extends Closeable {
      */
     default boolean cpuBound() { return false; }
 
-    /** The key state of this container's encrypted members (see {@link Cry}): stored with the signature of an album holding any. */
+    /** The key state of this container's encrypted members (see the backend's {@code Cry}): stored with the signature of an album holding any. */
     default String keyTag() { return ""; }
 
     default List<Item> images() { return items().stream().filter(i -> isImage(i.name())).toList(); }
 
-    /** Changes whenever any file is added, removed, resized or touched, sidecars included. */
-    default String signature() { return hash(items(), (h, i) -> h.putString(i.name()).putLong(i.bytes()).putLong(i.mtime())); }
-
-    /** Survives moves and copies: depends on image names and sizes only. */
-    default String contentId() { return hash(images(), (h, i) -> h.putString(i.name()).putLong(i.bytes())); }
-
     /**
-     * An archive's signature without listing it: its size and mtime (any change rewrites the file) and the exclusion
-     * globs, so a rescan of an unchanged archive costs one {@code stat}.
+     * A signature the container knows cheaply (an archive: one {@code stat}), or null. Either way the backend's
+     * {@code Stamps.signature} is what changes whenever any file is added, removed, resized or touched, sidecars included.
      */
-    static String archiveSignature(Path file, Exclusions exclusions) {
-        try {
-            var a = Files.readAttributes(file, BasicFileAttributes.class);
-            var h = Hashing.wyhashFinal4().hashStream().putLong(a.size()).putLong(a.lastModifiedTime().toMillis());
-            exclusions.patterns().forEach(p -> h.putString(p.pattern()));
-            return HexFormat.of().toHexDigits(h.getAsLong());
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
+    default String signature() { return null; }
+
+    /** The identity the container stands for (a wrapper: its source's), or null: the backend's {@code Stamps.contentId}. */
+    default String contentId() { return null; }
 
     static boolean isImage(String name) { return IMAGE_EXTENSIONS.contains(extension(name)); }
 
     static String extension(String name) {
         int dot = name.lastIndexOf('.');
         return dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
-    }
-
-    /** 64-bit wyhash (final 4) as 16 hex digits; {@code putString} is length-prefixed, so fields never run together. */
-    private static String hash(List<Item> items, BiConsumer<HashStream64, Item> put) {
-        var h = Hashing.wyhashFinal4().hashStream();
-        items.forEach(i -> put.accept(h, i));
-        return HexFormat.of().toHexDigits(h.getAsLong());
     }
 }

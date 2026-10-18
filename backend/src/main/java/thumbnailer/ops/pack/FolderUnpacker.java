@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.spi.AlbumContainer;
 
 /**
  * The {@link Unpacker}: one {@link AlbumContainer#extract} pass into the caller's {@code <name>.part/} directory, created

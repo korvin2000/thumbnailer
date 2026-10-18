@@ -10,6 +10,7 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.CatalogRepository;
+import thumbnailer.spi.Entry;
 
 class AlbumServiceTest {
 

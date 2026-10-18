@@ -38,6 +38,8 @@ import net.sf.sevenzipjbinding.SevenZipException;
 import net.sf.sevenzipjbinding.impl.RandomAccessFileInStream;
 import org.springframework.stereotype.Component;
 import thumbnailer.natives.LibraryLoader;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /**
  * Every file of an archive that 7-Zip reads (RAR, 7z, tar, ISO, and a tar inside gzip, bzip2, xz or Z) through the
@@ -85,7 +87,7 @@ public final class SevenZipContainer implements AlbumContainer {
     /** Memoized: an archive replaced while it is read must not lend its new stat to the old content. */
     @Override
     public String signature() {
-        if (signature == null) signature = AlbumContainer.archiveSignature(file, exclusions);
+        if (signature == null) signature = Stamps.archiveSignature(file, exclusions);
         return signature;
     }
 

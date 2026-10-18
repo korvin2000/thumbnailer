@@ -3,8 +3,9 @@ package thumbnailer.cover;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
-import thumbnailer.album.Entry;
-import thumbnailer.metadata.Extraction;
+import thumbnailer.spi.CoverStrategy;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Extraction;
 
 /** A file name announcing a cover: cover, poster, logo, or a {@code _cv} suffix. */
 @Component

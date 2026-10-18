@@ -21,14 +21,12 @@ import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import thumbnailer.album.Album;
-import thumbnailer.album.AlbumMeta;
-import thumbnailer.album.AlbumQuery;
 import thumbnailer.album.AlbumQuery.Sort;
+import thumbnailer.album.AlbumQuery;
 import thumbnailer.album.AlbumRepository.Folder;
 import thumbnailer.album.AlbumRepository.Save;
 import thumbnailer.album.AlbumRepository.Stats;
 import thumbnailer.album.AlbumRepository.Tombstone;
-import thumbnailer.album.Entry;
 import thumbnailer.album.Facets;
 import thumbnailer.album.Link;
 import thumbnailer.catalog.Catalog;
@@ -37,7 +35,9 @@ import thumbnailer.catalog.EntityKind;
 import thumbnailer.catalog.EntitySave;
 import thumbnailer.catalog.Resolution;
 import thumbnailer.source.Containers;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Kind;
 import tools.jackson.databind.json.JsonMapper;
 
 class JdbcAlbumRepositoryTest {

@@ -27,7 +27,6 @@ import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
 import thumbnailer.album.Album;
-import thumbnailer.album.AlbumMeta;
 import thumbnailer.album.AlbumPatch;
 import thumbnailer.album.AlbumQuery;
 import thumbnailer.album.AlbumRepository.Save;
@@ -41,7 +40,8 @@ import thumbnailer.catalog.EntityKind;
 import thumbnailer.catalog.EntityLink;
 import thumbnailer.catalog.EntitySave;
 import thumbnailer.catalog.PhotoMark;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Kind;
 import tools.jackson.databind.json.JsonMapper;
 
 /** The catalog's rules (catalog_plan.md §2.5) over the real adapters: resolution, curation, derived facts, backfill. */

@@ -29,12 +29,13 @@ import thumbnailer.album.AlbumService;
 import thumbnailer.image.ImageProbe;
 import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Disks;
 import thumbnailer.source.Exclusions;
-import thumbnailer.source.Kind;
+import thumbnailer.source.Stamps;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /** The reads indexing makes: a solid archive's one pass also holds what the built-in extractors read. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -93,8 +94,8 @@ class AlbumIndexerTest {
         @Override public boolean sequential() { return in.sequential(); }
         @Override public boolean cpuBound() { return in.cpuBound(); }
         @Override public String keyTag() { return in.keyTag(); }
-        @Override public String signature() { return in.signature(); }
-        @Override public String contentId() { return in.contentId(); }
+        @Override public String signature() { return Stamps.signature(in); }
+        @Override public String contentId() { return Stamps.contentId(in); }
         @Override public MemorySegment read(String name, Arena arena) throws IOException { return in.read(name, arena); }
         @Override public void close() throws IOException { in.close(); }
 

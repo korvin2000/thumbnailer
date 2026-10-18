@@ -17,11 +17,11 @@ import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import thumbnailer.ops.pack.Packers;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /**
  * An archive rewritten encrypted, then decrypted, through {@link Crypt#view} and the real packers (zip and 7z): the

@@ -24,6 +24,7 @@ import net.sf.sevenzipjbinding.ArchiveFormat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import thumbnailer.source.Archives.TarEntry;
+import thumbnailer.spi.AlbumContainer;
 
 class SevenZipContainerTest {
 
@@ -78,11 +79,11 @@ class SevenZipContainerTest {
         Archives.sevenZip(file, ArchiveFormat.SEVEN_ZIP, files, true);
         var exclusions = Exclusions.of(List.of("*/raw/*"));
         try (var c = new SevenZipContainer(file, exclusions)) {
-            String before = c.signature();
+            String before = Stamps.signature(c);
             assertThat(c.items()).extracting(AlbumContainer.Item::name).doesNotContain("raw/c.jpg");
-            assertThat(new SevenZipContainer(file, Exclusions.NONE).signature()).as("globs count").isNotEqualTo(before);
+            assertThat(Stamps.signature(new SevenZipContainer(file, Exclusions.NONE))).as("globs count").isNotEqualTo(before);
             Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(1_000_000));
-            assertThat(new SevenZipContainer(file, exclusions).signature()).as("touched").isNotEqualTo(before);
+            assertThat(Stamps.signature(new SevenZipContainer(file, exclusions))).as("touched").isNotEqualTo(before);
         }
         assertThat(new SevenZipContainer.Factory().accepts(Path.of("x.tar.gz"))).isTrue();
         assertThat(new SevenZipContainer.Factory().accepts(Path.of("x.zip"))).isFalse();

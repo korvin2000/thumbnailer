@@ -31,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import thumbnailer.settings.SettingsStore;
+import thumbnailer.spi.AlbumContainer;
 
 /**
  * xanderView's encrypted images, {@code .cry}, read byte for byte as that program writes them: big-endian
@@ -196,7 +197,7 @@ public class Cry {
 
     /** The stored form of a signature: the container's, plus the key state of its {@code .cry} members or "+" if it has none. */
     public static String signature(AlbumContainer c) {
-        return c.signature() + (c.items().stream().anyMatch(i -> is(i.name())) ? c.keyTag() : "+");
+        return Stamps.signature(c) + (c.items().stream().anyMatch(i -> is(i.name())) ? c.keyTag() : "+");
     }
 
     /**
@@ -206,7 +207,7 @@ public class Cry {
      * support re-indexes.
      */
     public static boolean matches(String stored, AlbumContainer c) {
-        var sig = c.signature();
+        var sig = Stamps.signature(c);
         var tag = stored.startsWith(sig) ? stored.substring(sig.length()) : "";
         return tag.equals("+") || tag.equals(c.keyTag()) || c.keyTag().equals(LOCKED) && tag.matches("\\+\\p{XDigit}{8}");
     }
@@ -227,8 +228,8 @@ public class Cry {
 
         @Override public String name() { return in.name(); }
         @Override public List<Item> items() { return in.items(); }
-        @Override public String signature() { return in.signature(); }
-        @Override public String contentId() { return in.contentId(); }
+        @Override public String signature() { return Stamps.signature(in); }
+        @Override public String contentId() { return Stamps.contentId(in); }
         @Override public boolean sequential() { return in.sequential(); }
         @Override public boolean cpuBound() { return in.cpuBound(); }
         @Override public String keyTag() { return tag; }

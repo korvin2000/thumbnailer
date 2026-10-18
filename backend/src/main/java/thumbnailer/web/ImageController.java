@@ -22,12 +22,12 @@ import org.springframework.web.server.ResponseStatusException;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
-import thumbnailer.album.Entry;
 import thumbnailer.image.Thumbnailer.Thumb;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
 import thumbnailer.source.Exclusions;
+import thumbnailer.spi.Entry;
 
 /**
  * Image bytes; URLs carry {@code ?v=revision} (and {@code &r=render epoch} for covers and thumbnails), so responses are

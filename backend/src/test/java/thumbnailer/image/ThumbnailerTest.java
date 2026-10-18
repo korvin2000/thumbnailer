@@ -13,7 +13,7 @@ import java.io.InputStream;
 import java.util.List;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.spi.AlbumContainer;
 
 class ThumbnailerTest {
 

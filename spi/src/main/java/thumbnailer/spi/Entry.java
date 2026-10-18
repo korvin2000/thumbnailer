@@ -1,4 +1,4 @@
-package thumbnailer.album;
+package thumbnailer.spi;
 
 import java.time.LocalDateTime;
 

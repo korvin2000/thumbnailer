@@ -14,10 +14,12 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import org.springframework.stereotype.Component;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /**
  * Every file of a zip archive, nested folders included (names keep their '/' paths). Opened and listed on first use
- * only: a rescan of an unchanged archive reads just its {@link AlbumContainer#archiveSignature stat}.
+ * only: a rescan of an unchanged archive reads just its {@link Stamps#archiveSignature stat}.
  */
 final class ZipContainer implements AlbumContainer {
 
@@ -41,7 +43,7 @@ final class ZipContainer implements AlbumContainer {
     /** Memoized before the first read: a zip replaced meanwhile must not lend its new stat to the old content. */
     @Override
     public String signature() {
-        if (signature == null) signature = AlbumContainer.archiveSignature(file, exclusions);
+        if (signature == null) signature = Stamps.archiveSignature(file, exclusions);
         return signature;
     }
 

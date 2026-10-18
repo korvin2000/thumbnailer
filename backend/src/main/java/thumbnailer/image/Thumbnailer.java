@@ -8,7 +8,7 @@ import java.lang.foreign.ValueLayout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.spi.AlbumContainer;
 
 /**
  * Renders thumbnails as a {@link Render} spec says: longer side {@code size}, proportions kept, never upscaled, WebP or

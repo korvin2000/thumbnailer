@@ -26,7 +26,6 @@ import thumbnailer.album.Album;
 import thumbnailer.album.AlbumPatch;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
-import thumbnailer.album.Entry;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.EntityKind;
 import thumbnailer.catalog.EntitySave;
@@ -35,6 +34,7 @@ import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Archives;
 import thumbnailer.source.Containers;
+import thumbnailer.spi.Entry;
 
 /** Indexing feeds the extraction context (texts, bio, flags); the photo messages answer from the files and the catalog. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)

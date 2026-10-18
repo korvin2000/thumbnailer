@@ -26,9 +26,8 @@ import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
 import thumbnailer.album.Album;
-import thumbnailer.album.AlbumMeta;
-import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumRepository.Save;
+import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.Link;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.CatalogEvent;
@@ -39,7 +38,8 @@ import thumbnailer.catalog.EntityLink;
 import thumbnailer.catalog.EntitySave;
 import thumbnailer.catalog.PhotoMark;
 import thumbnailer.catalog.Resolution;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.AlbumMeta;
+import thumbnailer.spi.Kind;
 import tools.jackson.databind.json.JsonMapper;
 
 /** The catalog adapter and, over it, the {@link Catalog}'s rules: one H2 database with the album tables. */

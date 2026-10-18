@@ -18,6 +18,8 @@ import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import org.springframework.stereotype.Component;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Kind;
 
 /** The files directly inside a directory; subdirectories are albums of their own. Listed on first use only. */
 final class DirectoryContainer implements AlbumContainer {

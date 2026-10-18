@@ -25,7 +25,6 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
-import thumbnailer.album.AlbumMeta;
 import thumbnailer.album.Link;
 import thumbnailer.catalog.Card;
 import thumbnailer.catalog.Catalog;
@@ -35,6 +34,7 @@ import thumbnailer.catalog.EntityKind;
 import thumbnailer.catalog.EntityLink;
 import thumbnailer.catalog.PhotoMark;
 import thumbnailer.catalog.Resolution;
+import thumbnailer.spi.AlbumMeta;
 import tools.jackson.databind.json.JsonMapper;
 
 /** The catalog tables of {@code schema.sql}, next to the albums in the same H2 database (counts and filters join them). */

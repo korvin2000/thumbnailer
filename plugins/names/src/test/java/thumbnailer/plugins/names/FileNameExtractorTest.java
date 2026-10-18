@@ -1,4 +1,4 @@
-package thumbnailer.metadata;
+package thumbnailer.plugins.names;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

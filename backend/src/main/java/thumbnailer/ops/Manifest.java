@@ -3,7 +3,7 @@ package thumbnailer.ops;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.Kind;
 
 /**
  * What one item of an operation must preserve (catalog_plan.md §4.7), written before its first phase: canonical

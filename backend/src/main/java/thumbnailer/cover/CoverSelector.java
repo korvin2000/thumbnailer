@@ -7,9 +7,10 @@ import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import thumbnailer.album.Entry;
-import thumbnailer.metadata.Extraction;
 import thumbnailer.metadata.Plugins;
+import thumbnailer.spi.CoverStrategy;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Extraction;
 
 /**
  * Orders cover candidates: a pinned cover that still exists, then each strategy's pick (beans and class-path providers,

@@ -18,7 +18,7 @@ import java.time.format.DateTimeParseException;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.spi.AlbumContainer;
 
 /**
  * Image facts without a decode, from the first {@link #HEAD} bytes of a file: JPEG, TIFF, PNG, GIF and BMP by their

@@ -8,16 +8,16 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 import thumbnailer.album.Album;
-import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumRepository.Tombstone;
+import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
-import thumbnailer.album.Entry;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
 import thumbnailer.source.Disks;
 import thumbnailer.source.Exclusions;
-import thumbnailer.source.Kind;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Kind;
 
 /**
  * What file operations ask of indexing (they depend on {@code index}, never the reverse): re-index an album whose files

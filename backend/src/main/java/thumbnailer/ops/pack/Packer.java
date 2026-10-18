@@ -5,7 +5,7 @@ import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Map;
 import thumbnailer.ops.Op;
-import thumbnailer.source.AlbumContainer;
+import thumbnailer.spi.AlbumContainer;
 
 /** Writes archives for pack and repack (catalog_plan.md §4.5, track B3). */
 public interface Packer {

@@ -17,15 +17,15 @@ import org.springframework.stereotype.Component;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
-import thumbnailer.album.Entry;
 import thumbnailer.catalog.Catalog;
 import thumbnailer.catalog.CatalogRepository.Listed;
 import thumbnailer.image.ImageProbe;
-import thumbnailer.metadata.Extraction;
 import thumbnailer.settings.SettingsStore;
-import thumbnailer.source.AlbumContainer;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Exclusions;
+import thumbnailer.spi.AlbumContainer;
+import thumbnailer.spi.Entry;
+import thumbnailer.spi.Extraction;
 
 /**
  * Answers the single-photo messages: marks, the photos of a favorites list, an image's metadata (what it learns about
