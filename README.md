@@ -64,6 +64,17 @@ file size and date: the first scan after upgrading re-lists every zip album once
 scan re-indexes every album once (new signature hash; stored photo facts are migrated, so photos are not re-probed);
 ratings and edits are kept, but do not move albums before that scan has run, or they are treated as new.
 
+## Operations
+
+Move, copy, delete, pack/unpack/repack, encrypt/decrypt `.cry`, copy photos and the folder operations change files in
+the library, one operation at a time (never during a scan), each after a confirm dialog that lists every item and what happens to it.
+A source is deleted only after its result was written beside it (`<name>.part`), forced to disk and read back equal
+byte for byte; only Delete and Delete folder remove files on purpose, and they say so in their dialog. There is no
+Recycle Bin: deletion is final (hiding an album, *safe-delete*, touches no file). Every step is journaled in the
+library folder (`ops.journal`, manifests under `ops/`) before it runs; after a crash the next start finishes or rolls
+back each unfinished item before any scan, so a source or its verified result always survives. Albums keep their
+identity (id, rating, edits, pinned cover, photo marks) through every operation.
+
 ## Development
 
 ```bash

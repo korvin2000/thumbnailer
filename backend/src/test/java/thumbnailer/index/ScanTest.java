@@ -475,10 +475,10 @@ class ScanTest {
         socket.sendText("{\"type\":\"compareCopies\",\"id\":8,\"a\":\"x\",\"b\":\"y\"}", true).join();
         assertThat(await(received, m -> m.contains("\"id\":8"))).isEqualTo("{\"type\":\"error\",\"message\":\"not implemented: compareCopies\",\"id\":8}");
 
-        socket.sendText("{\"type\":\"op\",\"id\":9,\"op\":{\"kind\":\"PACK\",\"albumIds\":[\"" + l.id() + "\"],\"password\":\"s3cret\"}}", true).join();
+        socket.sendText("{\"type\":\"op\",\"id\":9,\"op\":{\"kind\":\"REPACK\",\"albumIds\":[\"" + l.id() + "\"],\"password\":\"s3cret\"}}", true).join();
         assertThat(await(received, m -> m.contains("\"id\":9"))).startsWith("{\"type\":\"opAccepted\",\"opId\":\"");
         assertThat(await(received, m -> m.startsWith("{\"type\":\"opResult\"")))
-                .contains("\"failed\":[{\"item\":\"" + l.path() + "\",\"reason\":\"not implemented\"}]");
+                .contains("\"skipped\":[{\"item\":\"" + l.path() + "\",\"reason\":\"not an archive\"}]");
         assertThat(received).noneMatch(m -> m.contains("s3cret"));
         socket.abort();
     }

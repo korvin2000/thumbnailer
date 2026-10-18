@@ -26,9 +26,17 @@ undo. Reference SPEC IDs.
   jar (`backend-demo`): search fields, lists/links/marks, hide/unhide, date `2019`, copies, duplicates/entities/
   missing filters, entity card counts, preflight, op admission, not-implemented errors, images 200.
 - Open after phase 0 (each owned by a track): `Catalog.resolve` returns no links (B1), merge/creditAs/compareCopies/
-  entities-under/genres filter/alias-resolved filters (B1), every operation item (B2), packers (B3), `Entry.flags`
-  always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4). `ops/Manifest`
-  and `Journal` records are B2's.
+  entities-under/genres filter/alias-resolved filters (B1), packers (B3), `Entry.flags`
+  always 0 and `bio` null, `photos`/`photoMeta`/`albumText` (B4), the UI beyond the shells (F1–F4).
+
+- 2026-10-18 **catalog B2 ops core**: `ops/FileOps` runs every operation of catalog_plan.md §4.5 item by item through
+  `Planner` (sources, destinations, conflicts, containment, space, preflight wording) and `Steps` (journaled
+  phases `copying → verified → disposing → installing → rebasing → indexing`, per-file for in-place encryption,
+  `CHECKPOINT SYNC` before a line goes; `recover()` at start and before each operation), `Journal` +
+  `Manifest` (`<library-dir>/ops.journal`, `ops/<op>/<item>.json`), `Trees` (hashing copies, retries, naming),
+  `Crypt` (the operation's own key). Packers stay behind B3's interfaces (a test stand-in). Checks:
+  `:backend:test` 108 (1 skipped), `FileOpsTest` 8. Unverified: a real second volume, the
+  `AtomicMoveNotSupportedException` fallback, recovery of an encryption that changed the path without a key.
 
 - 2026-10-14 `.cry` password is session-only: the key lives in server memory (never in settings.json), forgotten on restart or 10 s after the last client leaves; clients see an 8-hex fingerprint only; albums indexed with a key survive a missing key (only their `.cry` reads fail); Folders page shows a masked set state and an eye toggle for a typed password.
 - 2026-10-14 UI polish: sort = field × direction (`ui/sort-menu.ts`, 4 reverse `Sort` orders + indexes), folder tree filter/collapse/expand, kind strip, light/dark toggle only, settings behind the brand button, zip-file archive icon, datalist arrows and Save icon fixed. Checks: backend 70 tests pass (1 skipped), frontend build + 15 tests pass.
