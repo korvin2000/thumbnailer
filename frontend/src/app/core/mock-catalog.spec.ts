@@ -103,6 +103,61 @@ describe('mock catalog', () => {
     expect(Object.values(marks).every(m => m.rating > 0)).toBe(true);
   });
 
+  it('under another entity, items are those sharing albums with it and their count is the shared one (B1)', async () => {
+    const { gw } = setup();
+    const studio = (await gw.entities('STUDIO', { byCount: true, limit: 1 })).items[0];
+    const under = await gw.entities('MODEL', { under: studio.id, byCount: true, limit: 500 });
+    expect(under.total).toBe(under.items.length);
+    expect(under.items.length).toBeGreaterThan(0);
+    for (const m of under.items) {
+      const shared = (await gw.search({ entities: [studio.id, m.id], sort: 'NAME', offset: 0, limit: 500 } as AlbumQuery)).total;
+      expect(m.albums).toBe(shared);
+      expect(shared).toBeGreaterThan(0);
+    }
+    expect([...under.items].sort((x, y) => y.albums - x.albums || x.name.localeCompare(y.name))).toEqual(under.items);
+    const all = await gw.entities('MODEL', { limit: 500 });
+    expect(all.items.find(e => e.id === under.items[0].id)!.albums).toBeGreaterThanOrEqual(under.items[0].albums);
+  });
+
+  it('cards carry the derived sections of their kind with shared counts, most first (B1)', async () => {
+    const { gw, named } = setup();
+    const model = await gw.entity((await named('MODEL', 'Sofia')).id);
+    expect(Object.keys(model.derived!).sort()).toEqual(['albums', 'genres', 'photographers', 'studios', 'tags']);
+    expect(model.derived!.studios!.map(s => s.albums)).toEqual([...model.derived!.studios!.map(s => s.albums)].sort((a, b) => b - a));
+    const studio = await gw.entity((await gw.entities('STUDIO', { limit: 1 })).items[0].id);
+    expect(Object.keys(studio.derived!).sort()).toEqual(['albums', 'genres', 'models', 'photographers']);
+    const genre = await gw.entity((await gw.entities('GENRE', { limit: 1 })).items[0].id);
+    expect(Object.keys(genre.derived!).sort()).toEqual(['albums', 'models', 'studios']);
+    const list = await gw.entity((await named('LIST', 'Best of 2024')).id);
+    expect(Object.keys(list.derived!)).toEqual(['albums']);
+  });
+
+  it('name filters resolve through aliases, an unknown name matches nothing, facets count the links (B1)', async () => {
+    const { gw } = setup();
+    const q = (f: object) => gw.search({ sort: 'NAME', offset: 0, limit: 1, ...f } as AlbumQuery).then(r => r.total);
+    const byName = await q({ model: 'Nika' }), byAlias = await q({ model: 'nikka' });
+    expect(byName).toBeGreaterThan(0);
+    expect(byAlias).toBe(byName);
+    expect(await q({ model: 'Nik' })).toBe(0);
+    expect(await q({ model: 'Nobody' })).toBe(0);
+    const facets = await gw.facets();
+    expect(facets.models.find(f => f.value === 'Nika')?.count).toBe(byName);
+    expect(facets.genres.length).toBeGreaterThan(0);
+  });
+
+  it('merging fills the survivor\'s empty profile fields; compareCopies is busy while an operation runs', async () => {
+    const { gw, first } = setup();
+    const a = (await gw.saveEntity({ kind: 'MODEL', name: 'Mer-A', rating: 0, profile: '{"eyes":"green","hair":"red"}' })).entity;
+    const b = (await gw.saveEntity({ kind: 'MODEL', name: 'Mer-B', rating: 0, profile: '{"eyes":"blue","hair":""}' })).entity;
+    expect(JSON.parse((await gw.mergeEntities([a.id], b.id)).entity.profile!)).toEqual({ eyes: 'blue', hair: 'red' });
+    await expect(gw.mergeEntities([b.id], b.id)).rejects.toThrow('Nothing to merge');
+    const [x, y] = await first(2);
+    await gw.runOp({ kind: 'PACK', albumIds: [x.id], format: 'AUTO', conflict: 'RENAME' });
+    await expect(gw.compareCopies(x.id, y.id)).rejects.toThrow('busy');
+    await new Promise(r => setTimeout(r, 400));
+    await expect(gw.compareCopies(x.id, y.id)).resolves.toBeTruthy();
+  });
+
   it('link and unlink count only albums actually changed and announce only then', async () => {
     const { gw, changed, named, first } = setup();
     const list = await gw.saveEntity({ kind: 'LIST', name: 'Fresh', rating: 0, profile: null });

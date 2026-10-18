@@ -59,9 +59,21 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   button disappears): with focus on `body`, Esc reaches `App.onKey` and clears the album selection instead of closing.
 - Dialog-style services return promises: `FolderPicker.pick()`, `Confirm.ask()`, `EntityPicker.pick()`; the context
   menu is `ContextMenu.open(x, y, items)` with data-only `MenuEntry`s built per subject on every open. Their
-  components are mounted once in `app.html`.
+  components are mounted once in `app.html` (the folder picker too: a `<dialog>` inside the closed settings dialog would
+  have no box; top-layer order, not DOM position, stacks a later `showModal()` above).
+- Menus and operations: `ui/menus.ts` builds entries from a `Target` (ids + the loaded albums, or a node's query) and an
+  actions interface; `ui/actions.ts` is the one implementation (every flow = preflight → `Confirm` → `OpsStore.run`).
+  Keep the builders pure (spec-tested) — no `inject()` there; put a new action on the interface and on `Actions`.
+- The settings dialog is `@defer`red (`SettingsLink.open(page)` loads and opens it) and the viewer and photo list are
+  `loadComponent` routes: never import them eagerly from `App` or the initial bundle grows past the 600 kB budget.
+- The details panel's entity mode is `CatalogStore.cardId` (set by `openCard` from anywhere); the card component only
+  calls `openCard` when its input differs, and `closeCard` on destroy.
+- Operation words come from `OpsStore.opNoun/opVerb`; a clean result is a toast, one with skipped/failed items is
+  `OpsStore.issues`, which the app turns into a `Confirm` without Cancel.
+- Synthetic key events in tests or the browser pane must target an element (`document.body`), not `document`: the key
+  handlers call `e.target.closest(...)`.
 
 ## Tests
 
 Plain Vitest specs next to the code (`*.spec.ts`, explicit `import { describe, it, expect } from 'vitest'`), no
-TestBed so far; pure logic in `core/` is the place to test. Covered: `layout.ts`, `search-syntax.ts`, `paths.ts`, `selection.ts`, the mock catalog (over a `MockGateway`); a root service is built with `Injector.create` and a fake `Gateway` (`catalog-store.spec.ts`).
+TestBed so far; pure logic in `core/` (and the pure `ui/menus.ts`, `ui/op-confirm.ts`, `ui/viewer/photo-order.ts`) is the place to test. Covered: `layout.ts`, `search-syntax.ts`, `paths.ts`, `selection.ts`, the mock catalog (over a `MockGateway`), the menu builders (with a recording stub of the actions), the operation → dialog mapping; a root service is built with `Injector.create` and a fake `Gateway` (`catalog-store.spec.ts`).

@@ -7,10 +7,10 @@
   }
 
   <main class="main">
-    <app-location-bar />
-    <app-tile-grid [tiles]="tiles()" [mode]="prefs.layoutMode()" [columns]="prefs.columns()" [selectedId]="store.selectedId()"
+    <app-location-bar [selectionMenu]="actions.selectionMenu" />
+    <app-tile-grid [tiles]="tiles()" [mode]="prefs.layoutMode()" [columns]="prefs.columns()" [selectedId]="store.selectedId()" [selection]="store.selection"
                    [hasMore]="store.albums().length < store.total()" [empty]="emptyState"
-                   (select)="store.selectedId.set($event)" (open)="open($event)" (reachedEnd)="store.loadMore()">
+                   (select)="store.selectedId.set($event)" (open)="open($event)" (reachedEnd)="store.loadMore()" (contextMenu)="actions.openAlbumMenu($event)">
       <ng-template let-a>
         <app-album-card [album]="a" [selected]="a.id === store.selectedId()" [checked]="store.selection.has(a.id)" [showTags]="prefs.showTags()"
                         (select)="store.selectedId.set(a.id)" (open)="open(a.id)" (info)="showInfo(a.id)" (hover)="store.hoveredId.set($event)"
@@ -25,7 +25,7 @@
             <app-icon name="folder" [size]="36" />
             <h2>No folders to index yet</h2>
             <p>Add the drives or folders that hold your albums, then scan them.</p>
-            <button class="btn primary" (click)="openSettings()"><app-icon name="plus" [size]="14" /> Add folders</button>
+            <button class="btn primary" (click)="openSettings('folders')"><app-icon name="plus" [size]="14" /> Add folders</button>
           } @else if (emptyFolder()) {
             <app-icon name="folder" [size]="36" />
             <h2>No albums in this folder</h2>
@@ -65,15 +65,27 @@
       </span>
     }
   }
+  @if (ops.progress(); as p) {
+    @if (p.running) {
+      <span class="scan op" [title]="p.current ?? ''">
+        <span class="track"><span class="fill" [style.width.%]="p.total ? 100 * p.done / p.total : 0"></span></span>
+        {{ verb(p) }} {{ p.done }} / {{ p.total }}@if (p.skipped || p.failed) { <span class="dim"> · {{ p.skipped }} skipped, {{ p.failed }} failed</span> }
+        @if (p.current) { <span class="dim cur">{{ p.current | basename: 1 }}</span> }
+        <button class="btn sm ghost" title="Stop after the current item" (click)="ops.cancel()">Cancel</button>
+      </span>
+    }
+  }
   <span class="grow"></span>
   @if (store.mock) { <span class="pill" title="In-browser dummy data; add ?live to use the backend">demo data</span> }
   <span class="conn" [class.off]="!store.connected()"><app-icon name="dot" [size]="12" />{{ store.connected() ? 'live' : 'reconnecting…' }}</span>
 </footer>
 
-<app-settings-dialog />
+@defer (when settingsLink.wanted()) { <app-settings-dialog /> }
+<app-folder-picker />
 <app-context-menu />
 <app-confirm />
 <app-entity-picker />
+<app-copies-popover (deleteRequested)="deleteCopy($event)" />
 
 <div class="toasts">
   @for (t of toasts.list(); track t.id) {

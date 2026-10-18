@@ -1,11 +1,14 @@
 import { DecimalPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, output, signal, untracked } from '@angular/core';
 import { Gateway } from '../core/gateway';
 import { Folder } from '../core/model';
 import { lastSegment } from '../core/paths';
 import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
 import { Icon, IconName } from './shared/icon';
+
+/** A right-click on a row: its folder (null = the Library row) and the pointer. */
+export interface FolderMenuEvent { path: string | null; x: number; y: number }
 
 /** One visible line of the tree; `path` null = the Library row. */
 interface Row { key: string; path: string | null; label: string; title: string; count: number; depth: number; icon: IconName; nested: boolean; open: boolean; reachable: boolean }
@@ -30,7 +33,7 @@ const prefix = (dir: string) => dir.endsWith('/') ? dir : dir + '/';
     </div>
     @for (r of rows(); track r.key) {
       <div class="row" [class.selected]="r.path === store.folder()" [class.dim]="!r.reachable" [style.padding-left.px]="6 + indent * r.depth" [title]="r.title"
-           (click)="store.goTo(r.path)" (dblclick)="r.nested && toggle(r.path!)">
+           (click)="store.goTo(r.path)" (dblclick)="r.nested && toggle(r.path!)" (contextmenu)="onContext($event, r)">
         <span class="chev" [class.open]="r.open" [class.none]="!r.nested" (click)="r.nested && toggle(r.path!); $event.stopPropagation()" (dblclick)="$event.stopPropagation()">
           @if (r.path !== null && loading().has(r.path)) { <span class="spinner"></span> } @else if (r.nested) { <app-icon name="chevronRight" [size]="14" /> }
         </span>
@@ -66,6 +69,9 @@ const prefix = (dir: string) => dir.endsWith('/') ? dir : dir + '/';
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class FolderTree {
+  /** Right-click on a row (the row becomes the current folder first, as in Explorer); the menu is built by `Actions.openFolderMenu`. */
+  readonly contextMenu = output<FolderMenuEvent>();
+
   protected readonly store = inject(AlbumStore);
   private readonly gw = inject(Gateway);
   private readonly toasts = inject(Toasts);
@@ -129,6 +135,12 @@ export class FolderTree {
   }
 
   protected collapseAll() { this.expanded.set(new Set()); }
+
+  protected onContext(e: MouseEvent, r: Row) {
+    e.preventDefault();
+    this.store.goTo(r.path);
+    this.contextMenu.emit({ path: r.path, x: e.clientX, y: e.clientY });
+  }
 
   /** Breadth-first loads and expands the selected folder's subtree (Library: every reachable root), at most EXPAND_CAP folders. */
   protected async expandSelected() {

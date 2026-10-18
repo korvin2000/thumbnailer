@@ -1,7 +1,7 @@
 import { Subject } from 'rxjs';
 import { Gateway } from './gateway';
 import {
-  Album, AlbumDetails, AlbumPatch, AlbumQuery, AlbumTarget, Comparison, EntityCard, EntityKind, EntityList, EntityQuery, EntitySave, Facets, Filters,
+  Album, AlbumDetails, AlbumPatch, AlbumQuery, AlbumRef, AlbumTarget, Comparison, EntityCard, EntityKind, EntityList, EntityQuery, EntitySave, Facets, Filters,
   Folder, GatewayEvent, LibraryInfo, Listing, MetaRow, Op, PhotoList, PhotoMarks, Preflight, SearchResult, Settings, SettingsInfo,
 } from './model';
 
@@ -68,8 +68,8 @@ export class WsGateway extends Gateway {
   cancelOp = () => this.request<void>('cancelOp', {});
 
   coverUrl = (a: Album) => `/img/${a.id}/cover?v=${a.revision}${this.r()}`;
-  thumbUrl = (a: Album, i: number) => `/img/${a.id}/${i}/thumb?v=${a.revision}${this.r()}`;
-  originalUrl = (a: Album, i: number) => `/img/${a.id}/${i}?v=${a.revision}`;
+  thumbUrl = (a: AlbumRef, i: number) => `/img/${a.id}/${i}/thumb?v=${a.revision}${this.r()}`;
+  originalUrl = (a: AlbumRef, i: number) => `/img/${a.id}/${i}?v=${a.revision}`;
 
   private r() { return this.epoch ? `&r=${this.epoch}` : ''; }
   private stamp(s: SettingsInfo) { if (s.renderEpoch) this.epoch = s.renderEpoch; return s; }

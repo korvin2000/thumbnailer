@@ -1,9 +1,9 @@
 import { Subject } from 'rxjs';
 import { Album, GatewayEvent, Op, OpIssue, Preflight, PreflightItem } from './model';
-import { delay, gate, targets } from './mock-gateway';
+import { delay, gate, Resolver, targets } from './mock-gateway';
 
-/** What operations need from the album side of the mock. */
-export interface OpsHost { scanning(): boolean; roots(): string[]; sync(ids?: string[]): void }
+/** What operations need from the album side of the mock; `renameRoot` = the settings follow a renamed root (the server's `rebasing` phase). */
+export interface OpsHost { scanning(): boolean; roots(): string[]; sync(ids?: string[]): void; find: Resolver; renameRoot(from: string, to: string): void }
 
 const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 const parent = (p: string) => p.slice(0, p.lastIndexOf('/'));
@@ -49,6 +49,7 @@ export class MockOps {
   private async work(op: Op, plan: { album?: Album; item: PreflightItem }[], job: { id: string; cancelled: boolean }) {
     const started = new Date().toISOString(), skipped: OpIssue[] = [], failed: OpIssue[] = [];
     let done = 0;
+    if (op.kind === 'FOLDER_RENAME') { const from = op.paths![0].replace(/\/+$/, ''); if (this.host.roots().some(r => r.replace(/\/+$/, '') === from)) this.host.renameRoot(from, `${parent(from)}/${op.target}`); }
     const progress = (running: boolean, current: string | null, message: string | null = null) => this.events.next({
       type: 'opProgress', id: job.id, kind: op.kind, running, total: plan.length, done, current, skipped: skipped.length, failed: failed.length, message,
       startedAt: started, finishedAt: running ? null : new Date().toISOString(),
@@ -71,7 +72,7 @@ export class MockOps {
   private plan(op: Op): { album?: Album; item: PreflightItem }[] {
     if (op.kind.startsWith('FOLDER_')) return [...this.albums.values()].filter(a => (op.paths ?? []).some(p => below(a.path, p))).map(album => ({ album, item: { path: album.path, skip: false } }));
     if (op.kind === 'COPY_PHOTOS') { const album = this.albums.get(op.albumIds?.[0] ?? ''); return album ? (op.names ?? []).map(n => ({ album, item: { path: `${album.path}/${n}`, skip: false } })) : []; }
-    return targets(this.albums, op).map(album => {
+    return targets(this.albums, op, this.host.find).map(album => {
       const reason = op.kind === 'PACK' && album.kind !== 'DIRECTORY' ? 'already packed' : op.kind === 'UNPACK' && album.kind === 'DIRECTORY' ? 'already unpacked' : null;
       return { album, item: reason ? { path: album.path, skip: true, reason } : { path: album.path, skip: false } };
     });

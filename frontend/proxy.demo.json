@@ -1,0 +1,4 @@
+{
+  "/ws": { "target": "http://localhost:8081", "ws": true, "changeOrigin": true },
+  "/img": { "target": "http://localhost:8081", "changeOrigin": true }
+}

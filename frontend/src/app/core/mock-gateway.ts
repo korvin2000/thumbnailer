@@ -5,9 +5,12 @@ import { MockOps } from './mock-ops';
 import { MockPhotos } from './mock-photos';
 import { SELECT_CAP } from './selection';
 import {
-  Album, AlbumDetails, AlbumPatch, AlbumQuery, AlbumTarget, DEFAULT_SETTINGS, ENTRY_META, ENTRY_META_KNOWN, Entry, EntityKind, EntityQuery, EntitySave, Facet,
+  Album, AlbumDetails, AlbumPatch, AlbumQuery, AlbumRef, AlbumTarget, DEFAULT_SETTINGS, ENTRY_META, ENTRY_META_KNOWN, Entry, EntityKind, EntityQuery, EntitySave, Facet,
   Facets, Filters, Folder, GatewayEvent, LibraryInfo, LibraryStats, Listing, Op, SearchResult, Settings, SettingsInfo, Sort,
 } from './model';
+
+/** Name → entity id of the kind through any alias (the catalog's lookup), for the filters that resolve names. */
+export type Resolver = (kind: EntityKind, name: string) => number | undefined;
 
 export const STUDIOS = ['EL-Studio', 'CL-Biki', 'Lumen Lab', 'Northlight Photo', 'Atelier Noir', 'Prism Studio', null, null];
 export const MODELS = ['Ellena', 'Aurora', 'Roksana', 'Jeny', 'Felicia', 'Nelya', 'Mira', 'Dasha', 'Kira', 'Alina', 'Sofia', 'Vera', 'Lina', 'Nika', 'Polina', 'Eva'];
@@ -51,7 +54,12 @@ export class MockGateway extends Gateway {
   /** Extracted shot dates of albums whose date was overridden, so "" can restore them. */
   private readonly shot = new Map<string, string | null>();
   private readonly catalog = new MockCatalog(this.albums, this.events, (id, p) => this.apply(id, p), () => this.pics);
-  private readonly ops = new MockOps(this.albums, this.events, { scanning: () => this.scanning, roots: () => this.settings.roots.map(r => r.path), sync: ids => this.catalog.sync(ids) });
+  /** Filters by name go through the catalog's aliases (an unknown name matches nothing). */
+  private readonly find: Resolver = (kind, name) => this.catalog.idOf(kind, name);
+  private readonly ops = new MockOps(this.albums, this.events, {
+    scanning: () => this.scanning, roots: () => this.settings.roots.map(r => r.path), sync: ids => this.catalog.sync(ids), find: this.find,
+    renameRoot: (from, to) => { this.settings = { ...this.settings, roots: this.settings.roots.map(r => r.path.replace(/\/+$/, '') === from ? { ...r, path: to } : r) }; },
+  });
   private readonly pics: MockPhotos;
 
   constructor() {
@@ -71,7 +79,8 @@ export class MockGateway extends Gateway {
   link = (t: AlbumTarget, entityId: number) => this.catalog.link(t, entityId);
   unlink = (t: AlbumTarget, entityId: number) => this.catalog.unlink(t, entityId);
   copies = (albumId: string) => this.catalog.copies(albumId);
-  compareCopies = (a: string, b: string) => this.catalog.compareCopies(a, b);
+  /** `error "busy"` while an operation holds albums, as the server. */
+  compareCopies = async (a: string, b: string) => { if (this.ops.busy) throw new Error('busy'); return this.catalog.compareCopies(a, b); };
   markPhoto = (albumId: string, name: string, mark: { rating?: number; lists?: number[] }) => this.pics.markPhoto(albumId, name, mark);
   photos = (listId: number, offset: number, limit: number) => this.pics.photos(listId, offset, limit);
   photoMeta = (albumId: string, index: number) => this.pics.photoMeta(albumId, index);
@@ -82,7 +91,7 @@ export class MockGateway extends Gateway {
 
   async search(q: AlbumQuery): Promise<SearchResult> {
     await delay(60);
-    const all = [...this.albums.values()].filter(a => matches(a, q)).sort(comparator(q.sort));
+    const all = [...this.albums.values()].filter(a => matches(a, q, this.find)).sort(comparator(q.sort));
     return { albums: all.slice(q.offset, q.offset + q.limit), total: all.length };
   }
 
@@ -242,19 +251,20 @@ export class MockGateway extends Gateway {
     return m ? m.to + path.slice(m.from.length) : path;
   }
 
+  /** Counted from the links (primary names), as the server's `GROUP BY` over `album_link`. */
   async facets(filters?: Filters): Promise<Facets> {
-    const albums = [...this.albums.values()].filter(a => matches(a, filters ?? {}));
-    const count = (pick: (a: Album) => (string | null)[]): Facet[] => {
+    const albums = [...this.albums.values()].filter(a => matches(a, filters ?? {}, this.find));
+    const count = (role: EntityKind): Facet[] => {
       const m = new Map<string, number>();
-      for (const a of albums) for (const v of pick(a)) if (v) m.set(v, (m.get(v) ?? 0) + 1);
+      for (const a of albums) for (const l of a.links) if (l.role === role) m.set(l.name, (m.get(l.name) ?? 0) + 1);
       return [...m].map(([value, count]) => ({ value, count })).sort((x, y) => y.count - x.count).slice(0, 50);
     };
-    return { tags: count(a => a.tags), models: count(a => [a.model]), studios: count(a => [a.studio]), photographers: count(a => [a.photographer]), genres: count(a => a.genres) };
+    return { tags: count('TAG'), models: count('MODEL'), studios: count('STUDIO'), photographers: count('PHOTOGRAPHER'), genres: count('GENRE') };
   }
 
   coverUrl(a: Album) { return this.paint(`${a.id}/cover/${a.cover}`, a.coverPortrait, 640, hash(a.id), 0); }
-  thumbUrl(a: Album, i: number) { const e = this.entries(a)[i]; return this.paint(`${a.id}/${i}/t`, e.height > e.width, 480, hash(a.id), i + 1); }
-  originalUrl(a: Album, i: number) { const e = this.entries(a)[i]; return this.paint(`${a.id}/${i}/o`, e.height > e.width, 1600, hash(a.id), i + 1); }
+  thumbUrl(ref: AlbumRef, i: number) { const a = this.albums.get(ref.id), e = a && this.entries(a)[i]; return e ? this.paint(`${a.id}/${i}/t`, e.height > e.width, 480, hash(a.id), i + 1) : ''; }
+  originalUrl(ref: AlbumRef, i: number) { const a = this.albums.get(ref.id), e = a && this.entries(a)[i]; return e ? this.paint(`${a.id}/${i}/o`, e.height > e.width, 1600, hash(a.id), i + 1) : ''; }
 
   private info(): SettingsInfo {
     return {
@@ -367,16 +377,15 @@ function parentOf(path: string): string | null {
 }
 
 const has = (hay: string | null, needle: string) => !!hay && hay.toLowerCase().includes(needle);
-const eq = (a: string | null, b?: string) => !b || (a ?? '').toLowerCase() === b.toLowerCase();
 
 /** The albums an action names: its ids (an unknown one fails), else its query's matches; more than `SELECT_CAP` fail rather than act on a part, as `AlbumRepository.select`. */
-export function targets(albums: Map<string, Album>, t: AlbumTarget): Album[] {
+export function targets(albums: Map<string, Album>, t: AlbumTarget, find: Resolver): Album[] {
   if (t.albumIds) {
     if (t.albumIds.length > SELECT_CAP) throw new Error(`At most ${SELECT_CAP} albums at once`);
     return t.albumIds.map(id => { const a = albums.get(id); if (!a) throw new Error(`No album ${id}`); return a; });
   }
   if (!t.query) throw new Error('albumIds or query is required');
-  const list = [...albums.values()].filter(a => matches(a, t.query!));
+  const list = [...albums.values()].filter(a => matches(a, t.query!, find));
   if (list.length > SELECT_CAP) throw new Error(`${list.length} albums match, at most ${SELECT_CAP} at once`);
   return list.sort(comparator('NAME'));
 }
@@ -387,13 +396,14 @@ export function gate(scanning: boolean, busy: boolean) {
   if (busy) throw new Error('An operation is running');
 }
 
-/** Same semantics as the server's SQL filter (hidden albums only when asked for). */
-function matches(a: Album, q: Filters): boolean {
+/** Same semantics as the server's SQL filter (hidden albums only when asked for; model/studio/photographer/tags/genres match whole names through any alias, an unknown name matches nothing). */
+function matches(a: Album, q: Filters, find: Resolver): boolean {
   const t = q.text?.trim().toLowerCase();
   const mp = a.avgPixels / 1e6;
+  const linked = (kind: EntityKind, name?: string) => { if (!name) return true; const id = find(kind, name); return id !== undefined && a.links.some(l => l.entity === id); };
   return (!t || has(a.name, t) || has(a.model, t) || has(a.studio, t) || has(a.photographer, t) || has(a.description, t) || a.tags.some(x => x.includes(t)))
-    && (q.tags ?? []).every(x => a.tags.includes(x.toLowerCase()))
-    && eq(a.model, q.model) && eq(a.studio, q.studio) && eq(a.photographer, q.photographer)
+    && (q.tags ?? []).every(x => linked('TAG', x))
+    && linked('MODEL', q.model) && linked('STUDIO', q.studio) && linked('PHOTOGRAPHER', q.photographer)
     && (!q.roots?.length || q.roots.some(r => a.path === r || a.path.startsWith(r.endsWith('/') ? r : r + '/'))) && (!q.kind || a.kind === q.kind)
     && (q.minBytes == null || a.bytes >= q.minBytes) && (q.maxBytes == null || a.bytes <= q.maxBytes)
     && (q.minCount == null || a.imageCount >= q.minCount) && (q.maxCount == null || a.imageCount <= q.maxCount)
@@ -401,7 +411,7 @@ function matches(a: Album, q: Filters): boolean {
     && (!q.dateFrom || (a.shotDate ?? '') >= q.dateFrom) && (!q.dateTo || (a.shotDate ?? '\uffff') <= q.dateTo)
     && (q.minRating == null || a.rating >= q.minRating) && (q.maxRating == null || a.rating <= q.maxRating)
     && a.hidden === !!q.hidden && (!q.duplicates || a.copies > 1) && (!q.missing || !a.links.some(l => l.role === q.missing))
-    && (q.entities ?? []).every(id => a.links.some(l => l.entity === id)) && (q.genres ?? []).every(g => a.genres.some(x => x.toLowerCase() === g.toLowerCase()));
+    && (q.entities ?? []).every(id => a.links.some(l => l.entity === id)) && (q.genres ?? []).every(g => linked('GENRE', g));
 }
 
 function comparator(sort: Sort): (a: Album, b: Album) => number {

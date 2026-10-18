@@ -9,7 +9,7 @@ import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
 import { Icon } from './shared/icon';
 
-/** The copies of one album (`CatalogStore.copiesOf`, set by a tile's ×N badge or the details panel): a modal list with Open · Show in folder · Hide · Compare per copy. Delete… only after Compare said identical, and it waits for the file operations (F4: `deleteRequested`). */
+/** The copies of one album (`CatalogStore.copiesOf`, set by a tile's ×N badge or the details panel): a modal list with Open · Show in folder · Hide · Compare per copy. Delete… only after Compare said identical (`deleteRequested` → the app's delete flow). */
 @Component({
   selector: 'app-copies-popover',
   imports: [Icon, BytesPipe, BasenamePipe, DatePipe],
@@ -78,7 +78,7 @@ import { Icon } from './shared/icon';
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class CopiesPopover {
-  /** Delete… of a copy proven identical; the file operation itself lands with F4. */
+  /** Delete… of a copy proven identical; `App.deleteCopy` closes the popover and runs the delete operation. */
   readonly deleteRequested = output<Album>();
 
   protected readonly catalog = inject(CatalogStore);
@@ -134,8 +134,5 @@ export class CopiesPopover {
     finally { this.comparing.set(null); }
   }
 
-  protected remove(a: Album) {
-    this.deleteRequested.emit(a);
-    this.toasts.show('Deleting a copy arrives with the file operations');
-  }
+  protected remove(a: Album) { this.deleteRequested.emit(a); }
 }
