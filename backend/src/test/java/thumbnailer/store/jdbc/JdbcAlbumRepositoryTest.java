@@ -282,6 +282,8 @@ class JdbcAlbumRepositoryTest {
         assertThat(repo.search(filter(null, null, true))).extracting(Album::id, Album::copies)
                 .containsExactly(tuple("a", 2), tuple("b", 2));
         assertThat(repo.byRoot(ROOT).stream().filter(x -> x.id().equals("c")).findFirst().orElseThrow().copies()).isEqualTo(1);
+        assertThat(repo.search(filter(null, null, false))).as("one per copy group: the first indexed").extracting(Album::id).containsExactly("a", "c");
+        assertThat(repo.count(filter(null, null, false))).isEqualTo(2);
 
         repo.save(a, null); // text links are replaced by every save (none here); favorites are not
         assertThat(repo.find("a").orElseThrow().links()).isEmpty();

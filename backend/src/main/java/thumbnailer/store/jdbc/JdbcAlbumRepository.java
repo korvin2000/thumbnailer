@@ -417,6 +417,8 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
             w.add("hidden = :hidden", "hidden", Boolean.TRUE.equals(q.hidden()));
             if (Boolean.TRUE.equals(q.duplicates()))
                 w.conditions.add("content_id IN (SELECT content_id FROM album GROUP BY content_id HAVING COUNT(*) > 1)");
+            else if (Boolean.FALSE.equals(q.duplicates())) // the other copies go (index album_content)
+                w.conditions.add("NOT EXISTS (SELECT 1 FROM album c WHERE c.content_id = album.content_id AND c.hidden = album.hidden AND c.seq < album.seq)");
             var entities = q.entities() == null ? List.<Integer>of() : q.entities().stream().filter(Objects::nonNull).toList();
             for (int i = 0; i < entities.size(); i++)
                 w.add("EXISTS (SELECT 1 FROM album_link WHERE album_seq = album.seq AND entity_id = :entity" + i + ")",

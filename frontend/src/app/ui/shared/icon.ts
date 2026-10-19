@@ -67,6 +67,9 @@ const ICONS = {
   unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
   contact: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M5.5 16.5c.6-1.6 1.9-2.5 3.5-2.5s2.9.9 3.5 2.5M15 10h3M15 14h3"/>',
   more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
+  rotateLeft: '<path d="M3 4v6h6"/><path d="M5 16a8.5 8.5 0 1 0 .3-7.5L3 10"/>',
+  rotateRight: '<path d="M21 4v6h-6"/><path d="M19 16a8.5 8.5 0 1 1-.3-7.5L21 10"/>',
+  power: '<path d="M12 3v8"/><path d="M6.6 6.6a7.5 7.5 0 1 0 10.8 0"/>',
 };
 
 export type IconName = keyof typeof ICONS;

@@ -30,6 +30,8 @@ export abstract class Gateway {
   abstract forgetLibrary(dir: string): Promise<LibraryInfo>;
   /** Compacts the stores; rejected while a scan runs. */
   abstract optimize(): Promise<void>;
+  /** Closes the server for good (stores flushed and closed, the process ends); rejected while an operation runs. Resolves once accepted; the gateway then stops reconnecting. */
+  abstract exit(): Promise<void>;
 
   // ---- catalog ----
   abstract entities(kind: EntityKind, opts?: EntityQuery): Promise<EntityList>;

@@ -92,7 +92,7 @@ export class MockGateway extends Gateway {
 
   async search(q: AlbumQuery): Promise<SearchResult> {
     await delay(60);
-    const all = [...this.albums.values()].filter(a => matches(a, q, this.find)).sort(comparator(q.sort));
+    const all = matching(this.albums, q, this.find).sort(comparator(q.sort));
     return { albums: all.slice(q.offset, q.offset + q.limit), total: all.length };
   }
 
@@ -236,6 +236,12 @@ export class MockGateway extends Gateway {
     setTimeout(() => this.events.next({ type: 'connection', connected: true }), 1200);
   }
 
+  async exit() {
+    this.gate();
+    await delay(200);
+    this.events.next({ type: 'connection', connected: false }); // the real server is gone; the mock just stays quiet
+  }
+
   private libraryInfo(): LibraryInfo {
     const visible = [...this.albums.values()].filter(a => !a.hidden), n = visible.length, covers = n * 11_900, meta = n * 2_600 + 512 * 1024;
     const stats: LibraryStats = {
@@ -254,7 +260,7 @@ export class MockGateway extends Gateway {
 
   /** Counted from the links (primary names), as the server's `GROUP BY` over `album_link`. */
   async facets(filters?: Filters): Promise<Facets> {
-    const albums = [...this.albums.values()].filter(a => matches(a, filters ?? {}, this.find));
+    const albums = matching(this.albums, filters ?? {}, this.find);
     const count = (role: EntityKind): Facet[] => {
       const m = new Map<string, number>();
       for (const a of albums) for (const l of a.links) if (l.role === role) m.set(l.name, (m.get(l.name) ?? 0) + 1);
@@ -386,7 +392,7 @@ export function targets(albums: Map<string, Album>, t: AlbumTarget, find: Resolv
     return t.albumIds.map(id => { const a = albums.get(id); if (!a) throw new Error(`No album ${id}`); return a; });
   }
   if (!t.query) throw new Error('albumIds or query is required');
-  const list = [...albums.values()].filter(a => matches(a, t.query!, find));
+  const list = matching(albums, t.query!, find);
   if (list.length > SELECT_CAP) throw new Error(`${list.length} albums match, at most ${SELECT_CAP} at once`);
   return list.sort(comparator('NAME'));
 }
@@ -395,6 +401,13 @@ export function targets(albums: Map<string, Album>, t: AlbumTarget, find: Resolv
 export function gate(scanning: boolean, busy: boolean) {
   if (scanning) throw new Error('A scan is running');
   if (busy) throw new Error('An operation is running');
+}
+
+/** The albums `q` matches; `duplicates: false` leaves out every copy but the first indexed (map order = `seq`) of the same stamp and visibility, as the server's `NOT EXISTS`. */
+function matching(albums: Map<string, Album>, q: Filters, find: Resolver): Album[] {
+  const first = new Map<string, string>();
+  if (q.duplicates === false) for (const a of albums.values()) { const k = `${a.hidden} ${a.stamp}`; if (!first.has(k)) first.set(k, a.id); }
+  return [...albums.values()].filter(a => matches(a, q, find) && (q.duplicates !== false || first.get(`${a.hidden} ${a.stamp}`) === a.id));
 }
 
 /** Same semantics as the server's SQL filter (hidden albums only when asked for; model/studio/photographer/tags/genres match whole names through any alias, an unknown name matches nothing). */

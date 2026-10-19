@@ -28,6 +28,8 @@ import { SCALE_LABELS, SIDE_PRESETS, SORT_LABELS } from '../viewer/photo-order';
       <label class="field"><span>Albums per row</span><span class="slider"><input type="range" min="1" max="12" [value]="prefs.columns()" (input)="prefs.setColumns(+$any($event.target).value)" /><b>{{ prefs.columns() }}</b></span></label>
       <label class="check"><input type="checkbox" [checked]="prefs.showTags()" (change)="prefs.showTags.set($any($event.target).checked)" /> Show tags on album cards</label>
       <label class="check"><input type="checkbox" [checked]="prefs.followHover()" (change)="prefs.followHover.set($any($event.target).checked)" /> Details panel follows the hovered album</label>
+      <label class="check"><input type="checkbox" [checked]="prefs.showDuplicates()" (change)="prefs.showDuplicates.set($any($event.target).checked)" /> Show duplicates</label>
+      <p class="hint muted sub">Off: the library shows one album per group of copies (same photo names and sizes); the Duplicates view still lists them all.</p>
     </section>
     <section class="card">
       <h4>Album viewer</h4>
@@ -50,6 +52,7 @@ import { SCALE_LABELS, SIDE_PRESETS, SORT_LABELS } from '../viewer/photo-order';
     .slider input { width: 200px; }
     .slider b { min-width: 20px; font-weight: 500; font-family: var(--mono); font-size: 12px; }
     select.input { width: auto; min-width: 140px; }
+    .hint.sub { margin: -4px 0 8px 24px; }
   `,
   changeDetection: ChangeDetectionStrategy.OnPush,
 })

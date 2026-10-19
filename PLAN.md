@@ -5,8 +5,21 @@
 Living document: update **State** and tick items when work lands; add a **Decisions** row when a choice is costly to
 undo. Reference SPEC IDs.
 
-## State (2026-10-18, v0.1.0)
+## State (2026-10-20, v0.1.0)
 
+- 2026-10-20 **fixes from `todo/to_fix_implement.txt`**: bare card header centered; profile choices are selects of short keys
+  (ISO-2 birthplace/nationality via `Intl.DisplayNames`, ethnicity, hair, eyes, body type, breast size replacing
+  measurements), tattoos/piercings yes/no, years active a 1960–2050 range (studios and photographers too), Born shows its
+  hint; credit inputs are a real combobox over the catalog (`ui/shared/name-combo.ts`; the datalist only offered facet
+  names and never refreshed its popup); studio hierarchy (parent = a curated same-kind `entity_link`, one, never below
+  itself; `Card.children`; no schema change); Settings → Exit application (`exit`: scan cancelled, context closed, H2
+  `SHUTDOWN`, process ends; App closed state); Appearance "Show duplicates" (`AlbumQuery.duplicates` false = first indexed
+  copy per group); lightbox rotate left/right (view only, `<` `>`, dimensions and size moved to the name tooltip). UI by
+  three parallel agents, contract/backend/mock here. Checks: backend 172 tests (1 skipped), `ng test` 103 + the combo
+  spec, `./gradlew build`, browser pass on the mock, live smoke on the jar (parent/children/cycle over the socket,
+  `duplicates: false`, Exit → exit code 0 → restart reads the parent link back). Open: rotation is not persisted (would
+  need a `photo` column and rotated thumbnails); trait filters (search by hair, nationality…) not built — the keys make
+  them exact, typed columns would make them indexed.
 - 2026-10-18 viewer: its own photos-per-row setting (`Prefs.viewerColumns`, default 3) with a header stepper, `[` `]` keys and an Appearance slider; the library's `[` `]` stay out of the overlays.
 - 2026-10-18 **post-review UI fixes**: topbar = one sidebar toggle (last tab, `Prefs.lastTab`), Catalog ▾ → entity picker → card
   (⋯ merge/delete on the card), compact columns stepper, one bricks ⇄ grid toggle; sidebar header fits the panel (Browse segment
@@ -257,6 +270,8 @@ undo. Reference SPEC IDs.
 
 | decision | reason |
 |---|---|
+| Model traits (nationality, hair, …) are short stable keys inside the profile JSON (ISO-2 for countries, words for the rest, booleans, `[from, to]` years), labels only in the UI (`entity-fields.ts`); no typed columns yet | canonical values make exact matching and grouping possible without a schema change or migration; a few thousand models make the JSON size moot; columns + indexes come with the first trait filter, read from these keys |
+| A studio's parent = its curated `entity_link` to a studio (generally: to its own kind), checked in `Catalog.save` (one, never below itself); children = the reverse lookup | no new table or column, merge/delete already re-point or drop links; a merge keeps the survivor's parent, and a cycle a merge could leave never loops (walks are bounded by the ids seen) |
 | Operations verify once, by reading the written result back: `Packer.pack` and `Unpacker.unpack` return the hashes of the bytes they read from the source, `Steps` compares them with `Packer.hashes` / `Trees.hashes` of the forced result; the archive crypt rewrite is a `Crypt.view` container packed like any pack (one writer, one verification, the format kept) | a packer that returned read-back hashes would make the manifest verify against itself; one rewrite path instead of two (B2's view, B3's zip-only `CryptRewriter`) keeps the `.cry` format code in `Cry` alone |
 | Catalog: one `entity` table for six kinds (model, studio, photographer, genre, tag, list), `album_link` keyed by an `INT` surrogate `album.seq`, text fields stay the truth and links are derived on every save, `TINYINT` codes, stored visible-album counts | one CRUD, one tree, one picker; compact keys (9 bytes instead of 41); re-index can never disagree with the catalog; trees open with one indexed read ([catalog_plan.md](catalog_plan.md) §2, §9) |
 | Safe-delete = `hidden` flag (index only); Delete = plain confirmed deletion; transformation sources deleted only after byte-for-byte verification; no Recycle Bin | owner's definition; a bin needs AWT (unusable under Spring's headless default) and fails on held zips; verification is the safety |

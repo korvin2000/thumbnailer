@@ -228,6 +228,7 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
             case Request.SwitchLibrary(var dir) -> library.switchTo(dir);
             case Request.ForgetLibrary(var dir) -> library.forget(dir);
             case Request.Optimize o -> library.optimize();
+            case Request.Exit x -> library.exit();
             case Request.CatalogRequest r -> catalogApi.handle(r);
             case Request.OpsRequest r -> opsApi.handle(r);
             case Request.PhotosRequest r -> photosApi.handle(r);

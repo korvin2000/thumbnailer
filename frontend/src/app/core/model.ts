@@ -59,8 +59,11 @@ export interface EntityLinkIn { to: number; alias?: string; roles?: string }
 export interface StudioRow { entity: Entity; aliases: string[]; genres: string[]; albums: number }
 /** Read-only facts from the entity's albums; sections per kind. */
 export interface Derived { albums: number; models?: Entity[]; studios?: StudioRow[]; photographers?: Entity[]; genres?: Entity[]; tags?: string[] }
-/** `derived` is absent until the server computes it (catalog track B1). */
-export interface EntityCard { entity: Entity; aliases: string[]; links: EntityLinkOut[]; derived?: Derived }
+/**
+ * `derived` is absent until the server computes it (catalog track B1). A curated link to an entity of the same kind is its parent (one at
+ * most, no cycle: a studio's parent studio); `children` = the entities whose parent this one is (absent when none).
+ */
+export interface EntityCard { entity: Entity; aliases: string[]; links: EntityLinkOut[]; derived?: Derived; children?: Entity[] }
 /** `aliases` / `links` absent or null keep the current set, a list replaces it. */
 export interface EntitySave { id?: number; kind: EntityKind; name: string; rating: number; profile: string | null; aliases?: string[] | null; links?: EntityLinkIn[] | null }
 
@@ -120,7 +123,7 @@ export interface Filters {
   missing?: EntityKind;
   /** true = only hidden albums; absent/false = only visible ones. */
   hidden?: boolean;
-  /** Only albums with copies. */
+  /** true = only albums with copies; false = one album per copy group (the first indexed of its visibility), the others left out; absent = all. */
   duplicates?: boolean;
   genres?: string[];
 }

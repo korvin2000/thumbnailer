@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, input, output, signal, untracked } from '@angular/core';
 import { Router } from '@angular/router';
 import { CatalogStore } from '../core/catalog-store';
-import { ageFrom, cmToFtIn, Field, FIELDS, kgToLb, parseChips, parseProfile, withField } from '../core/entity-fields';
+import { ageFrom, boolOf, cmToFtIn, Field, FIELDS, kgToLb, optionOf, parseProfile, withField, YEARS_MAX, YEARS_MIN, yearsOf, yearsValue } from '../core/entity-fields';
 import { Gateway } from '../core/gateway';
 import { Album, Derived, Entity, EntityCard, EntityKind, EntityLinkIn, EntitySave } from '../core/model';
 import { AlbumStore } from '../core/store';
@@ -66,6 +66,23 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
         @if (e.kind === 'LIST') { <button class="btn sm" (click)="showPhotos()" [disabled]="!e.photos"><app-icon name="image" [size]="13" /> Show photos</button> }
       </div>
 
+      @if (e.kind === 'STUDIO') {
+        @let parent = parentOf(c);
+        <section>
+          <h3><app-icon name="layers" [size]="13" /> Studio group</h3>
+          <div class="fields">
+            <div class="field"><span>Parent</span><div class="chips">
+              @if (parent) { <span class="chip active" title="Parent studio"><button class="t" (click)="open.emit(parent.id)">{{ parent.name }}</button><button title="Remove the parent" (click)="removeLink(parent.id)"><app-icon name="x" [size]="11" /></button></span> }
+              @else { <button class="btn sm ghost add" (click)="setParent()"><app-icon name="plus" [size]="13" /> Set parent…</button> }
+            </div></div>
+            <div class="field"><span>Sub-studios</span><div class="chips">
+              @for (s of c.children ?? []; track s.id) { <span class="chip active" title="Sub-studio"><button class="t" (click)="open.emit(s.id)">{{ s.name }}</button><button title="Detach from this studio" (click)="detach(s.id)"><app-icon name="x" [size]="11" /></button></span> }
+              <button class="btn sm ghost add" (click)="addChild()"><app-icon name="plus" [size]="13" /> Add sub-studio…</button>
+            </div></div>
+          </div>
+        </section>
+      }
+
       @if (fields().length) {
         <section class="fields">
           @for (f of fields(); track f.key) {
@@ -76,10 +93,24 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
                 <label><span>{{ f.label }}</span><span class="unit"><input class="input sm" type="number" min="0" step="1" [value]="v ?? ''" (change)="setField(f, $any($event.target).value)" /><em>{{ f.unit }}</em><span class="hint">{{ f.unit === 'cm' ? ftIn(v) : lb(v) }}</span></span></label>
               }
               @case ('year') {
-                <label><span>{{ f.label }}</span><span class="unit"><input class="input sm" [value]="v ?? ''" [placeholder]="f.hint ?? ''" (change)="setField(f, $any($event.target).value)" />@if (age(v); as n) { <span class="hint">age {{ n }}</span> }</span></label>
+                <label><span>{{ f.label }}</span><span class="unit"><input class="input sm wide" [value]="v ?? ''" [placeholder]="f.hint ?? ''" (change)="setField(f, $any($event.target).value)" />@if (age(v); as n) { <span class="hint">age {{ n }}</span> }</span></label>
               }
-              @case ('chips') {
-                <label><span>{{ f.label }}</span><input class="input sm" [value]="chipsText(v)" placeholder="comma-separated" (change)="setField(f, $any($event.target).value)" /></label>
+              @case ('years') {
+                @let y = years(v);
+                <label><span>{{ f.label }}</span><span class="unit"><input #from class="input sm" type="number" [min]="yMin" [max]="yMax" step="1" placeholder="from" [value]="y[0] ?? ''" (change)="setField(f, from.value, to.value)" /><em>–</em><input #to class="input sm" type="number" [min]="yMin" [max]="yMax" step="1" placeholder="present" [value]="y[1] ?? ''" (change)="setField(f, from.value, to.value)" /></span></label>
+              }
+              @case ('select') {
+                @let old = stale(f, v);
+                @let k = option(f, v) ?? old ?? '';
+                <label><span>{{ f.label }}</span><select class="input sm" (change)="setField(f, $any($event.target).value)">
+                  <option value="" [selected]="k === ''">—</option>
+                  @if (old) { <option [value]="old" [selected]="true">"{{ old }}" (old value)</option> }
+                  @for (o of f.options; track o[0]) { <option [value]="o[0]" [selected]="o[0] === k">{{ o[1] }}</option> }
+                </select></label>
+              }
+              @case ('bool') {
+                @let b = bool(v);
+                <div class="field"><span>{{ f.label }}</span><span class="segmented"><button [class.active]="b === null" (click)="setField(f, null)">—</button><button [class.active]="b === false" (click)="setField(f, false)">No</button><button [class.active]="b === true" (click)="setField(f, true)">Yes</button></span></div>
               }
               @default { <label><span>{{ f.label }}</span><input class="input sm" [value]="v ?? ''" [placeholder]="f.hint ?? ''" (change)="setField(f, $any($event.target).value)" /></label> }
             }
@@ -151,7 +182,7 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
     .hero.bare { aspect-ratio: auto; height: 34px; }
     .hero img { width: 100%; height: 100%; object-fit: cover; }
     .scrim { position: absolute; inset: auto 0 0 0; display: flex; align-items: center; gap: 8px; padding: 18px 10px 7px; background: linear-gradient(to top, oklch(10% 0.01 260 / 0.75), transparent); color: #fff; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
-    .hero.bare .scrim { padding: 0 10px; background: none; color: var(--text-3); }
+    .hero.bare .scrim { inset: 0; padding: 0 10px; background: none; color: var(--text-3); }
     .kind { flex: 1; display: inline-flex; align-items: center; gap: 5px; }
     .auto { opacity: 0.8; text-transform: none; letter-spacing: 0; font-weight: 500; }
     .state { display: inline-flex; align-items: center; gap: 4px; text-transform: none; letter-spacing: 0; font-weight: 500; opacity: 0.85; }
@@ -169,10 +200,13 @@ interface StudioLine { entity: Entity; alias: string; roles: string; albums: num
     .counts strong { color: var(--text); font-variant-numeric: tabular-nums; }
     section h3 { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
     .fields { display: flex; flex-direction: column; gap: 6px; }
-    .fields label { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
+    .fields label, .field { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
     .fields label.col { grid-template-columns: 1fr; gap: 4px; }
+    .field .segmented { justify-self: start; }
+    .field .chips { min-height: 22px; }
     .unit { display: flex; align-items: center; gap: 6px; min-width: 0; }
     .unit .input { width: 90px; flex: none; }
+    .unit .input.wide { width: auto; flex: 1; max-width: 170px; }
     .unit em { font-style: normal; color: var(--text-3); font-size: 11.5px; }
     .hint { color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 6px; }
@@ -212,6 +246,8 @@ export class EntityCardView {
   protected readonly kindName = KIND;
   protected readonly icon = KIND_ICON;
   protected readonly noun = NOUN;
+  protected readonly yMin = YEARS_MIN;
+  protected readonly yMax = YEARS_MAX;
 
   protected readonly cover = signal<Album | null>(null);
   protected readonly saving = signal(false);
@@ -250,11 +286,18 @@ export class EntityCardView {
   protected age(v: unknown) { return ageFrom(v); }
   protected ftIn(v: unknown) { return cmToFtIn(v); }
   protected lb(v: unknown) { return kgToLb(v); }
-  protected chipsText(v: unknown) { return Array.isArray(v) ? v.join(', ') : typeof v === 'string' ? v : ''; }
+  protected bool(v: unknown) { return boolOf(v); }
+  protected years(v: unknown) { return yearsOf(v); }
+  protected option(f: Field, v: unknown) { return optionOf(f, v); }
+  /** A stored select value that is no option (free text typed before the field was a select): shown as it is until the user picks one. */
+  protected stale(f: Field, v: unknown) { const s = Array.isArray(v) ? v.join(', ') : v == null ? '' : String(v).trim(); return s && optionOf(f, v) === null ? s : null; }
   protected linksOf(c: EntityCard, kind: EntityKind) { return c.links.filter(l => l.to.kind === kind); }
   protected derivedOf(c: EntityCard, s: Section) { const curated = new Set(this.linksOf(c, s.kind).map(l => l.to.id)); return (c.derived ? s.derived(c.derived) ?? [] : []).filter(d => !curated.has(d.id)); }
   protected derivedTags(c: EntityCard) { const own = new Set(this.linksOf(c, 'TAG').map(l => l.to.name)); return (c.derived?.tags ?? []).filter(t => !own.has(t)); }
-  private links(c: EntityCard): EntityLinkIn[] { return c.links.map(l => ({ to: l.to.id, ...(l.alias ? { alias: l.alias } : {}), ...(l.roles ? { roles: l.roles } : {}) })); }
+  /** The same-kind curated link is the parent (model.ts `EntityCard`). */
+  protected parentOf(c: EntityCard) { return c.links.find(l => l.to.kind === c.entity.kind)?.to ?? null; }
+  /** The curated links as written, optionally without one kind (the parent slot). */
+  private links(c: EntityCard, except?: EntityKind): EntityLinkIn[] { return c.links.filter(l => l.to.kind !== except).map(l => ({ to: l.to.id, ...(l.alias ? { alias: l.alias } : {}), ...(l.roles ? { roles: l.roles } : {}) })); }
 
   // ---- edits (each one queued save, built from the card as it is when sent; null `aliases`/`links` keep the current set) ----
 
@@ -266,8 +309,9 @@ export class EntityCardView {
     input.value = '';
     if (a) void this.save(c => c.aliases.includes(a.toLowerCase()) ? null : { aliases: [...c.aliases, a] });
   }
-  protected setField(f: Field, raw: string) {
-    const value = f.type === 'number' ? (raw === '' ? '' : Number(raw)) : f.type === 'chips' ? parseChips(raw) : raw.trim();
+  /** `raw` is the control's text (a `bool` passes its state, `years` the second input in `to`); `withField` drops what is empty. */
+  protected setField(f: Field, raw: string | boolean | null, to?: string) {
+    const value = f.type === 'number' ? (raw === '' ? '' : Number(raw)) : f.type === 'years' ? yearsValue(raw, to) : typeof raw === 'string' ? raw.trim() : raw;
     void this.save(c => ({ profile: withField(parseProfile(c.entity.profile), f.key, value) }));
   }
   protected removeLink(id: number) { void this.save(c => ({ links: this.links(c).filter(l => l.to !== id) })); }
@@ -285,6 +329,28 @@ export class EntityCardView {
     this.editing.set(null);
     if (c && a && a !== s.alias) void this.attempt(this.catalog.tryCreditAs(c.entity.id, s.entity.id, a, s.roles || undefined));
   }
+
+  /** The parent studio replaces the card's same-kind link; itself or a direct child is refused here, a deeper cycle by the server (toast via `attempt`). */
+  protected async setParent() {
+    const c = this.catalog.card();
+    if (!c) return;
+    const p = await this.picker.pick({ kind: 'STUDIO', title: `Parent studio of ${c.entity.name}`, allowCreate: true });
+    if (!p) return;
+    if (p.id === c.entity.id || c.children?.some(s => s.id === p.id)) return this.toasts.show(`${p.name} cannot be the parent of ${c.entity.name}`, 'error');
+    void this.save(x => ({ links: [...this.links(x, 'STUDIO'), { to: p.id }] }));
+  }
+
+  /** A sub-studio is saved from the child's side (`trySetParent`); the open card reloads with its `children`. */
+  protected async addChild() {
+    const c = this.catalog.card();
+    if (!c) return;
+    const s = await this.picker.pick({ kind: 'STUDIO', title: `Add sub-studio to ${c.entity.name}`, allowCreate: true });
+    if (!s) return;
+    if (s.id === c.entity.id || this.parentOf(c)?.id === s.id) return this.toasts.show(`${s.name} cannot be a sub-studio of ${c.entity.name}`, 'error');
+    void this.attempt(this.catalog.trySetParent(s.id, c.entity.id));
+  }
+
+  protected detach(childId: number) { void this.attempt(this.catalog.trySetParent(childId, null)); }
 
   protected async addLink(kind: EntityKind) {
     const c = this.catalog.card();

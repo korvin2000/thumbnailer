@@ -28,6 +28,8 @@ export class WsGateway extends Gateway {
   private ws: WebSocket | null = null;
   private seq = 0;
   private backoff = 500;
+  /** Set once `exit` was accepted: no reconnecting to a server that is gone. */
+  private exited = false;
   /** Last render spec epoch seen in a settings reply; a changed spec changes image URLs, bypassing the browser cache. */
   private epoch = '';
   private readonly pending = new Map<string, Pending>();
@@ -52,6 +54,7 @@ export class WsGateway extends Gateway {
   switchLibrary = (dir: string) => this.request<void>('switchLibrary', { dir });
   forgetLibrary = (dir: string) => this.request<LibraryInfo>('forgetLibrary', { dir });
   optimize = () => this.request<void>('optimize', {});
+  exit = () => this.request<void>('exit', {}).then(() => { this.exited = true; });
 
   entities = (kind: EntityKind, o: EntityQuery = {}) => this.request<EntityList>('entities', { kind, text: o.text, under: o.under, ...(o.unused ? { unused: true } : {}), sort: o.byCount ? 'COUNT' : 'NAME', offset: o.offset ?? 0, limit: o.limit ?? 100 });
   entity = (entityId: number) => this.request<EntityCard>('entity', { entityId });
@@ -93,6 +96,7 @@ export class WsGateway extends Gateway {
       this.ws = null;
       this.events.next({ type: 'connection', connected: false });
       for (const [id, p] of this.pending) if (p.sent) { clearTimeout(p.timer); this.pending.delete(id); p.reject(new Error('Connection lost')); } // the unsent ones go out on the next socket
+      if (this.exited) return; // the server is gone for good
       setTimeout(() => this.connect(), this.backoff);
       this.backoff = Math.min(this.backoff * 2, 10_000);
     };

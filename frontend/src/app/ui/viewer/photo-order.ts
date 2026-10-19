@@ -54,9 +54,12 @@ export function nextScale(s: ViewerScale): ViewerScale { return SCALE_CYCLE[(SCA
 
 export interface Size { width: number; height: number }
 
-/** Rendered size of a `natural` image in a `viewport` per scale mode: fit fills (upscaling), fitLarge only shrinks, actual is 1:1, width/height fill one axis. */
-export function scaleBox(mode: ViewerScale, natural: Size, viewport: Size): Size {
-  const nw = natural.width || 1, nh = natural.height || 1, fit = Math.min(viewport.width / nw, viewport.height / nh);
+/**
+ * Rendered size of a `natural` image in a `viewport` per scale mode: fit fills (upscaling), fitLarge only shrinks, actual is 1:1, width/height fill one axis.
+ * `turns` = quarter turns of a view-only rotation: an odd count swaps the sides, so the box is the one the rotated photo shows in.
+ */
+export function scaleBox(mode: ViewerScale, natural: Size, viewport: Size, turns = 0): Size {
+  const odd = turns % 2 !== 0, nw = (odd ? natural.height : natural.width) || 1, nh = (odd ? natural.width : natural.height) || 1, fit = Math.min(viewport.width / nw, viewport.height / nh);
   const s = { fit, fitLarge: Math.min(1, fit), actual: 1, width: viewport.width / nw, height: viewport.height / nh }[mode];
   return { width: Math.round(nw * s), height: Math.round(nh * s) };
 }

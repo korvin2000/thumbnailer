@@ -10,24 +10,23 @@ import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
 import { EntityCardView } from './entity-card';
 import { Icon } from './shared/icon';
+import { NameCombo } from './shared/name-combo';
 import { Rating } from './shared/rating';
 
 type TextField = 'name' | 'model' | 'studio' | 'photographer' | 'description';
-/** The credit inputs: each edits the raw text (a name list), its chips show the entities that text resolved to. */
+/** The credit inputs: each edits the raw text (a name list) through a combobox over its role's entities, its chips show the entities that text resolved to. */
 const CREDITS = [
-  { role: 'MODEL', field: 'model', label: 'Model', icon: 'user', facet: 'models' },
-  { role: 'STUDIO', field: 'studio', label: 'Studio', icon: 'building', facet: 'studios' },
-  { role: 'PHOTOGRAPHER', field: 'photographer', label: 'Photographer', icon: 'camera', facet: 'photographers' },
-  { role: 'GENRE', field: 'genres', label: 'Genres', icon: 'sparkles', facet: 'genres' },
+  { role: 'MODEL', field: 'model', label: 'Model', icon: 'user' },
+  { role: 'STUDIO', field: 'studio', label: 'Studio', icon: 'building' },
+  { role: 'PHOTOGRAPHER', field: 'photographer', label: 'Photographer', icon: 'camera' },
+  { role: 'GENRE', field: 'genres', label: 'Genres', icon: 'sparkles' },
 ] as const;
 type Credit = typeof CREDITS[number];
-/** Datalist rows for one credit input: the typed head (names before the last separator) joined with each server suggestion. */
-interface Suggest { role: EntityKind; options: string[] }
 
 /** Floating panel with everything about one album; every field saves itself on change. In entity mode (a chip clicked) it shows the catalog card instead, 400 px wide. */
 @Component({
   selector: 'app-details-panel',
-  imports: [Icon, Rating, RouterLink, BytesPipe, MegapixelsPipe, DatePipe, DecimalPipe, EntityCardView],
+  imports: [Icon, NameCombo, Rating, RouterLink, BytesPipe, MegapixelsPipe, DatePipe, DecimalPipe, EntityCardView],
   host: { '[class.entity]': "mode() === 'entity'" },
   template: `
     <header>
@@ -83,8 +82,7 @@ interface Suggest { role: EntityKind; options: string[] }
         <section class="fields">
           @for (c of credits; track c.role) {
             <label><span><app-icon [name]="c.icon" [size]="13" /> {{ c.label }}</span>
-              <input class="input sm" [value]="text(a, c)" [attr.list]="'dl-' + c.role" [placeholder]="'names, comma-separated'" (input)="suggest(c, $any($event.target).value)" (change)="saveCredit(a, c, $any($event.target).value)" /></label>
-            <datalist [id]="'dl-' + c.role">@for (o of options(c); track o) { <option [value]="o"></option> }</datalist>
+              <app-name-combo [kind]="c.role" [value]="text(a, c)" placeholder="names, comma-separated" (commit)="saveCredit(a, c, $event)" /></label>
             @let linked = links(a, c.role);
             @if (linked.length) {
               <div class="links">
@@ -170,10 +168,6 @@ export class DetailsPanel {
   protected readonly saved = linkedSignal<Album | null, boolean>({ source: this.album, computation: () => false });
   /** Local tag list so quick successive edits build on each other instead of on the last acknowledged album. */
   protected readonly tags = linkedSignal(() => this.album()?.tags ?? []);
-  /** Server suggestions for the credit input being typed in (one role at a time); the facets fill the lists otherwise. */
-  private readonly suggestion = signal<Suggest | null>(null);
-  private suggestTimer?: ReturnType<typeof setTimeout>;
-  private suggestGen = 0;
 
   protected save(field: TextField, value: string) {
     const a = this.album();
@@ -188,25 +182,8 @@ export class DetailsPanel {
   protected text(a: Album, c: Credit): string { return c.field === 'genres' ? joinNames(a.genres ?? []) : a[c.field] ?? ''; }
 
   protected saveCredit(a: Album, c: Credit, value: string) {
-    this.suggestion.set(null);
     if (c.field === 'genres') { const genres = parseNames(value); if (genres.join('\n') !== (a.genres ?? []).join('\n')) this.patch({ genres }); }
     else this.save(c.field, value);
-  }
-
-  protected options(c: Credit): string[] {
-    const s = this.suggestion();
-    return s?.role === c.role ? s.options : (this.store.facets()?.[c.facet] ?? []).map(x => x.value);
-  }
-
-  /** Prefix search of the name being typed (after the last separator); each hit is offered as the whole list with that name completed. */
-  protected suggest(c: Credit, value: string) {
-    clearTimeout(this.suggestTimer);
-    const m = /^(.*[,;]\s*)?([^,;]*)$/.exec(value)!, head = m[1] ?? '', token = m[2].trim(), gen = ++this.suggestGen;
-    if (!token) { this.suggestion.set(null); return; }
-    this.suggestTimer = setTimeout(async () => {
-      try { const r = await this.catalog.entities(c.role, { text: token, limit: 12 }); if (gen === this.suggestGen) this.suggestion.set({ role: c.role, options: r.items.map(e => head + e.name) }); }
-      catch { /* the facet list stays */ }
-    }, 150);
   }
 
   protected async unlink(a: Album, entityId: number) {

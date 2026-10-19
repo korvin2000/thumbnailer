@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ageFrom, cmToFtIn, FIELDS, joinNames, kgToLb, parseChips, parseNames, parseProfile, withField } from './entity-fields';
+import { ageFrom, boolOf, cmToFtIn, COUNTRIES, FIELDS, joinNames, kgToLb, optionOf, parseChips, parseNames, parseProfile, withField, yearsOf, yearsText, yearsValue } from './entity-fields';
 
 describe('entity fields', () => {
   it('has the §7.3 schema per kind, keys unique', () => {
-    expect(FIELDS.MODEL.map(f => f.key)).toEqual(['born', 'yearsActive', 'birthplace', 'nationality', 'ethnicity', 'hair', 'eyes', 'height', 'weight', 'bodyType', 'measurements', 'tattoos', 'piercings', 'notes']);
+    expect(FIELDS.MODEL.map(f => f.key)).toEqual(['born', 'yearsActive', 'birthplace', 'nationality', 'ethnicity', 'hair', 'eyes', 'height', 'weight', 'bodyType', 'breasts', 'tattoos', 'piercings', 'notes']);
     expect(FIELDS.STUDIO.map(f => f.key)).toEqual(['yearsActive', 'web', 'notes']);
     expect(FIELDS.PHOTOGRAPHER).toBe(FIELDS.STUDIO);
     expect(FIELDS.GENRE.map(f => f.key)).toEqual(['description']);
@@ -11,7 +11,45 @@ describe('entity fields', () => {
     expect(FIELDS.TAG).toEqual([]);
     for (const fields of Object.values(FIELDS)) expect(new Set(fields.map(f => f.key)).size).toBe(fields.length);
     expect(FIELDS.MODEL.find(f => f.key === 'height')).toMatchObject({ type: 'number', unit: 'cm' });
-    expect(FIELDS.MODEL.find(f => f.key === 'tattoos')?.type).toBe('chips');
+    expect(FIELDS.MODEL.find(f => f.key === 'tattoos')?.type).toBe('bool');
+    expect(FIELDS.STUDIO.find(f => f.key === 'yearsActive')?.type).toBe('years');
+    for (const f of FIELDS.MODEL.filter(f => f.type === 'select')) expect(new Set(f.options!.map(([k]) => k)).size, f.key).toBe(f.options!.length);
+  });
+
+  it('lists countries by ISO-2 code with their names', () => {
+    expect(COUNTRIES.find(([k]) => k === 'UA')?.[1]).toBe('Ukraine');
+    expect(COUNTRIES.length).toBeGreaterThan(200);
+    expect(COUNTRIES.every(([k]) => /^[A-Z]{2}$/.test(k))).toBe(true);
+  });
+
+  it('reads select values by key, older text by key or label, else null', () => {
+    const f = (key: string) => FIELDS.MODEL.find(x => x.key === key)!;
+    expect(optionOf(f('hair'), 'brown')).toBe('brown');
+    expect(optionOf(f('hair'), ' Brown ')).toBe('brown');
+    expect(optionOf(f('nationality'), 'ukraine')).toBe('UA');
+    expect(optionOf(f('ethnicity'), 'Latina / Hispanic')).toBe('latina');
+    expect(optionOf(f('breasts'), 'Medium')).toBe('m');
+    expect(optionOf(f('nationality'), 'ukrainian')).toBeNull();
+    expect(optionOf(f('hair'), 7)).toBeNull();
+  });
+
+  it('reads booleans, older chip lists and text too', () => {
+    expect([true, false, null, undefined, [], ['None'], 'no', ['rose', 'star'], 'yes'].map(boolOf)).toEqual([true, false, null, null, null, false, false, true, true]);
+    expect(withField({}, 'tattoos', false)).toBe('{"tattoos":false}');
+  });
+
+  it('keeps years active as a clamped, ordered range; reads the older text', () => {
+    expect(yearsOf([2015, 2020])).toEqual([2015, 2020]);
+    expect(yearsOf([2018, null])).toEqual([2018, null]);
+    expect(yearsOf('2015–2020')).toEqual([2015, 2020]);
+    expect(yearsOf('2018-present')).toEqual([2018, null]);
+    expect(yearsOf('1900-2100')).toEqual([null, null]);
+    expect(yearsValue('2020', '2015')).toEqual([2015, 2020]);
+    expect(yearsValue('1950', '')).toEqual([1960, null]);
+    expect(yearsValue('', '2077')).toEqual([null, 2050]);
+    expect(yearsValue('', ' ')).toEqual([]);
+    expect(withField({}, 'yearsActive', yearsValue('', ''))).toBeNull();
+    expect([yearsText([2015, 2020]), yearsText([2018, null]), yearsText(undefined)]).toEqual(['2015–2020', '2018–present', '']);
   });
 
   it('parses a profile tolerantly and writes fields back, dropping empties', () => {

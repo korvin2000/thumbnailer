@@ -1,0 +1,22 @@
+Analyze current project code and documentation and fix a few issues I have found and implement some missing functionality:
+Also check, read 'goals.txt', 'ModelCard.md', 'StudioCard.md'
+
+A) Issues found
+
+1) In ui components (entity cards) for editing: "Studios", "Genres" and "Favorites" there are a div header with class="hero bare" (div.hero.bare), showing a header / capitel with text , but this text is not properly aligned vertically , please fix it and check yourself using browser.
+2) In app-details-panel / app-entity-card for editing studio there user can edit / define an "Years active" field and this is simple textbox and any text could be pasted here, but a logical solution were simply from - to input numbers instead of free text, what do you think?
+3) while editing gallery cards there is a combobox to assign a studio or genre, but it doesn't show any suggestions even IF a have studios and genres defined, I should always manually add them. It's not user friendly.
+4) a model card has a multiple problems: 
+4.1) born text field is too short and whole text "YYYY or YYYY-MM-DD" is not visible, is cut off.
+4.2) Nationality (iso-2), Ethnicity, Hair, Eyes, Body type (even Birthplace)  should be enums, where I can select from predefined values, and such values could be stored in a far more compact and memory-efficient way and searching by these enums or indexes will also be much quicker and easier than a full-text search. Replace field "Measurements" with "breast size" and use also enum for this field..
+Tattoos and Piercings are also text fields but should be a booleans simply showing yes / no.
+"Years active" field same issue as in studio card - this is a free text field, but should be a number range, from min (1960) to max (2050).
+B) Missing functionality
+
+1) A studio can have a parent studio, so for example a studios FashionEuroGirls and FashionUSAGirls have as parent studio FashionGirls. And FashionGirls studio have 2 children in this case: FashionEuroGirls and FashionUSAGirls. Add a possibility to define and add a parent in Studio edit card and also add and show child / nested studios if some studio have such ones. And this info also  should be stored in DB, as well as other fields.
+2) Add in settings extra menu  "Exit application" to safely and reliably exit application flushing and saving all information in db / on disk to preserve any data loss or corruption. So any unsaved data should be flashed and any transactions commited.
+3) An application has a functionality to detect duplicate galleries and successfully identifies them but shows in main window all duplicates, which doesn't make much sense, add a config option "[x] show duplicates" and if it's unchecked show only first gallery, hiding other duplicates.
+4) there are a small image panel at the bottom to view image information and control it :
+'<div class="caption"..' in 'frontend/src/app/ui/viewer/lightbox.ts'.
+It shows Image name, image index / total images, image dimension and image size, ranking control, favorites button, info button, scaling mode, and so on.
+I'd like to add in it some more controls to rotate an image clockwise and anti-clockwise, but without making a "image control and information panel" even longer and wider, it's already wide enough, so think about the best way to add these two new controls without making the panel any longer - i suggest to remove "image dimension" and "image size" information.

@@ -67,6 +67,9 @@ public interface CatalogRepository {
 
     List<EntityLink> entityLinks(int from);
 
+    /** The entities of {@code parent}'s kind with a curated link to it (its children, §2 parent links), by name. */
+    List<Entity> children(int parent);
+
     void adjust(Map<Integer, Integer> deltas);
 
     /** Every stored album count from the links of visible albums. */

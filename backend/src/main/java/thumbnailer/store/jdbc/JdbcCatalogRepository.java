@@ -200,6 +200,12 @@ class JdbcCatalogRepository implements CatalogRepository {
     }
 
     @Override
+    public List<Entity> children(int parent) {
+        return jdbc.sql(ENTITY + " WHERE e.kind = (SELECT kind FROM entity WHERE id = ?) AND e.id IN (SELECT from_id FROM entity_link WHERE to_id = ?) ORDER BY sort_name, id")
+                .params(parent, parent).query(JdbcCatalogRepository::entity).list();
+    }
+
+    @Override
     public void adjust(Map<Integer, Integer> deltas) {
         template.batchUpdate("UPDATE entity SET albums = albums + ? WHERE id = ?",
                 deltas.entrySet().stream().map(d -> new Object[]{d.getValue(), d.getKey()}).toList());
@@ -306,6 +312,9 @@ class JdbcCatalogRepository implements CatalogRepository {
             jdbc.sql("UPDATE photo_link SET entity_id = ? WHERE entity_id = ?").params(b, a).update();
             jdbc.sql("DELETE FROM entity_link WHERE from_id = ? AND to_id = ? OR from_id = ? AND to_id = ?").params(a, b, b, a).update();
             jdbc.sql("DELETE FROM entity_link WHERE from_id = ? AND to_id IN (SELECT to_id FROM entity_link WHERE from_id = ?)").params(a, b).update();
+            // one parent at most: the survivor's wins
+            jdbc.sql("DELETE FROM entity_link WHERE from_id = ? AND to_id IN (SELECT id FROM entity WHERE kind = ?) AND EXISTS (SELECT 1 FROM entity_link l "
+                    + "JOIN entity p ON p.id = l.to_id WHERE l.from_id = ? AND p.kind = ?)").params(a, into.kind().code(), b, into.kind().code()).update();
             jdbc.sql("DELETE FROM entity_link WHERE to_id = ? AND from_id IN (SELECT from_id FROM entity_link WHERE to_id = ?)").params(a, b).update();
             jdbc.sql("UPDATE entity_link SET from_id = ? WHERE from_id = ?").params(b, a).update();
             jdbc.sql("UPDATE entity_link SET to_id = ? WHERE to_id = ?").params(b, a).update();

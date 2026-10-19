@@ -78,6 +78,8 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
 - Encryption asks for the password unless the preflight says `keyVerified` (`needsPassword` in `op-confirm.ts`): a
   session key fingerprint alone proves nothing. The typed password becomes the session key through
   `saveSettings({ cryPassword })`, never an `op.password` (the server would not re-index a result it cannot read).
+- Floating lists (context menu, `NameCombo`) are `popover` elements in the top layer: a `.panel` ancestor has `backdrop-filter`,
+  which makes it the containing block of `position: fixed` children, so a fixed list inside it would be clipped.
 - Dialog-style services return promises: `FolderPicker.pick()`, `Confirm.ask()`, `EntityPicker.pick()`; the context
   menu is `ContextMenu.open(x, y, items)` with data-only `MenuEntry`s built per subject on every open. Their
   components are mounted once in `app.html` (the folder picker too: a `<dialog>` inside the closed settings dialog would

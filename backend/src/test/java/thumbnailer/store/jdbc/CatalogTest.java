@@ -16,6 +16,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiFunction;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.framework.ProxyFactory;
@@ -155,6 +156,27 @@ class CatalogTest {
         assertThat(events).containsExactly(new CatalogEvent(List.of(EntityKind.MODEL)));
         assertThatThrownBy(() -> catalog.merge(List.of(studio), ariell)).hasMessage("Only entities of one kind merge: EL-Studio is no model");
         assertThatThrownBy(() -> catalog.merge(List.of(ariell), ariell)).hasMessage("Nothing to merge into Ariell van Hoover");
+    }
+
+    @Test
+    void aLinkToTheOwnKindIsTheParentOneAtMostNeverBelowItselfAndTheParentCardListsItsChildren() {
+        BiFunction<String, List<Integer>, Integer> studio = (name, parents) -> catalog.save(new EntitySave(repo.resolve(EntityKind.STUDIO,
+                Catalog.norm(EntityKind.STUDIO, name)).orElse(null), EntityKind.STUDIO, name, 0, null, null,
+                parents.stream().map(p -> new EntityLink(p, null, null)).toList())).entity().id();
+        int top = studio.apply("FashionGirls", List.of()), other = studio.apply("Other", List.of());
+        int eu = studio.apply("FashionEuroGirls", List.of(top)), us = studio.apply("FashionUSAGirls", List.of(top));
+        assertThat(catalog.get(top).children()).extracting(Entity::name).containsExactly("FashionEuroGirls", "FashionUSAGirls");
+        assertThat(catalog.get(eu).links()).extracting(r -> r.to().id()).containsExactly(top);
+        assertThat(catalog.get(other).children()).isEmpty();
+        assertThatThrownBy(() -> studio.apply("FashionEuroGirls", List.of(top, other))).hasMessage("One parent at most");
+        assertThatThrownBy(() -> studio.apply("FashionGirls", List.of(eu))).hasMessage("FashionEuroGirls is inside FashionGirls");
+        assertThat(catalog.get(top).links()).as("a refused save changes nothing").isEmpty();
+
+        studio.apply("Other", List.of(us));
+        catalog.merge(List.of(other), eu);
+        assertThat(repo.entityLinks(eu)).as("the survivor's parent wins").extracting(EntityLink::to).containsExactly(top);
+        catalog.delete(List.of(top), true);
+        assertThat(catalog.get(eu).links()).as("a deleted parent leaves its children on top").isEmpty();
     }
 
     @Test

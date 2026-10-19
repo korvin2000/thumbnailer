@@ -3,7 +3,7 @@ import { LAYOUT_MODES, LayoutMode } from './layout';
 
 export type Theme = 'light' | 'dark';
 const THEMES: Theme[] = ['light', 'dark'];
-const systemTheme = (): Theme => matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+const systemTheme = (): Theme => typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 export type SidebarTab = 'folders' | 'refine' | 'none';
 const SIDEBARS: SidebarTab[] = ['folders', 'refine', 'none'];
 const TABS: SidebarTab[] = ['folders', 'refine'];
@@ -25,6 +25,8 @@ export class Prefs {
   readonly layoutMode = this.persisted<LayoutMode>('layout', 'bricks');
   readonly showTags = this.persisted('showTags', true);
   readonly followHover = this.persisted('followHover', true);
+  /** false = the library shows one album per copy group (`AlbumQuery.duplicates` false) unless the Duplicates view asks for them. */
+  readonly showDuplicates = this.persisted('showDuplicates', true);
   /** Which sidebar tab is shown; `none` = sidebar closed. */
   readonly sidebar = this.persisted<SidebarTab>('sidebar', 'folders');
   /** The tab shown last (`folders` = Browse): what the topbar's sidebar button reopens. */

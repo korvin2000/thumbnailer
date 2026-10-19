@@ -116,8 +116,8 @@ const slot = (key: string) => /^[0-9]$/.test(key) ? (+key + 9) % 10 : -1;
 
     @if (current(); as e) {
       <app-lightbox [album]="album()!" [entry]="e" [position]="position()" [count]="shown().length" [mark]="marks()[e.name] ?? null" [scale]="scale()" [slideshow]="slideshow()"
-                    [seconds]="prefs.slideshowSeconds()" [targets]="targets()" [isCover]="e.name === album()!.cover" [metaOk]="metaOk(e)" [preload]="preloadUrl()"
-                    (close)="closeLightbox()" (step)="step($event)" (toggleScale)="zoom.set(scale() === 'actual' ? 'fit' : 'actual')" (scaleMenu)="scaleMenu($event)"
+                    [seconds]="prefs.slideshowSeconds()" [targets]="targets()" [isCover]="e.name === album()!.cover" [metaOk]="metaOk(e)" [preload]="preloadUrl()" [turns]="turns()[e.name] ?? 0"
+                    (close)="closeLightbox()" (step)="step($event)" (toggleScale)="zoom.set(scale() === 'actual' ? 'fit' : 'actual')" (scaleMenu)="scaleMenu($event)" (rotate)="rotate($event)"
                     (rate)="rate([e.name], $event)" (favorites)="favoritesMenu($event, e)" (copyTo)="copyTo([e.name], $event)" (meta)="showMeta(e)" (cover)="setCover(e)" (slideshowToggle)="toggleSlideshow()" />
     }
     @if (meta(); as m) { <app-meta-dialog [title]="m.title" [rows]="m.rows" (close)="meta.set(null)" /> }
@@ -226,6 +226,8 @@ export class AlbumViewer {
   protected readonly slideshow = signal(false);
   /** A click in the lightbox toggles fit ↔ 1:1 for this photo only; the preference stays. */
   protected readonly zoom = signal<ViewerScale | null>(null);
+  /** View-only quarter turns per entry name (never written to disk), kept while this album is open. */
+  protected readonly turns = signal<Record<string, number>>({});
 
   protected readonly album = computed(() => this.details()?.album ?? null);
   protected readonly entries = computed(() => this.details()?.entries ?? []);
@@ -261,7 +263,7 @@ export class AlbumViewer {
   /** A reload keeps the focus, the lightbox and the selection by entry *name*: a re-index renumbers (an index is the position among the readable images), and a gone photo must not become its neighbour. */
   private async load(id: string) {
     const gen = ++this.loadGen, stale = this.details()?.album.id !== id;
-    if (stale) { this.details.set(null); this.selected.set(null); this.lightbox.set(null); this.sel.clear(); this.bioOpen.set(false); }
+    if (stale) { this.details.set(null); this.selected.set(null); this.lightbox.set(null); this.sel.clear(); this.bioOpen.set(false); this.turns.set({}); }
     this.error.set(null);
     try {
       const d = await this.gw.album(id);
@@ -487,6 +489,12 @@ export class AlbumViewer {
 
   protected toggleSlideshow() { if (this.ensureLightbox()) this.slideshow.update(v => !v); }
 
+  /** Turns the lightbox photo by a quarter (`delta` ±1), remembered by name until another album loads. */
+  protected rotate(delta: number) {
+    const n = this.current()?.name;
+    if (n !== undefined) this.turns.update(t => ({ ...t, [n]: ((t[n] ?? 0) + delta + 4) % 4 }));
+  }
+
   protected fullscreen() {
     if (!this.ensureLightbox()) return;
     const lb = this.lightboxCmp();
@@ -494,7 +502,7 @@ export class AlbumViewer {
   }
 
   protected onKey(e: KeyboardEvent) {
-    if (e.altKey || (e.target as HTMLElement)?.closest('input, textarea, select') || document.querySelector('dialog[open]')) return;
+    if (e.altKey || this.store.exited() || (e.target as HTMLElement)?.closest('input, textarea, select') || document.querySelector('dialog[open]')) return;
     const ctrl = e.ctrlKey || e.metaKey, open = this.lightbox() !== null, n = slot(e.key);
     if (ctrl) {
       if (n >= 0) this.rate(this.namesFor(), n + 1);
@@ -506,6 +514,8 @@ export class AlbumViewer {
         break;
       case 'ArrowRight': if (open) this.step(1); else return; break;
       case 'ArrowLeft': if (open) this.step(-1); else return; break;
+      case ',': case '<': if (open) this.rotate(-1); else return; break;
+      case '.': case '>': if (open) this.rotate(1); else return; break;
       case ' ': this.toggleSlideshow(); break;
       case 'F11': this.fullscreen(); break;
       case '[': this.prefs.setViewerColumns(this.prefs.viewerColumns() - 1); break;

@@ -1,15 +1,18 @@
 package thumbnailer.catalog;
 
+import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY;
 import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 
 /**
- * What an entity card shows: the entity, every name it is known by (normalized), its curated links and the facts
- * derived from its albums (read only; null until computed).
+ * What an entity card shows: the entity, every name it is known by (normalized), its curated links (one to its own
+ * kind = its parent), the facts derived from its albums (read only; null until computed) and its children (the
+ * entities of its kind whose parent it is; left out when none).
  */
-public record Card(Entity entity, List<String> aliases, List<Relation> links, @JsonInclude(NON_NULL) Derived derived) {
+public record Card(Entity entity, List<String> aliases, List<Relation> links, @JsonInclude(NON_NULL) Derived derived,
+                   @JsonInclude(NON_EMPTY) List<Entity> children) {
 
     public record Relation(Entity to, @JsonInclude(NON_NULL) String alias, @JsonInclude(NON_NULL) String roles) {}
 

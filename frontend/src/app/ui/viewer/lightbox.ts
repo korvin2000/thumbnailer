@@ -9,8 +9,9 @@ import { Rating } from '../shared/rating';
 import { SCALE_LABELS, scaleBox, Size } from './photo-order';
 
 /**
- * One photo over the viewer: the image sized per scale mode (`scaleBox` from the entry's dimensions and the stage), panned by scroll or drag when
- * larger, a click toggles fit ↔ 1:1; prev/next; a caption with rating, heart, copy-to keys, metadata, scale, slideshow, full screen and cover.
+ * One photo over the viewer: the image sized per scale mode (`scaleBox` from the entry's dimensions, the stage and the view-only `turns`), panned by scroll
+ * or drag when larger, a click toggles fit ↔ 1:1; prev/next; a caption with rating, heart, copy-to keys, rotation, metadata, scale, slideshow, full screen and cover.
+ * A rotated image keeps its layout box upright: the `.frame` is the box the rotated photo shows in (so panning reaches every edge), the img turns inside it.
  * The host is the full-screen element (`toggleFullscreen()`); toasts are mirrored while full screen (the app's sit behind the top layer).
  */
 @Component({
@@ -18,9 +19,11 @@ import { SCALE_LABELS, scaleBox, Size } from './photo-order';
   imports: [Icon, Rating, BytesPipe],
   template: `
     <div #stage class="stage" [class.pan]="pannable()" (click)="$event.target === stage && close.emit()">
-      <img [src]="gw.originalUrl(album(), entry().index)" [alt]="entry().name" [class.zoom-in]="scale() !== 'actual'" [class.zoom-out]="scale() === 'actual'"
-           [style.width.px]="box()?.width ?? null" [style.height.px]="box()?.height ?? null" draggable="false" decoding="async" (load)="loaded($any($event.target))"
-           (pointerdown)="down($event)" (pointermove)="move($event)" (pointerup)="up($event)" (pointercancel)="up($event)" (click)="clicked($event)" />
+      <div class="frame" [class.sized]="!!box()" [style.width.px]="box()?.width ?? null" [style.height.px]="box()?.height ?? null" [style.--turns]="turns()">
+        <img [src]="gw.originalUrl(album(), entry().index)" [alt]="entry().name" [class.zoom-in]="scale() !== 'actual'" [class.zoom-out]="scale() === 'actual'"
+             [style.width.px]="imgSize()?.width ?? null" [style.height.px]="imgSize()?.height ?? null" draggable="false" decoding="async" (load)="loaded($any($event.target))"
+             (pointerdown)="down($event)" (pointermove)="move($event)" (pointerup)="up($event)" (pointercancel)="up($event)" (click)="clicked($event)" />
+      </div>
     </div>
     @if (count() > 1) {
       <button class="nav prev" (click)="step.emit(-1)" title="Previous (←)"><app-icon name="chevronLeft" [size]="26" /></button>
@@ -28,14 +31,16 @@ import { SCALE_LABELS, scaleBox, Size } from './photo-order';
     }
     @if (slideshow()) { @for (k of [entry().index]; track k) { <div class="progress" [style.animation-duration.s]="seconds()"></div> } }
     <div class="caption" (click)="$event.stopPropagation()">
-      <span class="name" [title]="entry().name">{{ entry().name }}</span>
-      <span class="dim">{{ position() + 1 }} / {{ count() }} · {{ entry().width }}×{{ entry().height }} · {{ entry().bytes | bytes }}</span>
+      <span class="name" [title]="entry().name + ' · ' + entry().width + '×' + entry().height + ' · ' + (entry().bytes | bytes)">{{ entry().name }}</span>
+      <span class="dim">{{ position() + 1 }} / {{ count() }}</span>
       <span class="grow"></span>
       <app-rating [compact]="true" [value]="mark()?.rating ?? 0" (valueChange)="rate.emit($event)" title="Rating (Ctrl+1…0)" />
       <button class="btn icon-btn sm ghost heart" [class.on]="mark()?.lists?.length" (click)="favorites.emit($event)" [title]="(mark()?.lists?.length ? 'In ' + mark()!.lists.length + ' favorites list(s)' : 'Add to favorites') + ' (F)'"><app-icon name="heart" [size]="15" /></button>
       @if (targets().length) {
         <span class="keys" title="Copy to target (1–0)">@for (t of targets(); track $index) { <button class="key" (click)="copyTo.emit($index)" [title]="'Copy to ' + t + ' (' + (($index + 1) % 10) + ')'">{{ ($index + 1) % 10 }}</button> }</span>
       }
+      <button class="btn icon-btn sm ghost" (click)="rotate.emit(-1)" [title]="'Rotate left (<)'"><app-icon name="rotateLeft" [size]="15" /></button>
+      <button class="btn icon-btn sm ghost" (click)="rotate.emit(1)" [title]="'Rotate right (>)'"><app-icon name="rotateRight" [size]="15" /></button>
       <button class="btn icon-btn sm ghost" [disabled]="!metaOk()" (click)="meta.emit()" title="Metadata (M)"><app-icon name="info" [size]="15" /></button>
       <button class="btn sm ghost mode" (click)="scaleMenu.emit($event)" title="Scale mode (S cycles)">{{ labels[scale()] }}<app-icon name="chevronDown" [size]="11" /></button>
       <button class="btn icon-btn sm ghost" [class.active]="slideshow()" (click)="slideshowToggle.emit()" [title]="(slideshow() ? 'Pause slideshow' : 'Slideshow, ' + seconds() + ' s per photo') + ' (Space)'"><app-icon [name]="slideshow() ? 'minus' : 'play'" [size]="15" /></button>
@@ -52,8 +57,10 @@ import { SCALE_LABELS, scaleBox, Size } from './photo-order';
     :host:fullscreen { background: #000; }
     .stage { position: absolute; inset: 0; display: flex; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; }
     .stage::-webkit-scrollbar { display: none; }
+    .frame { display: contents; } /* unmeasured: the img itself is the flex item, shrunk by max-width/height */
+    .frame.sized { display: block; position: relative; flex: none; margin: auto; }
     img { margin: auto; flex: none; max-width: 100%; max-height: 100%; box-shadow: var(--shadow-2); user-select: none; touch-action: none; }
-    img[style] { max-width: none; max-height: none; }
+    .frame.sized img { position: absolute; left: 50%; top: 50%; max-width: none; max-height: none; transform: translate(-50%, -50%) rotate(calc(var(--turns, 0) * 90deg)); }
     img.zoom-in { cursor: zoom-in; } img.zoom-out { cursor: zoom-out; }
     .stage.pan img { cursor: grab; } .stage.pan.dragging img { cursor: grabbing; }
     .nav { position: fixed; top: 50%; transform: translateY(-50%); width: 48px; height: 72px; display: grid; place-items: center; border-radius: 10px; color: #fff; background: oklch(20% 0.01 260 / 0.5); opacity: 0.6; transition: opacity 0.15s; }
@@ -94,11 +101,15 @@ export class Lightbox {
   readonly targets = input<string[]>([]);
   readonly isCover = input(false);
   readonly metaOk = input(true);
+  /** View-only rotation of this photo in quarter turns clockwise (0–3); the viewer keeps it per entry name. */
+  readonly turns = input(0);
   /** URL of the photo that follows, fetched ahead so stepping and the slideshow do not wait. */
   readonly preload = input<string | null>(null);
 
   readonly close = output<void>();
   readonly step = output<number>();
+  /** A quarter turn: −1 anticlockwise, 1 clockwise. */
+  readonly rotate = output<number>();
   /** A click on the photo: fit ↔ 1:1. */
   readonly toggleScale = output<void>();
   readonly scaleMenu = output<MouseEvent>();
@@ -119,7 +130,9 @@ export class Lightbox {
   /** The photo's pixel size: the index knows it; a photo it could not probe is measured on load. */
   private readonly natural = signal<Size | null>(null);
   private readonly viewport = signal<Size>({ width: 0, height: 0 });
-  protected readonly box = computed(() => { const n = this.natural(), v = this.viewport(); return n && v.width ? scaleBox(this.scale(), n, v) : null; });
+  /** The box the (rotated) photo shows in; `imgSize` is the img's own upright size, swapped for an odd turn. */
+  protected readonly box = computed(() => { const n = this.natural(), v = this.viewport(); return n && v.width ? scaleBox(this.scale(), n, v, this.turns()) : null; });
+  protected readonly imgSize = computed(() => { const b = this.box(); return b && this.turns() % 2 ? { width: b.height, height: b.width } : b; });
   protected readonly pannable = computed(() => { const b = this.box(), v = this.viewport(); return !!b && (b.width > v.width || b.height > v.height); });
   private drag: { x: number; y: number; left: number; top: number; moved: boolean } | null = null;
 

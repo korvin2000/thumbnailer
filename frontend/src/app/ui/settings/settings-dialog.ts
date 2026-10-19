@@ -2,6 +2,7 @@ import { afterRenderEffect, ChangeDetectionStrategy, Component, computed, effect
 import { DEFAULT_SETTINGS, Settings } from '../../core/model';
 import { AlbumStore } from '../../core/store';
 import { Toasts } from '../../core/toasts';
+import { Confirm } from '../shared/confirm';
 import { Icon, IconName } from '../shared/icon';
 import { AboutPage } from './about-page';
 import { AppearancePage } from './appearance-page';
@@ -19,7 +20,7 @@ const PAGES: { id: Page; label: string; icon: IconName }[] = [
   { id: 'appearance', label: 'Appearance', icon: 'sun' }, { id: 'keyboard', label: 'Keyboard', icon: 'keyboard' }, { id: 'about', label: 'About', icon: 'info' },
 ];
 
-/** Native <dialog> with a page rail, loaded lazily on the first `SettingsLink.open(page)`. One draft `Settings` is shared by Folders, Thumbnails and Operations and saved from the footer; Appearance applies instantly. */
+/** Native <dialog> with a page rail (plus the Exit application action), loaded lazily on the first `SettingsLink.open(page)`. One draft `Settings` is shared by Folders, Thumbnails and Operations and saved from the footer; Appearance applies instantly. */
 @Component({
   selector: 'app-settings-dialog',
   imports: [Icon, LibraryPage, FoldersPage, ThumbnailsPage, OperationsPage, AppearancePage, KeyboardPage, AboutPage],
@@ -31,12 +32,15 @@ const PAGES: { id: Page; label: string; icon: IconName }[] = [
         <button class="btn icon-btn sm ghost" (click)="close()" title="Close"><app-icon name="x" /></button>
       </header>
       <div class="body">
-        <nav class="rail" role="tablist" aria-label="Settings pages" (keydown)="railKey($event)">
-          @for (p of pages; track p.id) {
-            <button role="tab" [class.active]="page() === p.id" [attr.aria-selected]="page() === p.id" [tabindex]="page() === p.id ? 0 : -1" [title]="p.label" (click)="page.set(p.id)">
-              <app-icon [name]="p.icon" [size]="16" /><span>{{ p.label }}</span>
-            </button>
-          }
+        <nav class="rail">
+          <div class="tabs" role="tablist" aria-label="Settings pages" (keydown)="railKey($event)">
+            @for (p of pages; track p.id) {
+              <button role="tab" [class.active]="page() === p.id" [attr.aria-selected]="page() === p.id" [tabindex]="page() === p.id ? 0 : -1" [title]="p.label" (click)="page.set(p.id)">
+                <app-icon [name]="p.icon" [size]="16" /><span>{{ p.label }}</span>
+              </button>
+            }
+          </div>
+          <button class="exit" title="Exit application: the server saves everything and closes" (click)="exit()"><app-icon name="power" [size]="16" /><span>Exit application</span></button>
         </nav>
         <div class="content">
           <div class="scroll">
@@ -72,7 +76,11 @@ const PAGES: { id: Page; label: string; icon: IconName }[] = [
     h2 { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; white-space: nowrap; }
     .file { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: 11.5px; }
     .body { display: flex; flex: 1; min-height: 0; }
-    .rail { display: flex; flex-direction: column; gap: 2px; flex: none; width: 190px; padding: 10px; background: var(--bg); border-right: 1px solid var(--border); overflow: auto; }
+    .rail { display: flex; flex-direction: column; flex: none; width: 190px; padding: 10px; background: var(--bg); border-right: 1px solid var(--border); overflow: auto; }
+    .tabs { display: flex; flex-direction: column; gap: 2px; flex: 1; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .rail .exit { margin-top: 8px; color: var(--text-3); }
+    .rail .exit:hover { background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--danger); }
+    .rail .exit:hover app-icon { color: var(--danger); }
     .rail button { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid transparent; border-radius: var(--radius-s); color: var(--text-2); font-size: 12.5px; font-weight: 500; text-align: left; white-space: nowrap; transition: background 0.15s, color 0.15s, border-color 0.15s; }
     .rail button app-icon { color: var(--text-3); transition: color 0.15s; }
     .rail button:hover { background: var(--surface); color: var(--text); }
@@ -100,6 +108,7 @@ export class SettingsDialog {
   protected readonly store = inject(AlbumStore);
   protected readonly toasts = inject(Toasts);
   private readonly link = inject(SettingsLink);
+  private readonly confirm = inject(Confirm);
   private readonly dialog = viewChild.required<ElementRef<HTMLDialogElement>>('dlg');
 
   protected readonly pages = PAGES;
@@ -168,5 +177,18 @@ export class SettingsDialog {
     const i = (PAGES.findIndex(p => p.id === this.page()) + step + PAGES.length) % PAGES.length;
     this.page.set(PAGES[i].id);
     (e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button')[i]?.focus();
+  }
+
+  /** Exit for good: the server flushes and closes. A savable draft is saved first when the box stays ticked (a failed save keeps the dialog open); a blocked one is discarded, and the question says so. */
+  protected async exit() {
+    const canSave = this.dirty() && !this.blocked(), discards = this.dirty() && !canSave;
+    const r = await this.confirm.ask({
+      title: 'Exit Thumbnailer?', danger: true, okLabel: 'Exit',
+      message: `The Thumbnailer server saves everything and closes; this tab can be closed afterwards. Start Thumbnailer again to continue.${discards ? ' The unsaved settings are discarded (the running scan blocks saving them).' : ''}`,
+      options: canSave ? [{ key: 'save', label: 'Save the unsaved settings first', kind: 'check', value: true }] : undefined,
+    });
+    if (!r) return;
+    if (r['save']) { await this.save(); if (this.dirty()) return; }
+    if (await this.store.exit()) this.close();
   }
 }

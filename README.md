@@ -56,6 +56,8 @@ data dir remembers the known libraries and the active one. Switching a library, 
 then a full database compaction while it closes), restarts the application inside the same process: open windows
 reconnect by themselves after a few seconds. Neither runs while a scan is running. A `--thumbnailer.library-dir=…`
 argument (or environment variable) pins the library; a switch made in the UI then takes effect only once it is removed.
+Settings → Exit application closes the server cleanly (a running scan is stopped, the database and cover store are
+flushed and closed); it is refused while a file operation runs.
 
 Native code (TuplDB, libjpeg-turbo, libwebp, 7-Zip) needs `--enable-native-access=ALL-UNNAMED`; the jar manifest,
 `bootRun` and the tests set it. `--add-modules jdk.incubator.vector` turns on the SIMD resampler (a jar manifest cannot;
@@ -111,5 +113,5 @@ into the jar; recipe in [backend/CLAUDE.md](backend/CLAUDE.md#extending-recipes)
 `Ctrl+Space` toggle, `Ctrl+A` select all (≤ 500) · `Shift+F10` or right-click album menu (also on folders and entity rows) · `H` hide · `Delete` delete… · `Enter` open ·
 `C` use photo as cover · `Esc` clear the selection, close
 
-Viewer: `[` `]` photos per row · `F11` full screen · `Space` slideshow · `S` scale mode · `R` reshuffle · `1`–`9` `0` copy to target · `Ctrl+1…0` rate · `F` favorites ·
+Viewer: `[` `]` photos per row · `F11` full screen · `Space` slideshow · `S` scale mode · `<` `>` rotate left / right (view only) · `R` reshuffle · `1`–`9` `0` copy to target · `Ctrl+1…0` rate · `F` favorites ·
 `M` metadata · `B` bio · `C` cover · `Ctrl`/`Shift`+click, `Ctrl+A` select photos · `Esc` close

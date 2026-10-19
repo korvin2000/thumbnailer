@@ -5,6 +5,7 @@ import {
   activeFilterCount, Album, AlbumPatch, AlbumQuery, ENTITY_KINDS, Facets, Filters, GatewayEvent, LibraryInfo, RootStatus, ScanProgress, Settings, SettingsInfo, Sort,
 } from './model';
 import { OpsStore } from './ops-store';
+import { Prefs } from './prefs';
 import { parseSearch } from './search-syntax';
 import { Selection } from './selection';
 import { Toasts } from './toasts';
@@ -20,6 +21,7 @@ export class AlbumStore {
   private readonly toasts = inject(Toasts);
   private readonly catalog = inject(CatalogStore);
   private readonly ops = inject(OpsStore);
+  private readonly prefs = inject(Prefs);
 
   readonly text = signal('');
   readonly filters = signal<Filters>({});
@@ -44,7 +46,7 @@ export class AlbumStore {
     const p = this.parsed(), f = this.filters();
     const tags = [...new Set([...p.tags, ...(f.tags ?? [])])];
     return {
-      ...f, text: p.text, tags: tags.length ? tags : undefined,
+      ...f, text: p.text, tags: tags.length ? tags : undefined, duplicates: f.duplicates ?? (this.prefs.showDuplicates() ? undefined : false),
       model: p.model ?? f.model, studio: p.studio ?? f.studio, photographer: p.photographer ?? f.photographer, kind: p.kind ?? f.kind,
       sort: this.sort(), offset: 0, limit: PAGE,
     };
@@ -197,6 +199,15 @@ export class AlbumStore {
   async optimize(): Promise<boolean> {
     try { await this.gw.optimize(); this.library.set(null); this.toasts.show('Optimizing… the library reopens in a moment'); return true; }
     catch (e) { this.toasts.error(e, 'Optimize failed: '); return false; }
+  }
+
+  /** Set once the server accepted `exit`: the app shows that it is closed. */
+  readonly exited = signal(false);
+
+  /** Asks the server to close for good (`Gateway.exit`); false when refused (an operation running), the toast says why. */
+  async exit(): Promise<boolean> {
+    try { await this.gw.exit(); this.exited.set(true); return true; }
+    catch (e) { this.toasts.error(e, 'Exit failed: '); return false; }
   }
 
   loadFacets(delay = 800) {

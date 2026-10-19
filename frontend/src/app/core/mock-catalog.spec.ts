@@ -192,4 +192,27 @@ describe('mock catalog: unused entities', () => {
     await gw.update(a.id, { model: '' });
     expect(await unused()).toContain(zed.id);
   });
+  it('a same-kind link is the parent: one at most, no cycle, children on the parent card, a merge keeps the survivor parent', async () => {
+    const { gw } = setup();
+    const save = (name: string, links: number[] = [], id?: number) => gw.saveEntity({ id, kind: 'STUDIO', name, rating: 0, profile: null, links: links.map(to => ({ to })) });
+    const top = (await save('FashionGirls')).entity, other = (await save('Other')).entity;
+    const eu = (await save('FashionEuroGirls', [top.id])).entity, us = (await save('FashionUSAGirls', [top.id])).entity;
+    expect((await gw.entity(top.id)).children?.map(e => e.name)).toEqual(['FashionEuroGirls', 'FashionUSAGirls']);
+    expect((await gw.entity(other.id)).children).toBeUndefined();
+    await expect(save('FashionEuroGirls', [top.id, other.id], eu.id)).rejects.toThrow('One parent at most');
+    await expect(save('FashionGirls', [eu.id], top.id)).rejects.toThrow('FashionEuroGirls is inside FashionGirls');
+    await save('Other', [us.id], other.id);
+    await gw.mergeEntities([other.id], eu.id);
+    expect((await gw.entity(eu.id)).links.map(l => l.to.name)).toEqual(['FashionGirls']);
+  });
+
+  it('duplicates false keeps the first album of each copy group, true only the copies', async () => {
+    const { gw } = setup();
+    const q = (duplicates?: boolean) => gw.search({ duplicates, sort: 'NAME', offset: 0, limit: 1000 } as AlbumQuery);
+    const [all, one, dups] = await Promise.all([q(), q(false), q(true)]);
+    const groups = new Set(dups.albums.map(a => a.stamp));
+    expect(groups.size).toBeGreaterThan(0);
+    expect(one.total).toBe(all.total - dups.total + groups.size);
+    expect(new Set(one.albums.map(a => a.stamp)).size).toBe(one.total);
+  });
 });

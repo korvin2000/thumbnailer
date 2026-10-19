@@ -89,6 +89,7 @@ export class MockCatalog {
       .map(x => x?.trim()).filter((x, i, all) => x && k(x) !== k(name) && all.findIndex(y => y && k(y) === k(x)) === i);
     for (const n of [name, ...aliases]) { const o = this.find(e.kind, n); if (o && o !== old) throw new Error(`"${n}" is ${o.name}; merge instead?`); }
     for (const l of e.links ?? []) if (!this.rows.has(l.to) || l.to === old?.id) throw new Error(`Cannot link to ${l.to}`);
+    if (e.links && old) this.checkParent(old, name, e.links);
     const r = old ?? this.create(e.kind, name, false);
     Object.assign(r, { name, rating: e.rating, aliases });
     if (e.profile != null) r.profile = e.profile; else delete r.profile;
@@ -96,6 +97,16 @@ export class MockCatalog {
     this.sync();
     this.changed([r.kind]);
     return this.card(r.id);
+  }
+
+  /** As `Catalog.save`: a link to the entity's own kind is its parent, one at most; a new parent must not lie below the entity. */
+  private checkParent(r: Row, name: string, links: EntityLinkIn[]) {
+    const parents = links.filter(l => this.row(l.to).kind === r.kind).map(l => l.to);
+    if (parents.length > 1) throw new Error('One parent at most');
+    const parentOf = (x: Row) => x.links.find(l => this.rows.get(l.to)?.kind === x.kind)?.to;
+    if (!parents.length || parents[0] === parentOf(r)) return;
+    for (let p: number | undefined = parents[0], seen = new Set<number>(); p !== undefined && !seen.has(p); seen.add(p), p = parentOf(this.row(p)))
+      if (p === r.id) throw new Error(`${this.row(parents[0]).name} is inside ${name}`);
   }
 
   /** Unassigns each entity from its albums (text edits, `albumChanged` each), then drops it; a list's favorites go with it. */
@@ -122,7 +133,8 @@ export class MockCatalog {
       b.rating = Math.max(a.rating, b.rating); b.auto &&= a.auto;
       const profile = { ...fields(a.profile), ...fields(b.profile) };
       if (Object.keys(profile).length) b.profile = JSON.stringify(profile); else delete b.profile;
-      b.links = [...b.links, ...a.links];
+      const parent = (x: Row) => (l: EntityLinkIn) => this.rows.get(l.to)?.kind === x.kind;
+      b.links = [...b.links, ...a.links.filter(l => !(parent(a)(l) && b.links.some(parent(b))))]; // the survivor's parent wins
       this.members.get(a.id)?.forEach(m => this.members.get(into)?.add(m));
       if (a.kind === 'LIST') this.photos().remapList(a.id, into);
       this.rows.delete(a.id); this.members.delete(a.id);
@@ -280,13 +292,14 @@ export class MockCatalog {
       return byCount([...m.values()]);
     };
     const derived: Derived = { albums: albums.length };
+    const children = [...this.rows.values()].filter(x => x.kind === r.kind && x.links.some(l => l.to === id)).map(x => this.view(x)).sort((x, y) => x.name.localeCompare(y.name));
     switch (r.kind) {
       case 'MODEL': Object.assign(derived, { studios: studios(), photographers: related('PHOTOGRAPHER'), genres: related('GENRE'), tags: related('TAG').map(e => e.name) }); break;
       case 'STUDIO': Object.assign(derived, { models: related('MODEL'), photographers: related('PHOTOGRAPHER'), genres: related('GENRE') }); break;
       case 'PHOTOGRAPHER': Object.assign(derived, { models: related('MODEL'), studios: studios(), genres: related('GENRE') }); break;
       case 'GENRE': case 'TAG': Object.assign(derived, { models: related('MODEL'), studios: studios() }); break;
     }
-    return { entity: this.view(r), aliases: [...new Set(r.aliases.map(n => norm(r.kind, n)))], links: r.links.filter(l => this.rows.has(l.to)).map(l => ({ ...l, to: this.view(this.row(l.to)) })), derived };
+    return { entity: this.view(r), aliases: [...new Set(r.aliases.map(n => norm(r.kind, n)))], links: r.links.filter(l => this.rows.has(l.to)).map(l => ({ ...l, to: this.view(this.row(l.to)) })), derived, ...(children.length ? { children } : {}) };
   }
 }
 

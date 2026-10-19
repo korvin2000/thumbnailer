@@ -1,6 +1,6 @@
 import { inject, Injectable, signal } from '@angular/core';
 import { Gateway } from './gateway';
-import { AlbumPatch, AlbumTarget, Entity, EntityCard, EntityKind, EntityList, EntityQuery, EntitySave, ENTITY_KINDS } from './model';
+import { AlbumPatch, AlbumTarget, Entity, EntityCard, EntityKind, EntityLinkIn, EntityList, EntityQuery, EntitySave, ENTITY_KINDS } from './model';
 import { Toasts } from './toasts';
 
 const CACHE = 24;
@@ -114,6 +114,15 @@ export class CatalogStore {
     this.saving = p.catch(() => {});
     return p;
   }
+  /**
+   * Makes `parentId` the parent of `childId` (null = none) from any card: the child's own card is read and saved with its curated links but
+   * those to its own kind, plus the new parent (one at most; the server refuses a cycle). The open card reloads through `onChanged`.
+   */
+  async trySetParent(childId: number, parentId: number | null) {
+    const c = await this.gw.entity(childId), kind = c.entity.kind;
+    const links: EntityLinkIn[] = c.links.filter(l => l.to.kind !== kind).map(l => ({ to: l.to.id, ...(l.alias ? { alias: l.alias } : {}), ...(l.roles ? { roles: l.roles } : {}) }));
+    return this.trySave({ id: c.entity.id, kind, name: c.entity.name, rating: c.entity.rating, profile: c.entity.profile ?? null, links: parentId === null ? links : [...links, { to: parentId }] });
+  }
   delete(ids: number[]) { return this.run(this.gw.deleteEntities(ids).then(() => { if (ids.includes(this.cardId()!)) this.closeCard(); this.onChanged(ENTITY_KINDS); return true; }), 'Delete failed: '); }
   merge(from: number[], into: number) { return this.run(this.gw.mergeEntities(from, into).then(c => { if (from.includes(this.cardId()!)) this.cardId.set(into); this.onChanged([c.entity.kind]); return this.show(c); }), 'Merge failed: '); }
   confirm(ids: number[]) { return this.run(this.gw.confirmEntities(ids).then(() => { this.onChanged(ENTITY_KINDS); return true; }), 'Confirm failed: '); }
@@ -144,7 +153,7 @@ export class CatalogStore {
 
   /** A returned card refreshes the open one when it is the same entity; its entities join `known`. */
   private show(c: EntityCard, loaded = false) {
-    this.remember([c.entity, ...c.links.map(l => l.to), ...(c.derived?.models ?? []), ...(c.derived?.studios ?? []).map(s => s.entity), ...(c.derived?.photographers ?? []), ...(c.derived?.genres ?? [])]);
+    this.remember([c.entity, ...c.links.map(l => l.to), ...(c.derived?.models ?? []), ...(c.derived?.studios ?? []).map(s => s.entity), ...(c.derived?.photographers ?? []), ...(c.derived?.genres ?? []), ...(c.children ?? [])]);
     if (c.entity.id === this.cardId()) { if (!loaded) this.cardGen++; this.card.set(c); }
     return c;
   }

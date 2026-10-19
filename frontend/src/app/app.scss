@@ -41,6 +41,13 @@
   &.error { border-color: color-mix(in oklch, var(--danger) 60%, transparent); color: var(--danger); }
 }
 
+/* the server exited: nothing underneath is reachable any more */
+.closed {
+  position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; background: var(--bg); color: var(--text-2);
+  .logo { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 8px; border-radius: 16px; background: var(--accent-soft); color: var(--accent-strong); }
+  h2 { font-size: 16px; font-weight: 600; color: var(--text); }
+}
+
 @media (min-width: 1400px) {
   .details { position: relative; top: auto; right: auto; bottom: auto; flex: none; margin: 12px 12px 12px 0; }
 }

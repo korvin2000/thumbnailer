@@ -8,8 +8,8 @@ import thumbnailer.spi.Kind;
 /**
  * Search criteria; a null field means "no filter". {@code kind}: {@code ARCHIVE} matches every archive kind (zip
  * included), {@code ZIP} zip alone; {@code entities}: linked to every one; {@code missing}: no link of that role;
- * {@code hidden}: null/false = visible albums only, true = hidden ones only; {@code duplicates}: albums whose content
- * stamp another album shares.
+ * {@code hidden}: null/false = visible albums only, true = hidden ones only; {@code duplicates}: true = albums whose
+ * content stamp another album shares, false = one album per stamp (the first indexed among those of its visibility).
  */
 public record AlbumQuery(String text, List<String> tags, String model, String studio, String photographer,
                          List<String> roots, Kind kind, Long minBytes, Long maxBytes, Integer minCount,

@@ -85,7 +85,7 @@ export class App {
 
   protected onKey(e: KeyboardEvent) {
     // any open modal owns the keyboard, even when its focus fell back to <body> (a focused row it removed): the target alone would not tell
-    if (e.altKey || (e.target as HTMLElement)?.closest('input, textarea, select') || document.querySelector('dialog[open]')) return;
+    if (e.altKey || this.store.exited() || (e.target as HTMLElement)?.closest('input, textarea, select') || document.querySelector('dialog[open]')) return;
     const overlay = OVERLAY.test(this.router.url);
     if (e.ctrlKey || e.metaKey) {
       if (overlay || e.shiftKey || e.key.toLowerCase() !== 'a') return;

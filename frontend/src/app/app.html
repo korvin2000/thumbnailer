@@ -94,3 +94,11 @@
 </div>
 
 <router-outlet />
+
+@if (store.exited()) {
+  <div class="closed">
+    <span class="logo"><app-icon name="images" [size]="28" /></span>
+    <h2>Thumbnailer is closed</h2>
+    <p>Everything was saved. You can close this tab; start Thumbnailer again to continue.</p>
+  </div>
+}

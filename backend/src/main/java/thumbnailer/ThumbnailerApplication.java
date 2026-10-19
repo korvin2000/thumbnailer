@@ -44,6 +44,20 @@ public class ThumbnailerApplication {
      */
     public static void restart() { Thread.ofPlatform().name("restart").daemon(false).start(ThumbnailerApplication::rerun); }
 
+    /**
+     * Closes the context (scans stop, stores flush and close) and ends the process with its exit code. Only for an
+     * application started by {@link #main}; waits for a restart in progress.
+     */
+    public static void exit() { Thread.ofPlatform().name("exit").daemon(false).start(ThumbnailerApplication::shutdown); }
+
+    private static synchronized void shutdown() {
+        if (context == null) {
+            LoggerFactory.getLogger(ThumbnailerApplication.class).warn("Not started by main: no exit");
+            return;
+        }
+        System.exit(SpringApplication.exit(context));
+    }
+
     private static synchronized void rerun() {
         var log = LoggerFactory.getLogger(ThumbnailerApplication.class);
         if (context == null) {

@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import org.springframework.stereotype.Component;
 import thumbnailer.ThumbnailerApplication;
 import thumbnailer.album.AlbumRepository;
@@ -19,10 +20,11 @@ import thumbnailer.settings.Libraries;
 import thumbnailer.settings.SettingsStore;
 
 /**
- * The library messages: what the active library holds, switching and forgetting libraries, optimizing the stores.
- * A switch and an optimize take effect in a restart, scheduled after the {@code ok} reply has gone out. None of them
- * runs while the {@link Gate} is held (a scan, an operation, a settings save, a restart): each takes it by
- * compare-and-set, and an accepted switch or optimize keeps it for the restart, so scans and further ones are refused.
+ * The library messages: what the active library holds, switching and forgetting libraries, optimizing the stores,
+ * exiting. A switch and an optimize take effect in a restart, an exit in the context's close, both scheduled after the
+ * {@code ok} reply has gone out. None of them runs while the {@link Gate} is held (a scan, an operation, a settings
+ * save, a restart; an exit cancels a scan first): each takes it by compare-and-set, and an accepted switch, optimize or
+ * exit keeps it, so scans and further ones are refused.
  */
 @Component
 class Library {
@@ -31,7 +33,7 @@ class Library {
             Optional.ofNullable(ThumbnailerApplication.class.getPackage().getImplementationVersion()).orElse("dev"),
             Runtime.version().toString(), System.getProperty("os.name") + " " + System.getProperty("os.version"));
     private static final Event OK = new Event.Ok(null);
-    private static final Duration TOMBSTONES = Duration.ofDays(365);
+    private static final Duration TOMBSTONES = Duration.ofDays(365), EXIT_WAIT = Duration.ofSeconds(20);
 
     private final Libraries libraries;
     private final AlbumRepository repo;
@@ -97,6 +99,22 @@ class Library {
         } finally {
             restartSoon();
         }
+        return OK;
+    }
+
+    /**
+     * Ends the application cleanly: a running scan is cancelled and awaited (≤ {@code EXIT_WAIT}; it commits album by
+     * album), any other holder refuses (an operation must finish or be cancelled first); the gate is then kept, and the
+     * context closes after the reply, so the stores flush and close (H2 {@code SHUTDOWN}, TuplDB checkpoint) before the
+     * process ends.
+     */
+    Event exit() {
+        for (long end = System.nanoTime() + EXIT_WAIT.toNanos(); !scans.freeze(); LockSupport.parkNanos(50_000_000)) {
+            var holder = gate.current();
+            if (holder != null && holder != Gate.Activity.SCAN || System.nanoTime() > end) return busy();
+            scans.cancel();
+        }
+        CompletableFuture.delayedExecutor(300, TimeUnit.MILLISECONDS).execute(ThumbnailerApplication::exit);
         return OK;
     }
 

@@ -59,6 +59,12 @@ describe('scale', () => {
     expect(scaleBox('height', big, vp)).toEqual({ width: 1067, height: 800 });
     expect(scaleBox('width', small, vp)).toEqual({ width: 1000, height: 400 });
   });
+  it('an odd quarter turn fits the swapped sides, an even one changes nothing', () => {
+    expect(scaleBox('fit', big, vp, 1)).toEqual({ width: 600, height: 800 });
+    expect(scaleBox('width', big, vp, 3)).toEqual({ width: 1000, height: 1333 });
+    expect(scaleBox('actual', big, vp, 1)).toEqual({ width: 3000, height: 4000 });
+    expect(scaleBox('fit', big, vp, 2)).toEqual(scaleBox('fit', big, vp));
+  });
   it('survives unknown dimensions and cycles through every mode', () => {
     expect(scaleBox('fit', { width: 0, height: 0 }, vp)).toEqual({ width: 800, height: 800 });
     let s = SCALE_CYCLE[0]; const seen = [s];

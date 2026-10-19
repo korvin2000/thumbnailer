@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
@@ -118,6 +119,7 @@ public class Catalog {
             names.forEach((n, written) -> refuseTaken(s.kind(), n, written, old == null ? 0 : old.id()));
             for (var l : s.links() == null ? List.<EntityLink>of() : s.links())
                 if (repo.find(l.to()).isEmpty() || old != null && l.to() == old.id()) throw new IllegalArgumentException("Cannot link to " + l.to());
+            if (s.links() != null) refuseParent(old, s.kind(), name, s.links());
             return repo.store(old == null ? new Entity(0, s.kind(), name, s.rating(), false, 0, s.profile(), null)
                     : new Entity(old.id(), s.kind(), name, s.rating(), old.auto(), old.albums(), s.profile(), null),
                     List.copyOf(names.keySet()), s.links());
@@ -494,6 +496,25 @@ public class Catalog {
         return new AlbumPatch(null, null, null, null, null, null, null, null, null, null, null, add, remove);
     }
 
+    /**
+     * A link to the entity's own kind is its parent: one at most, and a new one must not lie below the entity (a walk up
+     * from it, bounded by the ids seen, so a cycle a merge left cannot loop). A new entity has nothing below it.
+     */
+    private void refuseParent(Entity old, EntityKind kind, String name, List<EntityLink> links) {
+        var parents = links.stream().map(l -> find(l.to())).filter(p -> p.kind() == kind).toList();
+        if (parents.size() > 1) throw new IllegalArgumentException("One parent at most");
+        if (old == null || parents.isEmpty() || parents.getFirst().id() == parent(old)) return;
+        var seen = new HashSet<Integer>();
+        for (int p = parents.getFirst().id(); p != 0 && seen.add(p); p = parent(find(p)))
+            if (p == old.id()) throw new IllegalArgumentException(parents.getFirst().name() + " is inside " + name);
+    }
+
+    /** The entity's parent id (its curated link to its own kind), 0 = none. */
+    private int parent(Entity e) {
+        return repo.entityLinks(e.id()).stream().map(l -> repo.find(l.to())).flatMap(Optional::stream)
+                .filter(p -> p.kind() == e.kind()).mapToInt(Entity::id).findFirst().orElse(0);
+    }
+
     /** A name owned by another entity of the kind ({@code self}: the entity it may belong to, 0 = none) is refused. */
     private void refuseTaken(EntityKind kind, String norm, String written, int self) {
         repo.resolve(kind, norm).filter(o -> o != self).ifPresent(o -> {
@@ -507,7 +528,7 @@ public class Catalog {
         var e = find(id);
         var links = repo.entityLinks(id).stream().flatMap(l -> repo.find(l.to()).map(to -> new Card.Relation(to, l.alias(), l.roles())).stream()).toList();
         var primary = norm(e.kind(), e.name());
-        return new Card(e, repo.aliases(id).stream().filter(a -> !a.equals(primary)).toList(), links, derived(e));
+        return new Card(e, repo.aliases(id).stream().filter(a -> !a.equals(primary)).toList(), links, derived(e), repo.children(id));
     }
 
     /**

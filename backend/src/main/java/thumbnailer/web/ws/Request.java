@@ -51,6 +51,9 @@ sealed interface Request {
 
     @JsonTypeName("optimize") record Optimize() implements Request {}
 
+    /** Closes the application for good ({@code ok}, then the context closes and the process ends). */
+    @JsonTypeName("exit") record Exit() implements Request {}
+
     sealed interface CatalogRequest extends Request {}
 
     /** {@code text}: a prefix of any name; {@code under}: entities sharing albums with that one; {@code unused}: auto ones in no album; at most 500. */
