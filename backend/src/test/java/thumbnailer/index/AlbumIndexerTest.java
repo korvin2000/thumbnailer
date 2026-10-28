@@ -79,18 +79,44 @@ class AlbumIndexerTest {
         }
     }
 
-    /** Records the reads that reach a container. */
+    @Test
+    void aSolidArchiveImageListedBeyondTheByteLimitIsRefusedByNameNotReadWhole() throws IOException {
+        var files = new LinkedHashMap<String, byte[]>();
+        files.put("a.jpg", jpeg(85, 45));
+        files.put("huge.tif", new byte[1000]); // a head no parser knows: probed from the whole file
+        Archives.sevenZip(root.resolve("H.7z"), ArchiveFormat.SEVEN_ZIP, files, true);
+        var path = Containers.normalize(root.resolve("H.7z"));
+        try (var in = containers.open(Kind.ARCHIVE, root.resolve("H.7z"), Exclusions.NONE)) {
+            var reads = new Reads(in, Map.of("huge.tif", 600L << 20));
+            var x = indexer.index(reads, Containers.normalize(root), path, Kind.ARCHIVE, null, Disks.Hold.NONE,
+                    albums.lane(settings.get(), path), Map.of()).orElseThrow();
+            assertThat(x.entries()).extracting(e -> e.name()).containsExactly("a.jpg");
+            assertThat(reads.wholes).as("whole-file passes").isNotEmpty().allMatch(List::isEmpty);
+        }
+    }
+
+    /** Records the reads that reach a container; {@code listed} overrides listed sizes. */
     private static final class Reads implements AlbumContainer {
         final AlbumContainer in;
-        final List<List<String>> passes = new ArrayList<>();
+        final Map<String, Long> listed;
+        final List<List<String>> passes = new ArrayList<>(), wholes = new ArrayList<>();
         final List<String> heads = new ArrayList<>();
         int opens;
 
-        Reads(AlbumContainer in) { this.in = in; }
+        Reads(AlbumContainer in) { this(in, Map.of()); }
+
+        Reads(AlbumContainer in, Map<String, Long> listed) {
+            this.in = in;
+            this.listed = listed;
+        }
 
         @Override public String name() { return in.name(); }
-        @Override public List<Item> items() { return in.items(); }
-        @Override public List<Item> images() { return in.images(); }
+        @Override public List<Item> items() { return relisted(in.items()); }
+        @Override public List<Item> images() { return relisted(in.images()); }
+
+        private List<Item> relisted(List<Item> items) {
+            return items.stream().map(i -> new Item(i.name(), listed.getOrDefault(i.name(), i.bytes()), i.mtime())).toList();
+        }
         @Override public boolean sequential() { return in.sequential(); }
         @Override public boolean cpuBound() { return in.cpuBound(); }
         @Override public String keyTag() { return in.keyTag(); }
@@ -114,6 +140,7 @@ class AlbumIndexerTest {
         @Override
         public void heads(Collection<String> names, int limit, HeadSink sink) throws IOException {
             if (limit == ImageProbe.HEAD) passes.add(List.copyOf(names));
+            else wholes.add(List.copyOf(names));
             in.heads(names, limit, sink);
         }
     }

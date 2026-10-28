@@ -1,6 +1,7 @@
 package thumbnailer.store.jdbc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 
 import java.nio.file.Path;
@@ -9,17 +10,22 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.IntStream;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.transaction.support.TransactionTemplate;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumQuery.Sort;
 import thumbnailer.album.AlbumQuery;
@@ -74,13 +80,88 @@ class JdbcAlbumRepositoryTest {
 
     @Test
     void perImageRowsOfOlderVersionsArePackedOnStart() {
-        var t = new JdbcTemplate(db);
-        t.execute("CREATE TABLE entry (album_id VARCHAR(36), idx INT, name VARCHAR(4096), bytes BIGINT, mtime BIGINT, width INT, height INT, shot_at TIMESTAMP)");
-        t.update("INSERT INTO entry VALUES ('a', 1, 'b.jpg', 2, 3, 4, 5, NULL), ('a', 0, 'a.jpg', 1, 2, 3, 4, NULL), ('b', 0, 'c.jpg', 1, 1, 1, 1, NULL)");
+        var t = legacy();
         var upgraded = new JdbcAlbumRepository(t, JSON, Path.of("build"));
         assertThat(upgraded.entries("a")).extracting(Entry::name).containsExactly("a.jpg", "b.jpg");
         assertThat(upgraded.entry("b", 0)).hasValue(new Entry(0, "c.jpg", 1, 1, 1, 1, null, 0));
         assertThat(t.queryForObject("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'ENTRY'", Integer.class)).isZero();
+    }
+
+    @Test
+    void anInterruptedUpgradeGoesOnWhereItStopped() {
+        var t = legacy();
+        t.update("INSERT INTO entry VALUES ('c', 0, 'd.jpg', 1, 1, 1, 1, NULL)");
+        t.execute("ALTER TABLE entries ADD CONSTRAINT stop CHECK (album_id <> 'b')"); // fails the second album
+        assertThatThrownBy(() -> new JdbcAlbumRepository(t, JSON, Path.of("build"))).isInstanceOf(DataAccessException.class);
+        assertThat(t.queryForList("SELECT DISTINCT album_id FROM entry ORDER BY album_id", String.class))
+                .as("the first album's rows went with its packed value").containsExactly("b", "c");
+        t.execute("ALTER TABLE entries DROP CONSTRAINT stop");
+        var upgraded = new JdbcAlbumRepository(t, JSON, Path.of("build"));
+        assertThat(t.queryForList("SELECT album_id FROM entries ORDER BY album_id", String.class)).containsExactly("a", "b", "c");
+        assertThat(upgraded.entries("a")).extracting(Entry::name).containsExactly("a.jpg", "b.jpg");
+        assertThat(upgraded.entries("b")).extracting(Entry::name).containsExactly("c.jpg");
+        assertThat(upgraded.entries("c")).extracting(Entry::name).containsExactly("d.jpg");
+        assertThat(t.queryForObject("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'ENTRY'", Integer.class)).isZero();
+    }
+
+    /** The per-image table of older versions, rows out of order. */
+    private JdbcTemplate legacy() {
+        var t = new JdbcTemplate(db);
+        t.execute("CREATE TABLE entry (album_id VARCHAR(36), idx INT, name VARCHAR(4096), bytes BIGINT, mtime BIGINT, width INT, height INT, shot_at TIMESTAMP)");
+        t.update("INSERT INTO entry VALUES ('a', 1, 'b.jpg', 2, 3, 4, 5, NULL), ('a', 0, 'a.jpg', 1, 2, 3, 4, NULL), ('b', 0, 'c.jpg', 1, 1, 1, 1, NULL)");
+        return t;
+    }
+
+    @Test
+    void decodedEntriesAreSharedUntilTheirAlbumChanges() {
+        var entries = entries(2);
+        repo.save(album("1", "A", null, List.of(), 1, null, 0), entries);
+        var decoded = repo.entries("1");
+        assertThat(repo.entries("1")).as("a lookup after the save decodes nothing").isSameAs(decoded).isEqualTo(entries).isUnmodifiable();
+        assertThat(repo.entry("1", 1)).containsSame(decoded.get(1));
+        repo.save(album("1", "A edited", null, List.of(), 1, null, 0), null);
+        assertThat(repo.entries("1")).as("a save without entries keeps them").isSameAs(decoded);
+
+        var flagged = List.of(entries.get(0), new Entry(1, "1.jpg", 1, 1, 1, 1, null, Entry.META_KNOWN));
+        repo.saveEntries("1", flagged);
+        assertThat(repo.entries("1")).as("flags learned later").isEqualTo(flagged);
+        repo.save(album("1", "A", null, List.of(), 1, null, 0), entries);
+        assertThat(repo.entries("1")).as("a re-index").isEqualTo(entries);
+        repo.delete("1");
+        assertThat(repo.entries("1")).isEmpty();
+    }
+
+    @Test
+    void aLoadRacingAnUncommittedWriteIsNotKeptPastTheCommit() {
+        var flagged = List.of(new Entry(0, "0.jpg", 1, 1, 1, 1, null, Entry.META_KNOWN));
+        repo.saveEntries("1", entries(1));
+        new TransactionTemplate(new DataSourceTransactionManager(db)).executeWithoutResult(s -> {
+            repo.saveEntries("1", flagged);
+            assertThat(repo.entries("1")).as("the transaction reads its own write").isEqualTo(flagged);
+            assertThat(CompletableFuture.supplyAsync(() -> repo.entries("1")).join()).as("another thread the committed value, kept")
+                    .isEqualTo(entries(1));
+        });
+        var committed = repo.entries("1");
+        assertThat(committed).isEqualTo(flagged);
+        assertThat(repo.entries("1")).isSameAs(committed);
+    }
+
+    @Test
+    void decodedEntriesStayWithinTheirBudget() {
+        repo.budget = 4 * JdbcAlbumRepository.ENTRY_BYTES;
+        for (var id : List.of("a", "b", "c")) repo.saveEntries(id, entries(2));
+        repo.saveEntries("d", entries(5));
+        var a = repo.entries("a");
+        var b = repo.entries("b");
+        assertThat(repo.entries("a")).isSameAs(a);
+        repo.entries("c"); // 6 entries: b, used least recently, goes
+        assertThat(repo.entries("a")).isSameAs(a);
+        assertThat(repo.entries("b")).isNotSameAs(b).isEqualTo(b);
+        assertThat(repo.entries("d")).as("over the whole budget: never kept").isNotSameAs(repo.entries("d"));
+    }
+
+    private static List<Entry> entries(int n) {
+        return IntStream.range(0, n).mapToObj(i -> new Entry(i, i + ".jpg", 1, 1, 1, 1, null, 0)).toList();
     }
 
     @Test

@@ -31,8 +31,12 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import thumbnailer.album.Album;
 import thumbnailer.album.AlbumQuery;
 import thumbnailer.album.AlbumRepository;
@@ -66,12 +70,23 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
             + "?, ".repeat(COLUMNS.split(",").length - 1) + "?)";
     /** A directory itself or anything below it; parameters: the directory, then {@link #below} of it. */
     private static final String UNDER = "(path = ? OR path LIKE ? ESCAPE '!')";
+    /** Estimated heap of one decoded entry (record, name, date), for the budget of {@link #decoded}. */
+    static final int ENTRY_BYTES = 256;
 
     private final JdbcClient jdbc;
     private final JdbcTemplate template;
     private final JsonMapper json;
     private final Path dir; // holds the database files, for stats
     private volatile boolean compactOnClose;
+    /**
+     * Decoded entry lists by album id, least recently used first, within {@link #budget} estimated bytes ({@link #held}):
+     * an image request looks up one entry, which would otherwise decode the whole album every time. Its lock guards
+     * {@link #loading} and {@link #held} too.
+     */
+    private final Map<String, List<Entry>> decoded = new LinkedHashMap<>(16, 0.75f, true);
+    private final Map<String, Object> loading = new HashMap<>(); // album id -> its newest load in flight; a change cancels it
+    private long held;
+    long budget = 64L << 20; // tests shrink it
 
     JdbcAlbumRepository(JdbcTemplate template, JsonMapper json,
                         @Value("${thumbnailer.library-dir:${thumbnailer.data-dir}}") Path dir) {
@@ -99,22 +114,30 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
         template.execute("ALTER TABLE removed ADD PRIMARY KEY (content_id, id)");
     }
 
-    /** One-time upgrade: the per-image rows of older versions become packed values, then their table goes. */
+    /**
+     * One-time upgrade: the per-image rows of older versions become packed values, one album per transaction that also
+     * deletes its rows (memory holds one album; an upgrade stopped midway goes on where it stopped), then their table goes.
+     */
     private void packLegacyEntries() {
         if (jdbc.sql("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_NAME = 'ENTRY'")
                 .query(Integer.class).single() == 0) return;
-        var albums = new LinkedHashMap<String, List<Entry>>();
-        jdbc.sql("SELECT * FROM entry ORDER BY album_id, idx").query((RowCallbackHandler) rs -> albums
-                .computeIfAbsent(rs.getString("album_id"), id -> new ArrayList<>())
-                .add(new Entry(rs.getInt("idx"), rs.getString("name"), rs.getLong("bytes"), rs.getLong("mtime"),
-                        rs.getInt("width"), rs.getInt("height"), rs.getObject("shot_at", LocalDateTime.class), 0)));
-        albums.forEach(this::saveEntries);
+        var tx = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(template.getDataSource())));
+        for (String next; (next = jdbc.sql("SELECT album_id FROM entry ORDER BY album_id LIMIT 1").query(String.class).optional().orElse(null)) != null; ) {
+            var id = next;
+            tx.executeWithoutResult(s -> {
+                saveEntries(id, jdbc.sql("SELECT * FROM entry WHERE album_id = ? ORDER BY idx").params(id).query((rs, row) ->
+                        new Entry(rs.getInt("idx"), rs.getString("name"), rs.getLong("bytes"), rs.getLong("mtime"),
+                                rs.getInt("width"), rs.getInt("height"), rs.getObject("shot_at", LocalDateTime.class), 0)).list());
+                jdbc.sql("DELETE FROM entry WHERE album_id = ?").params(id).update();
+            });
+        }
         template.execute("DROP TABLE entry");
     }
 
     @Override
     public void saveEntries(String albumId, List<Entry> entries) {
         jdbc.sql("MERGE INTO entries (album_id, data) KEY (album_id) VALUES (?, ?)").params(albumId, EntryCodec.pack(entries)).update();
+        changed(albumId);
     }
 
     @Override
@@ -199,11 +222,67 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
                 .sorted(Comparator.comparing(Folder::name, String.CASE_INSENSITIVE_ORDER)).toList();
     }
 
+    /**
+     * From {@link #decoded}; a miss decodes and keeps the list unless the album changed meanwhile (the change cancelled
+     * the load). Inside a transaction the database answers: it may hold this transaction's own uncommitted writes.
+     */
     @Override
     public List<Entry> entries(String albumId) {
-        return jdbc.sql("SELECT data FROM entries WHERE album_id = ?").params(albumId).query(byte[].class).optional()
-                .map(EntryCodec::unpack).orElse(List.of());
+        if (TransactionSynchronizationManager.isActualTransactionActive()) return load(albumId);
+        var token = new Object();
+        synchronized (decoded) {
+            var hit = decoded.get(albumId);
+            if (hit != null) return hit;
+            loading.put(albumId, token);
+        }
+        List<Entry> entries = null;
+        try {
+            return entries = load(albumId);
+        } finally {
+            synchronized (decoded) {
+                if (loading.remove(albumId, token) && entries != null) keep(albumId, entries);
+            }
+        }
     }
+
+    private List<Entry> load(String albumId) {
+        return jdbc.sql("SELECT data FROM entries WHERE album_id = ?").params(albumId).query(byte[].class).optional()
+                .map(data -> EntryCodec.unpack(albumId, data)).orElse(List.of());
+    }
+
+    /** Under the lock: the least recently used lists go while over budget; a list over the whole budget is never kept. */
+    private void keep(String albumId, List<Entry> entries) {
+        if (entries.isEmpty() || weight(entries) > budget) return;
+        decoded.put(albumId, entries);
+        held += weight(entries);
+        for (var lru = decoded.values().iterator(); held > budget; ) {
+            held -= weight(lru.next());
+            lru.remove();
+        }
+    }
+
+    /**
+     * After a write of the album's entries: forgotten now and, inside a transaction, again when it ends, so a load that
+     * read the value committed before it is not kept past the commit (or the rollback).
+     */
+    private void changed(String albumId) {
+        forget(albumId);
+        if (TransactionSynchronizationManager.isSynchronizationActive())
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) { forget(albumId); }
+            });
+    }
+
+    private void forget(String albumId) {
+        synchronized (decoded) {
+            loading.remove(albumId);
+            var gone = decoded.remove(albumId);
+            if (gone != null) held -= weight(gone);
+        }
+    }
+
+    private static long weight(List<Entry> entries) { return (long) entries.size() * ENTRY_BYTES; }
 
     @Override
     public Optional<Entry> entry(String albumId, int index) {
@@ -285,6 +364,7 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
         count(jdbc.sql("SELECT l.entity_id FROM album_link l JOIN album a ON a.seq = l.album_seq WHERE a.id = ? AND NOT a.hidden")
                 .params(id).query(Integer.class).set(), Set.of());
         jdbc.sql("DELETE FROM entries WHERE album_id = ?").params(id).update();
+        changed(id);
         jdbc.sql("DELETE FROM album WHERE id = ?").params(id).update();
     }
 
@@ -347,7 +427,14 @@ class JdbcAlbumRepository implements AlbumRepository, AutoCloseable {
      * the files are rewritten without free space, which takes the database offline: only at close.
      */
     @Override
-    public void close() { template.execute(compactOnClose ? "SHUTDOWN COMPACT" : "SHUTDOWN"); }
+    public void close() {
+        synchronized (decoded) {
+            decoded.clear();
+            loading.clear();
+            held = 0;
+        }
+        template.execute(compactOnClose ? "SHUTDOWN COMPACT" : "SHUTDOWN");
+    }
 
     /**
      * Without links and copies ({@link #withCatalog} adds them). A row written before the shot date became the effective

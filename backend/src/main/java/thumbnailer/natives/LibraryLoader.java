@@ -59,9 +59,9 @@ public final class LibraryLoader {
     private static Path install(String name) {
         var file = System.mapLibraryName(name);
         var target = BUNDLE.resolve(file);
-        if (Files.isRegularFile(target)) return target;
         var hash = SHA256.get(file);
         if (hash == null) throw new UnsatisfiedLinkError("No native " + file + " for " + PLATFORM);
+        if (Files.isRegularFile(target) && hash.equals(sha256(target))) return target; // a damaged cache file is copied again (FFM has no load error to retry on)
         try (var in = resource(file)) {
             Files.createDirectories(BUNDLE);
             var tmp = Files.createTempFile(BUNDLE, file, ".tmp");
@@ -71,7 +71,7 @@ public final class LibraryLoader {
                 tmp.toFile().setExecutable(true, false);
                 Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException raced) {
-                if (!Files.isRegularFile(target)) throw raced; // else another process published the same verified bytes
+                if (!Files.isRegularFile(target) || !hash.equals(sha256(target))) throw raced; // else another process published the same verified bytes
             } finally {
                 Files.deleteIfExists(tmp);
             }

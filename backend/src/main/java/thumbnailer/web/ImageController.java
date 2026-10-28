@@ -1,5 +1,6 @@
 package thumbnailer.web;
 
+import com.dynatrace.hash4j.hashing.Hashing;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.server.ResponseStatusException;
@@ -23,6 +25,7 @@ import thumbnailer.album.Album;
 import thumbnailer.album.AlbumRepository;
 import thumbnailer.album.AlbumService;
 import thumbnailer.image.Thumbnailer.Thumb;
+import thumbnailer.settings.Settings;
 import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Cry;
@@ -31,14 +34,17 @@ import thumbnailer.spi.Entry;
 
 /**
  * Image bytes; URLs carry {@code ?v=revision} (and {@code &r=render epoch} for covers and thumbnails), so responses are
- * cacheable for a day; the ETag is the revision, plus the epoch of the render spec for rendered images. An album an
- * operation holds answers 503 with {@code Retry-After: 2} and opens nothing, also when it became busy mid-request.
+ * cacheable for a day; the ETag is the revision, plus the epoch of the render spec for rendered images. A {@code v} of
+ * another revision answers 409 with {@code no-store} and no bytes (an entry index may now name another photo); an
+ * {@code r} of another epoch is served but not stored. An album an operation holds answers 503 with
+ * {@code Retry-After: 2} and opens nothing, also when it became busy mid-request.
  */
 @RestController
 @RequestMapping("/img/{albumId}")
-class ImageController {
+public class ImageController {
 
     private static final CacheControl CACHE = CacheControl.maxAge(Duration.ofDays(1)).cachePublic();
+    private static final CacheControl NO_STORE = CacheControl.noStore();
 
     private final AlbumRepository repo;
     private final AlbumService albums;
@@ -54,29 +60,39 @@ class ImageController {
 
     /** The album and entry are looked up inside the read, so an operation's quiesce waits for the whole request (busy → 503). */
     @GetMapping("/cover")
-    ResponseEntity<byte[]> cover(@PathVariable String albumId, WebRequest request) {
+    ResponseEntity<byte[]> cover(@PathVariable String albumId, @RequestParam(required = false) String v,
+                                 @RequestParam(required = false) String r, WebRequest request) {
         try (var _ = albums.read(albumId)) {
             var album = album(albumId);
-            return request.checkNotModified(etag(album, settings.get().covers().epoch())) ? null : image(album, albums.cover(album));
+            if (stale(album, v)) return conflict();
+            var s = settings.get();
+            return request.checkNotModified(etag(album, s.covers().epoch())) ? null : image(album, albums.cover(album), s, r);
         }
     }
 
     @GetMapping("/{index}/thumb")
-    ResponseEntity<byte[]> thumb(@PathVariable String albumId, @PathVariable int index, WebRequest request) {
+    ResponseEntity<byte[]> thumb(@PathVariable String albumId, @PathVariable int index, @RequestParam(required = false) String v,
+                                 @RequestParam(required = false) String r, WebRequest request) {
         try (var _ = albums.read(albumId)) {
             var album = album(albumId);
-            return request.checkNotModified(etag(album, settings.get().thumbs().epoch())) ? null
-                    : image(album, albums.thumb(album, entry(albumId, index)));
+            if (stale(album, v)) return conflict();
+            var s = settings.get();
+            return request.checkNotModified(etag(album, s.thumbs().epoch())) ? null
+                    : image(album, albums.thumb(album, entry(albumId, index)), s, r);
         }
     }
 
     /** Streamed: the read of the album lasts until the stream is closed, so an operation's quiesce waits for it. */
     @GetMapping("/{index}")
     ResponseEntity<InputStreamResource> original(@PathVariable String albumId, @PathVariable int index,
-                                                 WebRequest request) throws IOException {
+                                                 @RequestParam(required = false) String v, WebRequest request) throws IOException {
         var reading = albums.read(albumId); // busy → 503
         try {
             var album = album(albumId);
+            if (stale(album, v)) {
+                reading.close();
+                return conflict();
+            }
             var entry = entry(albumId, index);
             if (request.checkNotModified(etag(album))) {
                 reading.close();
@@ -127,13 +143,27 @@ class ImageController {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).header(HttpHeaders.RETRY_AFTER, "2").build();
     }
 
+    /** A URL of another revision: its index may name another photo now, so nothing is served or stored under it. */
+    private static boolean stale(Album album, String v) { return v != null && !v.equals(String.valueOf(album.revision())); }
+
+    private static <T> ResponseEntity<T> conflict() { return ResponseEntity.status(HttpStatus.CONFLICT).cacheControl(NO_STORE).build(); }
+
+    /** The {@code r} of image URLs ({@code SettingsInfo.renderEpoch}): hex hash of the covers and thumbs render epochs. */
+    public static String renderEpoch(Settings s) {
+        return Long.toHexString(Hashing.wyhashFinal4().hashLongLongToLong(s.covers().epoch(), s.thumbs().epoch()));
+    }
+
     private static String etag(Album album) { return String.valueOf(album.revision()); }
 
     private static String etag(Album album, long epoch) { return album.revision() + "-" + Long.toHexString(epoch); }
 
-    /** Tagged with the epoch the bytes carry, which differs from the requested one only while the spec changes. */
-    private static ResponseEntity<byte[]> image(Album album, Optional<Thumb> thumb) {
-        return thumb.map(t -> ResponseEntity.ok().cacheControl(CACHE).eTag(etag(album, t.epoch()))
+    /**
+     * Tagged with the epoch the bytes carry, which differs from the requested one only while the spec changes; under
+     * an {@code r} of another spec the bytes are not stored, so they never stay a day under that URL.
+     */
+    private static ResponseEntity<byte[]> image(Album album, Optional<Thumb> thumb, Settings s, String r) {
+        var cache = r == null || r.equals(renderEpoch(s)) ? CACHE : NO_STORE;
+        return thumb.map(t -> ResponseEntity.ok().cacheControl(cache).eTag(etag(album, t.epoch()))
                         .contentType(MediaType.parseMediaType(t.format().mediaType())).body(t.bytes()))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }

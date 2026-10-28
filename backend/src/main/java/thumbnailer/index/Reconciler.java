@@ -50,12 +50,13 @@ class Reconciler {
 
     /**
      * One scan under one settings snapshot: id and signature of the stored albums of the scopes walked so far, by path,
-     * and the ids this scan met.
+     * the ids this scan met and the folders it could not list.
      */
     final class Pass {
         private final Settings settings;
         private final Map<String, Stamp> known = new ConcurrentHashMap<>();
         private final Set<String> seen = ConcurrentHashMap.newKeySet();
+        private final Set<String> unreadable = ConcurrentHashMap.newKeySet();
 
         private Pass(Settings settings) { this.settings = settings; }
 
@@ -89,13 +90,19 @@ class Reconciler {
             }
         }
 
-        /** Removes the albums at or below fully walked scopes that this scan did not meet; returns how many. */
+        /** A folder (canonical) the walk could not list: the albums stored at or below it are not pruned. */
+        void unreadable(String dir) { unreadable.add(dir); }
+
+        /**
+         * Removes the albums at or below fully walked scopes that this scan did not meet, except at or below a folder it
+         * could not list; returns how many.
+         */
         int prune(Collection<String> scopes) {
             int removed = 0;
             for (var scope : scopes) {
-                for (var stamp : repo.stamps(scope).values()) {
-                    if (!seen.contains(stamp.id())) {
-                        albums.remove(stamp.id());
+                for (var e : repo.stamps(scope).entrySet()) {
+                    if (!seen.contains(e.getValue().id()) && unreadable.stream().noneMatch(d -> Containers.within(e.getKey(), d))) {
+                        albums.remove(e.getValue().id());
                         removed++;
                     }
                 }

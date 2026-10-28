@@ -119,17 +119,25 @@ public class AlbumService {
      * the tombstone of a removed album with the same content, if any (so a copy of a deleted album inherits its
      * edits), else it is new. Id, rating, edits, hidden, seq and a pinned cover come from that prior state, revision + 1.
      * The save consumes the tombstone, so a failed save keeps it; one whose id is live again (a copy took it) is ignored.
+     * The identity is decided and saved under the stripe lock of the id it ends with, so a patch, a removal or another
+     * adopter of that id waits; an id found under another stripe is decided again under its own (one stripe at a time).
      * The cover is tagged with the epoch its bytes were rendered with, whatever the settings say by now.
      */
     public Album commit(Album base, Album indexed, List<Entry> entries, Thumb cover) {
+        var fresh = new Tombstone(UUID.randomUUID().toString(), 0, 0, null, false, AlbumMeta.EMPTY, 0, false);
         Album album;
-        synchronized (lock(base != null ? base.id() : indexed.internal().contentId())) {
-            var stored = Optional.ofNullable(base).flatMap(b -> repo.find(b.id())).filter(a -> a.path().equals(indexed.path())
-                    || a.path().equals(base.path()) && Files.notExists(settings.get().locate(a.path())));
-            var prior = stored.map(Tombstone::of).or(() -> repo.recall(indexed.internal().contentId())
-                    .filter(t -> repo.find(t.id()).isEmpty()));
-            album = store(prior.orElseGet(() -> new Tombstone(UUID.randomUUID().toString(), 0, 0, null, false, AlbumMeta.EMPTY, 0, false)),
-                    stored.filter(a -> !a.hidden()).isPresent(), indexed, entries, cover, Map.of());
+        for (var key = base != null ? base.id() : fresh.id(); ; ) {
+            synchronized (lock(key)) {
+                var stored = Optional.ofNullable(base).flatMap(b -> repo.find(b.id())).filter(a -> a.path().equals(indexed.path())
+                        || a.path().equals(base.path()) && Files.notExists(settings.get().locate(a.path())));
+                var prior = stored.map(Tombstone::of).or(() -> repo.recall(indexed.internal().contentId())
+                        .filter(t -> repo.find(t.id()).isEmpty())).orElse(fresh);
+                if (lock(prior.id()) == lock(key)) {
+                    album = store(prior, stored.filter(a -> !a.hidden()).isPresent(), indexed, entries, cover, Map.of());
+                    break;
+                }
+                key = prior.id();
+            }
         }
         return changed(album);
     }
@@ -161,7 +169,8 @@ public class AlbumService {
         boolean rendered = chosen.map(e -> e.name().equals(indexed.cover())).orElse(true);
         var album = save(indexed.adopt(prior).withCover(rendered ? indexed.cover() : chosen.get().name(), pin.isPresent(),
                 rendered ? indexed.coverPortrait() : portrait(chosen.get())), entries, visibleBefore, nameMap);
-        if (rendered && cover != null) blobs.put(album.id(), value(album, cover));
+        // tagged with what the bytes were rendered from, never with the row read back (a later write may show in it)
+        if (rendered && cover != null) blobs.put(album.id(), value(indexed.cover(), indexed.internal().signature(), cover));
         return album;
     }
 
@@ -322,12 +331,14 @@ public class AlbumService {
 
     /**
      * Makes the library follow the configured roots: the albums of a stored root that is no longer configured move to
-     * the configured root they lie in (a widened or narrowed root keeps them), the rest are removed.
+     * the configured root they lie in (a widened or narrowed root keeps them), the rest are removed. The move holds
+     * every stripe lock, so no edit in flight saves an old root back.
      */
     public void retainRoots(Collection<String> roots) {
         for (var stale : repo.rootStats().keySet()) {
             if (roots.contains(stale)) continue;
-            roots.forEach(root -> repo.reroot(stale, root));
+            // under every stripe: a patch saves the whole row it read under its own, which must not bring the old root back
+            exclusive(0, () -> roots.forEach(root -> repo.reroot(stale, root)));
             repo.stamps(stale).forEach((path, s) -> {
                 if (roots.stream().noneMatch(root -> Containers.within(path, root))) remove(s.id());
             });
@@ -340,7 +351,7 @@ public class AlbumService {
             var hit = storedCover(album);
             if (hit.isPresent() || album.cover() == null) return hit;
             var fresh = render(album, album.cover(), coverQueue, coverSlots, Settings::covers);
-            fresh.ifPresent(t -> blobs.put(album.id(), value(album, t)));
+            fresh.ifPresent(t -> blobs.put(album.id(), value(album.cover(), album.internal().signature(), t)));
             return fresh;
         }
     }
@@ -352,7 +363,7 @@ public class AlbumService {
      */
     public Optional<Thumb> storedCover(Album album) {
         var spec = settings.get().covers();
-        long epoch = spec.epoch(), tag = tag(album, epoch);
+        long epoch = spec.epoch(), tag = tag(album.cover(), album.internal().signature(), epoch);
         boolean legacy = epoch == Render.LEGACY_EPOCH;
         int len = legacy ? 12 : 8, body = legacy ? 8 : 12; // the length field counts every byte after it
         return blobs.get(album.id()).map(v -> ByteBuffer.wrap(v).order(ByteOrder.LITTLE_ENDIAN))
@@ -482,17 +493,23 @@ public class AlbumService {
      * Seeded by the render epoch of the bytes; the signature covers every file's size and mtime, so the tag changes
      * whenever the cover could look different.
      */
-    private static long tag(Album album, long epoch) {
-        return Hashing.wyhashFinal4(epoch).hashStream().putString(String.valueOf(album.cover()))
-                .putString(album.internal().signature()).getAsLong();
+    private static long tag(String cover, String signature, long epoch) {
+        return Hashing.wyhashFinal4(epoch).hashStream().putString(String.valueOf(cover)).putString(signature).getAsLong();
     }
 
-    private static byte[] value(Album album, Thumb cover) {
-        boolean legacy = cover.epoch() == Render.LEGACY_EPOCH;
-        var v = ByteBuffer.allocate(cover.bytes().length + (legacy ? 8 : 12)).order(ByteOrder.LITTLE_ENDIAN)
-                .putLong(tag(album, cover.epoch()));
-        if (!legacy) v.putInt(cover.bytes().length);
-        return v.put(cover.bytes()).array();
+    /** The stored value of bytes rendered from entry {@code cover} of the files {@code signature} stands for. */
+    private static byte[] value(String cover, String signature, Thumb thumb) {
+        boolean legacy = thumb.epoch() == Render.LEGACY_EPOCH;
+        var v = ByteBuffer.allocate(thumb.bytes().length + (legacy ? 8 : 12)).order(ByteOrder.LITTLE_ENDIAN)
+                .putLong(tag(cover, signature, thumb.epoch()));
+        if (!legacy) v.putInt(thumb.bytes().length);
+        return v.put(thumb.bytes()).array();
+    }
+
+    /** Runs {@code action} holding every stripe lock, taken in ascending order (no other writer holds two at once). */
+    private void exclusive(int stripe, Runnable action) {
+        if (stripe == locks.length) action.run();
+        else synchronized (locks[stripe]) { exclusive(stripe + 1, action); }
     }
 
     /** The one busy check every read path makes (requests on entry, renders, a new gallery pass). */

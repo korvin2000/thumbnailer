@@ -31,6 +31,7 @@ import thumbnailer.album.AlbumService;
 import thumbnailer.cover.CoverSelector;
 import thumbnailer.image.Header;
 import thumbnailer.image.ImageProbe;
+import thumbnailer.image.Limits;
 import thumbnailer.image.Thumbnailer.Thumb;
 import thumbnailer.metadata.Metadata;
 import thumbnailer.source.Cry;
@@ -133,7 +134,13 @@ class AlbumIndexer {
             });
             synchronized (probes) {} // what the sink wrote on 7-Zip's threads is visible from here on
             if (sequential) { // each file costs a pass over the ones packed before it: all in one pass
-                container.heads(later, Integer.MAX_VALUE, (name, whole) -> {
+                var fits = new ArrayList<String>(); // read whole, so within the read limit
+                for (var name : later) {
+                    long n = bytes(items, name);
+                    if (n <= Limits.MAX_BYTES) fits.add(name);
+                    else synchronized (probes) { probes.put(name, Limits.tooLarge(name, n).toString()); }
+                }
+                container.heads(fits, Limits.MAX_BYTES, (name, whole) -> {
                     if (indexer.isInterrupted()) throw new InterruptedIOException();
                     Object probe;
                     try {

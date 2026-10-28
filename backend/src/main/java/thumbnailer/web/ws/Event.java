@@ -39,6 +39,13 @@ sealed interface Event {
 
     @JsonTypeName("scanProgress") record Progress(@JsonUnwrapped ScanProgress progress) implements Event {}
 
+    /**
+     * Each session's first broadcast: {@code library} (as {@code SettingsInfo.dataDir}) tells a reconnecting client
+     * whether the server now serves another one; {@code scan} is the last scan progress, {@code op} the last operation
+     * progress with no result after it, {@code opResult} the last result (each null when none this process).
+     */
+    @JsonTypeName("hello") record Hello(String library, ScanProgress scan, OpProgress op, OpResult opResult) implements Event {}
+
     /** {@code renderEpoch}: hex hash of the covers and thumbs render epochs, appended to image URLs as {@code &r=}. */
     @JsonTypeName("settings") record SettingsInfo(Settings settings, String dataDir, List<RootStatus> roots, String renderEpoch)
             implements Event {}

@@ -2,7 +2,7 @@ import { Subject } from 'rxjs';
 import { Gateway } from './gateway';
 import {
   Album, AlbumDetails, AlbumPatch, AlbumQuery, AlbumRef, AlbumTarget, Comparison, EntityCard, EntityKind, EntityList, EntityQuery, EntitySave, Facets, Filters,
-  Folder, GatewayEvent, LibraryInfo, Listing, MetaRow, Op, PhotoList, PhotoMarks, Preflight, SearchResult, Settings, SettingsInfo,
+  Folder, GatewayEvent, Hello, LibraryInfo, Listing, MetaRow, Op, PhotoList, PhotoMarks, Preflight, SearchResult, Settings, SettingsInfo,
 } from './model';
 
 /** One request: queued until a socket is open (`sent`), then correlated by id; `timer` bounds both the wait and the answer. */
@@ -19,7 +19,9 @@ const target = (t: AlbumTarget) => ({ albumIds: t.albumIds, query: t.query && { 
 
 /**
  * JSON-over-WebSocket client with id correlation and exponential reconnect; images come over plain HTTP. A request made while the socket is
- * down (the server restarting after an optimize or a library switch) waits for the next connection instead of failing, within its timeout.
+ * down (the server restarting after an optimize or a library switch) waits for the next connection instead of failing, within its timeout —
+ * but only for the same library: the server's `hello` names the one it serves, and queued requests (whose entity ids are that library's) are
+ * rejected with "Library changed" when it is another one, never sent.
  */
 export class WsGateway extends Gateway {
   readonly events = new Subject<GatewayEvent>();
@@ -32,6 +34,8 @@ export class WsGateway extends Gateway {
   private exited = false;
   /** Last render spec epoch seen in a settings reply; a changed spec changes image URLs, bypassing the browser cache. */
   private epoch = '';
+  /** The library of the last `hello` (null before the first): a reconnect to another one must not carry this one's queued requests over. */
+  private lib: string | null = null;
   private readonly pending = new Map<string, Pending>();
 
   constructor(private readonly url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`) {
@@ -84,14 +88,8 @@ export class WsGateway extends Gateway {
   private stamp(s: SettingsInfo) { if (s.renderEpoch) this.epoch = s.renderEpoch; return s; }
 
   private connect() {
-    const ws = new WebSocket(this.url);
-    ws.onopen = () => {
-      this.backoff = 500;
-      this.ws = ws;
-      for (const [id, p] of this.pending) this.send(ws, id, p);
-      this.events.next({ type: 'connection', connected: true });
-    };
-    ws.onmessage = e => this.receive(JSON.parse(e.data));
+    const ws = new WebSocket(this.url); // nothing goes out before its `hello` (`this.ws` stays null until then)
+    ws.onmessage = e => this.receive(ws, JSON.parse(e.data));
     ws.onclose = () => {
       this.ws = null;
       this.events.next({ type: 'connection', connected: false });
@@ -118,7 +116,18 @@ export class WsGateway extends Gateway {
     ws.send(JSON.stringify({ type: p.type, id, ...p.payload }));
   }
 
-  private receive(m: { type: string; id?: string; message?: string } & Record<string, unknown>) {
+  /** The server's first message: the socket is usable from here on; the queue is flushed for the same library (or the first one seen), dropped for another. */
+  private hello(ws: WebSocket, h: Hello) {
+    this.backoff = 500;
+    this.ws = ws;
+    if (this.lib !== null && h.library !== this.lib) for (const [id, p] of this.pending) if (!p.sent) { clearTimeout(p.timer); this.pending.delete(id); p.reject(new Error('Library changed')); }
+    this.lib = h.library;
+    for (const [id, p] of this.pending) this.send(ws, id, p);
+    this.events.next({ type: 'connection', connected: true, hello: { library: h.library, scan: h.scan ?? null, op: h.op ?? null, opResult: h.opResult ?? null } });
+  }
+
+  private receive(ws: WebSocket, m: { type: string; id?: string; message?: string } & Record<string, unknown>) {
+    if (m.type === 'hello') return this.hello(ws, m as unknown as Hello);
     const p = m.id && !OP_EVENTS.has(m.type) ? this.pending.get(m.id) : undefined;
     if (p) {
       this.pending.delete(m.id!);

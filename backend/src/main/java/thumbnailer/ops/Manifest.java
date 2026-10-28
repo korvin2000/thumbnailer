@@ -1,5 +1,6 @@
 package thumbnailer.ops;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -10,15 +11,19 @@ import thumbnailer.spi.Kind;
  * {@code src}, the result's final {@code dst} and the {@code tmp} it is written to first ({@code tmp == src}: an atomic
  * rename; null: nothing is written, a delete), the source {@code container} kind, the archive {@code format}, the file
  * {@code names} the result takes (old → new, every file it holds; empty for a plain copy) and, once written, the
- * {@code entries} the result must read back as (name → {@link Hashes hash}) and the source's {@link Trees#stamp stamp}
- * when its copy began (null: never disposed, or a manifest from before stamps).
+ * {@code entries} the result must read back as (name → {@link Hashes hash}) and the {@link Trees#stamps stamps} of the
+ * source's files when its copy began, or before a per-file item's first file (null: never disposed, or no evidence: a
+ * manifest from before per-file stamps, whose whole-source {@code stamp} is ignored, authorizes no deletion).
  */
+@JsonIgnoreProperties("stamp")
 record Manifest(String op, int item, Op.Kind kind, String albumId, Kind container, String src, String dst, String tmp,
-                Op.Format format, boolean encrypt, Map<String, String> names, Map<String, Long> entries, Long stamp) {
+                Op.Format format, boolean encrypt, Map<String, String> names, Map<String, Long> entries,
+                Map<String, Long> stamps) {
 
     Manifest {
         names = names == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(names)); // per-file items go in order
         entries = entries == null ? Map.of() : Map.copyOf(entries);
+        stamps = stamps == null ? null : Map.copyOf(stamps);
     }
 
     Manifest(Op.Kind kind, String albumId, Kind container, String src, String dst, String tmp, Op.Format format,
@@ -31,14 +36,14 @@ record Manifest(String op, int item, Op.Kind kind, String albumId, Kind containe
     /** In-place encryption of a directory: journaled file by file. */
     boolean perFile() { return kind == Op.Kind.CRYPT && container == Kind.DIRECTORY; }
 
-    Manifest at(String op, int item) { return new Manifest(op, item, kind, albumId, container, src, dst, tmp, format, encrypt, names, entries, stamp); }
+    Manifest at(String op, int item) { return new Manifest(op, item, kind, albumId, container, src, dst, tmp, format, encrypt, names, entries, stamps); }
 
-    Manifest withEntries(Map<String, Long> entries) { return new Manifest(op, item, kind, albumId, container, src, dst, tmp, format, encrypt, names, entries, stamp); }
+    Manifest withEntries(Map<String, Long> entries) { return new Manifest(op, item, kind, albumId, container, src, dst, tmp, format, encrypt, names, entries, stamps); }
 
-    Manifest withDst(String dst) { return new Manifest(op, item, kind, albumId, container, src, dst, tmp, format, encrypt, names, entries, stamp); }
+    Manifest withDst(String dst) { return new Manifest(op, item, kind, albumId, container, src, dst, tmp, format, encrypt, names, entries, stamps); }
 
-    Manifest withStamp(Long stamp) { return new Manifest(op, item, kind, albumId, container, src, dst, tmp, format, encrypt, names, entries, stamp); }
+    Manifest withStamps(Map<String, Long> stamps) { return new Manifest(op, item, kind, albumId, container, src, dst, tmp, format, encrypt, names, entries, stamps); }
 
     /** The copy path of a move whose atomic rename crossed volumes. */
-    Manifest copying() { return new Manifest(op, item, kind, albumId, container, src, dst, Trees.part(dst), format, encrypt, names, entries, stamp); }
+    Manifest copying() { return new Manifest(op, item, kind, albumId, container, src, dst, Trees.part(dst), format, encrypt, names, entries, stamps); }
 }

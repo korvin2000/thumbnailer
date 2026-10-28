@@ -5,8 +5,28 @@
 Living document: update **State** and tick items when work lands; add a **Decisions** row when a choice is costly to
 undo. Reference SPEC IDs.
 
-## State (2026-10-20, v0.1.0)
+## State (2026-10-28, v0.1.0)
 
+- 2026-10-28 **fixes from the external review (`analyze.md`, Codex, 2026-10-22)**, six parallel agents + this session, Codex
+  re-review of the ops diff: F01–F03 (per-file `Trees.stamps` in the manifest, fail-closed `dispose` and recovery that
+  re-stamp each file right before its delete, per-file encryption revalidation, no-replace `Trees.move` with `taken`,
+  a PACK folder deleted only while still a directory), F04/F16/F18/F19 (edits and marks bound to their entity/album
+  when queued, `CatalogStore.gen`, photo list by key), F05/F17 (server `hello` first on every socket: library id +
+  scan/op snapshots; the gateway sends nothing before it and rejects queued requests on another library), F06
+  (identity saved under the final id's stripe, cover tag from the render source), the `root` race (`retainRoots`
+  under every stripe), F07 (unreadable folders spare pruning), F08 (a merge into a descendant is refused), F10 (stale
+  `v` → 409 `no-store`, foreign `r` → `no-store`), F11 per-item caps (`image/Limits`, ZipPacker spill), F12
+  (coalescing bounded outbox), F13 (decoded-entries LRU), F14 (streaming restartable legacy migration), F23
+  (`EntryCodec` validation, `libraries.json` kept aside when unreadable, settings/libraries temp files synced), F27
+  (cached natives hashed on first use), F28 (Angular 22.2.3, `@angular/build` 22.2.5 → Vite 8.3.5, `npm audit` clean),
+  F30 doc drift. Checks: backend 206 tests (2 skipped, 0 failed), `ng test` 113 (17 files), `ng build` 576.5 kB, live smoke of `hello`
+  and the 409 rule on the demo jar. Open from the review: F09 (content identity), F15 (mark versions/events), F20
+  (entry pagination), F21 (image retry), F22 (duplicate representative within the filter), F24 (durability contract,
+  backup), F25 (recovery inbox, terminal op states), F26 (quiesce timeout as refusal), F29 (a11y), F11 remainder (a
+  global in-flight byte budget, caps on Directory/Zip/Cry `read`, a spool for 7z `extract` over the array maximum,
+  WebP scaled decode); `setFlags` rewrites and invalidates the whole packed list per learned flag; the 64 MB entries
+  cache budget is a constant; Unix `Trees.rename` keeps a check-then-rename window where hard links fail; recovery of
+  an atomic move whose destination moved to another volume never falls back to the copy path.
 - 2026-10-20 **fixes from `todo/to_fix_implement.txt`**: bare card header centered; profile choices are selects of short keys
   (ISO-2 birthplace/nationality via `Intl.DisplayNames`, ethnicity, hair, eyes, body type, breast size replacing
   measurements), tattoos/piercings yes/no, years active a 1960–2050 range (studios and photographers too), Born shows its
@@ -166,7 +186,7 @@ undo. Reference SPEC IDs.
   the decode-bound app (202 vs 189 thumbnails/s; cold scan of 120 albums 1.5 vs 1.7 s). Numbers in
   [scalebench/results.md](scalebench/results.md).
 - 2026-10-14 xanderView `.cry` images (SPEC L2a): `source/Cry` decorates every container (`Containers.open`), password
-  in Settings → Folders stored as the derived key (`cryKey`); stored signatures carry the key state so a password
+  in Settings → Folders kept as the derived key (`cryKey`, in server memory only since the session-only decision below); stored signatures carry the key state so a password
   change re-indexes only the albums holding `.cry` files; locked `.cry` files are not images (pure-`.cry` albums
   removed, tombstoned, on the next scan). Byte compatibility checked against files written by xanderView's own
   encryptor (`cry-golden.tsv`); decrypt cost measured at ~4.4 GB/s (24 MiB read 16 ms vs 11 ms plain). Checks:
@@ -255,7 +275,7 @@ undo. Reference SPEC IDs.
 - Scale follow-ups (2026-10-12 review): pass the discovery walk's file attributes to the containers instead of listing
   each album again; `count` runs on every page request (the wire could send it for the first page only); model/studio/
   photographer filters use `LOWER(col) =` and so scan (generated lower-case columns + indexes if they get slow).
-- Tombstones (`removed`) are never purged; `removed_at` is there for an age limit if the table ever matters.
+- Tombstones (`removed`) live until Optimize purges those older than `Library.TOMBSTONES` (`AlbumRepository.purge`) by `removed_at`.
 - Upgrade caveat: albums moved before the first scan of the new version are treated as new (their old content id is a
   SHA-1, the new one a wyhash), so their edits would be pruned with the old row.
 - Entry `index` = position among *readable* images; an image that becomes unreadable shifts later indices (and their

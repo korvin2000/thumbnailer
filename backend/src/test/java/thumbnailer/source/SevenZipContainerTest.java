@@ -12,6 +12,7 @@ import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -21,6 +22,7 @@ import java.util.stream.IntStream;
 import java.util.zip.Deflater;
 import java.util.zip.GZIPOutputStream;
 import net.sf.sevenzipjbinding.ArchiveFormat;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import thumbnailer.source.Archives.TarEntry;
@@ -181,6 +183,34 @@ class SevenZipContainerTest {
                 long before = threads.getTotalThreadAllocatedBytes();
                 assertThatThrownBy(() -> c.extract(List.of("big.jpg"), (i, in) -> {})).as(name).isInstanceOf(IOException.class);
                 assertThat(threads.getTotalThreadAllocatedBytes() - before).as(name + ": heap bytes for 1.5 KiB read").isLessThan(64L << 20);
+            }
+        }
+    }
+
+    @Test
+    void aMemberBeyondTheByteLimitFailsByNameBeforeItsBufferIsAllocated() throws IOException {
+        long size = 600L << 20; // over the 512 MiB render limit, under the 2 GiB an array could take
+        long giant = 3L << 30; // over what any array could take: refused by extract too
+        var threads = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+        for (var name : List.of("huge.tar", "huge.tar.gz", "giant.tar")) {
+            long bytes = name.startsWith("giant") ? giant : size;
+            var tar = new ByteArrayOutputStream();
+            tar.write(Archives.header("big.jpg", bytes, '0', ""));
+            tar.write("abcd".getBytes(StandardCharsets.UTF_8));
+            tar.write(new byte[508 + 1024]);
+            Files.write(dir.resolve(name), name.endsWith(".gz") ? Archives.gzip(tar.toByteArray()) : tar.toByteArray());
+            try (var c = new SevenZipContainer(dir.resolve(name), Exclusions.NONE); var arena = Arena.ofConfined()) {
+                c.items();
+                long before = threads.getTotalThreadAllocatedBytes();
+                for (ThrowingCallable read : List.<ThrowingCallable>of(() -> c.read("big.jpg", arena), () -> c.open("big.jpg")))
+                    assertThatThrownBy(read).as(name).isInstanceOf(IOException.class).hasMessage("big.jpg: " + bytes + " bytes exceeds 536870912 bytes");
+                if (bytes == giant) // an operation's extract keeps the array maximum: a 600 MiB member still packs
+                    assertThatThrownBy(() -> c.extract(List.of("big.jpg"), (i, in) -> {})).as(name).isInstanceOf(IOException.class)
+                            .hasMessage("big.jpg: " + bytes + " bytes exceeds " + (Integer.MAX_VALUE - 8) + " bytes");
+                var got = new ArrayList<String>();
+                c.heads(List.of("big.jpg"), Integer.MAX_VALUE, (n, head) -> got.add(n)); // unreadable: skipped
+                assertThat(got).as(name).isEmpty();
+                assertThat(threads.getTotalThreadAllocatedBytes() - before).as(name + ": heap bytes").isLessThan(16L << 20);
             }
         }
     }

@@ -7,10 +7,12 @@ import static java.nio.file.StandardOpenOption.CREATE_NEW;
 import static java.nio.file.StandardOpenOption.WRITE;
 
 import com.dynatrace.hash4j.hashing.Hashing;
+import java.io.File;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
 import java.nio.file.FileVisitResult;
@@ -23,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
 
 /**
@@ -33,6 +36,7 @@ import java.util.TreeMap;
 final class Trees {
 
     static final long MARGIN = 64L << 20; // free space kept on every volume
+    private static final boolean WINDOWS = File.separatorChar == '\\';
 
     private Trees() {}
 
@@ -91,16 +95,22 @@ final class Trees {
     }
 
     /**
-     * The names, sizes and mtimes of the files below {@code root} (only {@code names} when given), hashed: a source is
-     * deleted only while it still reads as when its copy began.
+     * Each file below {@code root} (only those of {@code names} when given) that exists, name → its size and mtime hashed;
+     * none for a missing root: a source file is deleted only while it still reads as when its copy began.
      */
-    static long stamp(Path root, Collection<String> names) throws IOException {
-        var files = new TreeMap<String, BasicFileAttributes>();
-        if (names == null) walk(root, (name, f, a) -> files.put(name, a));
-        else for (var n : names) files.put(n, Files.readAttributes(root.resolve(n), BasicFileAttributes.class, NOFOLLOW_LINKS));
-        var h = Hashing.wyhashFinal4().hashStream();
-        files.forEach((n, a) -> h.putString(n).putLong(a.size()).putLong(a.lastModifiedTime().toMillis()));
-        return h.getAsLong();
+    static Map<String, Long> stamps(Path root, Collection<String> names) throws IOException {
+        var stamps = new TreeMap<String, Long>();
+        Visit put = (n, f, a) -> {
+            var t = a.lastModifiedTime().toInstant();
+            stamps.put(n, Hashing.wyhashFinal4().hashStream().putLong(a.size()).putLong(t.getEpochSecond()).putInt(t.getNano()).getAsLong());
+        };
+        if (names == null) {
+            if (Files.exists(root, NOFOLLOW_LINKS)) walk(root, put);
+        } else for (var n : names) {
+            var f = root.resolve(n);
+            if (Files.exists(f, NOFOLLOW_LINKS)) put.file(n, f, Files.readAttributes(f, BasicFileAttributes.class, NOFOLLOW_LINKS));
+        }
+        return stamps;
     }
 
     static long size(Path root) throws IOException {
@@ -110,12 +120,17 @@ final class Trees {
     }
 
     /** Deletes a file or a whole tree; links inside are deleted, never followed. */
-    static void delete(Path root) throws IOException {
+    static void delete(Path root) throws IOException { delete(root, true); }
+
+    /** Deletes the folders of a tree bottom-up, each once empty: one still holding a file fails ({@link java.nio.file.DirectoryNotEmptyException}). */
+    static void prune(Path root) throws IOException { delete(root, false); }
+
+    private static void delete(Path root, boolean files) throws IOException {
         if (!Files.exists(root, NOFOLLOW_LINKS)) return;
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult visitFile(Path f, BasicFileAttributes a) throws IOException {
-                retry(() -> Files.deleteIfExists(f));
+                if (files) retry(() -> Files.deleteIfExists(f));
                 return CONTINUE;
             }
 
@@ -129,19 +144,71 @@ final class Trees {
     }
 
     /**
-     * Renames {@code from} to {@code to} on one volume, refusing an existing {@code to} (an atomic move would replace it
-     * silently); a case-only rename goes through {@link #part} (a direct one is a no-op on Windows).
+     * Renames {@code from} to {@code to} on one volume, never over an existing {@code to}, not even one spelled in another
+     * case (on a case-insensitive volume the same file); a case-only rename of one file goes through {@link #part} (a
+     * direct one is a no-op on Windows). Another volume → {@link AtomicMoveNotSupportedException}.
      */
     static void move(Path from, Path to) throws IOException {
-        if (present(to)) throw new FileAlreadyExistsException(to.toString());
+        if (taken(from, to)) throw new FileAlreadyExistsException(to.toString());
         if (from.toString().equalsIgnoreCase(to.toString())) {
             var via = part(to);
-            retry(() -> Files.move(from, via, ATOMIC_MOVE));
-            retry(() -> Files.move(via, to, ATOMIC_MOVE));
-        } else retry(() -> Files.move(from, to, ATOMIC_MOVE));
+            rename(from, via);
+            rename(via, to);
+        } else rename(from, to);
     }
 
-    /** Whether {@code p} exists under exactly this name (case included: after a case-only rename the old one is absent). */
+    /**
+     * Whether {@code to} is occupied by anything but {@code from} itself, in any case where the volume ignores case; a link
+     * there is an occupant, whatever it points at.
+     */
+    static boolean taken(Path from, Path to) throws IOException {
+        return Files.exists(to, NOFOLLOW_LINKS) && (Files.isSymbolicLink(to) || !Files.isSameFile(from, to));
+    }
+
+    /**
+     * One rename that never replaces. Windows: {@code Files.move} without options is MoveFileEx without
+     * MOVEFILE_REPLACE_EXISTING, failing on an existing target (it would copy across volumes: refused first). Elsewhere a
+     * rename replaces: a file is hard-linked to its new name, then unlinked (link(2) fails on an existing name); a directory,
+     * or a file where links fail (FAT, another device), is renamed after a look. Residual window between look and rename:
+     * an empty directory, or a file on a volume without hard links, created there in between is replaced.
+     */
+    private static void rename(Path from, Path to) throws IOException {
+        if (WINDOWS) {
+            if (!from.getParent().equals(to.getParent()) && !Files.getFileStore(from).equals(Files.getFileStore(to.getParent())))
+                throw new AtomicMoveNotSupportedException(from.toString(), to.toString(), "another volume");
+            retry(() -> Files.move(from, to));
+            if (Files.exists(from, NOFOLLOW_LINKS)) throw new IOException(from + " is still there after its move: " + to + " is a hard link of it");
+        } else if (!Files.isDirectory(from, NOFOLLOW_LINKS) && link(from, to)) {
+            if (!same(from, to)) throw new IOException(from + " was replaced while it was being moved: both stay"); // the link holds what was read
+            retry(() -> Files.delete(from));
+        } else {
+            if (Files.exists(to, NOFOLLOW_LINKS)) throw new FileAlreadyExistsException(to.toString());
+            retry(() -> Files.move(from, to, ATOMIC_MOVE));
+        }
+    }
+
+    /** Makes {@code to} a hard link of file {@code from} (or finds it one, linked before a crash); false where links fail. */
+    private static boolean link(Path from, Path to) throws IOException {
+        try {
+            Files.createLink(to, from);
+        } catch (FileAlreadyExistsException e) {
+            if (!same(from, to)) throw e;
+        } catch (IOException | UnsupportedOperationException e) {
+            return false;
+        }
+        return true;
+    }
+
+    /** The same inode under both names (links not followed: a symlink is its own file). */
+    private static boolean same(Path a, Path b) throws IOException {
+        return Objects.equals(Files.readAttributes(a, BasicFileAttributes.class, NOFOLLOW_LINKS).fileKey(),
+                Files.readAttributes(b, BasicFileAttributes.class, NOFOLLOW_LINKS).fileKey());
+    }
+
+    /**
+     * Whether {@code p} exists under exactly this name (case included: after a case-only rename the old one is absent); for
+     * recognizing an item's own names only, never whether a target is free ({@link #taken}).
+     */
     static boolean present(Path p) throws IOException {
         return Files.exists(p, NOFOLLOW_LINKS)
                 && p.toRealPath(NOFOLLOW_LINKS).getFileName().toString().equals(p.getFileName().toString());
@@ -152,7 +219,7 @@ final class Trees {
 
     static String part(String canonical) { return canonical + ".part"; }
 
-    /** What a 7z pack into {@code tmp} spilled beside it: {@code <tmp>.<n>.spill}. */
+    /** What a pack into {@code tmp} spilled beside it: {@code <tmp>.<n>.spill} (both packers). */
     static List<Path> spills(Path tmp) throws IOException {
         var prefix = tmp.getFileName() + ".";
         var out = new ArrayList<Path>();

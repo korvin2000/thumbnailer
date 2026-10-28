@@ -41,6 +41,14 @@ export class OpsStore {
 
   onProgress(p: OpProgress) { this.progress.set(p); }
 
+  /** The server's state on (re)connect: a running operation shows; one that ended while this client was away is closed by its result (unless that was shown already), or, without one, by clearing the progress with a word. */
+  onHello(op: OpProgress | null, result: OpResult | null) {
+    if (op) { this.progress.set(op); return; }
+    const running = !!this.progress()?.running;
+    if (result && result.id !== this.lastResult()?.id) { this.progress.set(null); this.onResult(result); return; }
+    if (running) { this.progress.set(null); this.toasts.show('The operation ended while disconnected', 'info'); }
+  }
+
   /** The word for the operation `p` reports: the one started here when it is that very operation (by id), else its kind alone. */
   opOf(p: Pick<OpProgress, 'id' | 'kind'>): Kind { const c = this.current(); return c?.id === p.id ? c.op : { kind: p.kind }; }
 

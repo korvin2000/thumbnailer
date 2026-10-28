@@ -224,11 +224,14 @@ export interface OpProgress { id: string; kind: OpKind; running: boolean; total:
 export interface OpIssue { item: string; reason: string }
 export interface OpResult { id: string; done: number; skipped: OpIssue[]; failed: OpIssue[] }
 
+/** The server's first message on every socket: the library it serves (= `SettingsInfo.dataDir`) and the scan / operation state a client away for a while has missed (`op` null once the operation ended, `opResult` its result). */
+export interface Hello { library: string; scan: ScanProgress | null; op: OpProgress | null; opResult: OpResult | null }
+
 export type GatewayEvent =
   | { type: 'albumChanged'; album: Album }
   | { type: 'albumRemoved'; albumId: string }
   | ({ type: 'scanProgress' } & ScanProgress)
-  | { type: 'connection'; connected: boolean }
+  | { type: 'connection'; connected: boolean; hello?: Hello } // `hello` on every live reconnect (the mock has none)
   | { type: 'catalogChanged'; kinds: EntityKind[] }
   | ({ type: 'opProgress' } & OpProgress)
   | ({ type: 'opResult' } & OpResult);

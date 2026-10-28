@@ -147,7 +147,7 @@ class Planner {
                 var dst = parent + "/" + to;
                 if (dst.equals(src)) yield skip(src, "same name");
                 if (!dst.equalsIgnoreCase(src) && Files.exists(s.locate(dst), NOFOLLOW_LINKS)) yield skip(src, "exists");
-                var staging = staged(s, dst, false); // a case-only rename goes through it
+                var staging = staged(s, dst); // a case-only rename goes through it
                 if (staging != null) yield skip(src, staging);
                 yield new Item(src, new Manifest(kind, null, null, src, dst, src, null, false, null), null,
                         join(nested, root ? "renames the root" : null), 0, 0, null);
@@ -158,7 +158,7 @@ class Planner {
                 var format = op.format() != null ? op.format() : s.ops().packFormat();
                 var dst = destination(op.conflict(), s, parent, name + (format == Op.Format.SEVEN_ZIP ? ".7z" : ".zip"), true, taken);
                 if (dst == null) yield skip(src, "the archive exists");
-                var staging = staged(s, dst, format == Op.Format.SEVEN_ZIP);
+                var staging = staged(s, dst);
                 if (staging != null) yield skip(src, staging);
                 long dirs;
                 try (var list = Files.list(p)) {
@@ -175,7 +175,7 @@ class Planner {
                 if (name.toLowerCase(Locale.ROOT).endsWith(ext)) yield skip(src, "already a " + ext.substring(1));
                 var dst = destination(op.conflict(), s, parent, Trees.stem(name) + ext, true, taken);
                 if (dst == null) yield skip(src, "the archive exists");
-                var staging = staged(s, dst, format == Op.Format.SEVEN_ZIP);
+                var staging = staged(s, dst);
                 if (staging != null) yield skip(src, staging);
                 var entries = entries(a.kind(), p);
                 long bytes = entries.values().stream().mapToLong(AlbumContainer.Item::bytes).sum(); // the output: images stored, never the compressed source
@@ -218,7 +218,7 @@ class Planner {
                 var format = lower.endsWith(".7z") ? Op.Format.SEVEN_ZIP : Op.Format.ZIP;
                 var dst = lower.endsWith(".7z") || lower.endsWith(".zip") ? src : destination(op.conflict(), s, parent, Trees.stem(name) + ".zip", true, taken);
                 if (dst == null) yield skip(src, "the archive exists");
-                var staging = staged(s, dst, format == Op.Format.SEVEN_ZIP); // in place: X.zip.part beside X.zip
+                var staging = staged(s, dst); // in place: X.zip.part beside X.zip
                 if (staging != null) yield skip(src, staging);
                 var all = new LinkedHashMap<>(identity(listed.keySet()));
                 all.putAll(names);
@@ -379,10 +379,10 @@ class Planner {
         }
     }
 
-    /** Why the item cannot write where it would: its {@code .part} (or, for a 7z, a spill of it) exists; else null. Never written over or deleted. */
-    private static String staged(Settings s, String dst, boolean sevenZip) throws IOException {
+    /** Why the item cannot write where it would: its {@code .part} or a spill of it (both packers spill) exists; else null. Never written over or deleted. */
+    private static String staged(Settings s, String dst) throws IOException {
         var tmp = s.locate(Trees.part(dst));
-        var there = Files.exists(tmp, NOFOLLOW_LINKS) ? List.of(tmp) : sevenZip ? Trees.spills(tmp) : List.<Path>of();
+        var there = Files.exists(tmp, NOFOLLOW_LINKS) ? List.of(tmp) : Trees.spills(tmp);
         return there.isEmpty() ? null : "staging file exists: " + there.getFirst().getFileName();
     }
 

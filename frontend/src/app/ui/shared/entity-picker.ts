@@ -138,7 +138,10 @@ export class EntityPickerDialog {
         if (!req) { this.gen++; clearTimeout(this.timer); if (dlg.open) dlg.close(); return; }
         const recent = this.lib() ? readRecent(this.lib(), req.kind) : [];
         this.items.set([]); this.total.set(0); this.error.set(null); this.recent.set(recent); // a new request (even one replacing an open one) starts over
-        void this.catalog.ensureKnown(recent.map(r => r.id), true);
+        const lib = this.lib();
+        void this.catalog.ensureKnown(recent.map(r => r.id), true).then(gone => { // a deleted or merged-away pick leaves the recents for good
+          if (gone.length && this.picker.open() === req && this.lib() === lib) { this.recent.update(l => l.filter(r => !gone.includes(r.id))); writeRecent(lib, req.kind, this.recent()); }
+        });
         this.search('', 0);
         if (!dlg.open) dlg.showModal();
         this.box()?.nativeElement.focus();

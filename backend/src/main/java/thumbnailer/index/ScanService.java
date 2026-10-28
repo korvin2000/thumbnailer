@@ -269,7 +269,7 @@ public class ScanService implements AutoCloseable {
                     slots.release();
                     throw e;
                 }
-            });
+            }, dir -> pass.unreadable(Containers.rebase(Containers.normalize(dir), at, scope.path())));
         } finally {
             slots.acquireUninterruptibly(width); // every worker of this scope has finished
         }

@@ -6,7 +6,7 @@ import { CatalogStore } from '../core/catalog-store';
 import { BytesPipe, MegapixelsPipe } from '../core/format';
 import { Gateway } from '../core/gateway';
 import { Tile } from '../core/layout';
-import { AlbumDetails, Entry, ENTRY_META, ENTRY_META_KNOWN, EntityKind, MetaRow, Op, PhotoMark } from '../core/model';
+import { AlbumDetails, Entry, ENTRY_META, ENTRY_META_KNOWN, EntityKind, MetaRow, Op, PhotoMark, PhotoMarks } from '../core/model';
 import { OpsStore } from '../core/ops-store';
 import { lastSegment } from '../core/paths';
 import { Prefs, VIEWER_SCALES, VIEWER_SORTS, ViewerScale, ViewerSort } from '../core/prefs';
@@ -212,8 +212,8 @@ export class AlbumViewer {
   protected readonly sel = new Selection();
   /** Drops the answer of an older `load` (a `catalogChanged` and an `albumChanged` can each start one). */
   private loadGen = 0;
-  /** Marks go one after the other: each `lists` replacement is computed from the marks the previous reply set. */
-  private marking: Promise<boolean> = Promise.resolve(false);
+  /** Marks go one after the other: each `lists` replacement is computed from the marks the previous reply set, of the album the mark was made on (`id`), whichever album the viewer shows by then. */
+  private marking: Promise<{ id: string; marks: PhotoMarks; ok: boolean } | null> = Promise.resolve(null);
   /** Entry index shown in the lightbox (stable across re-sorts). */
   protected readonly lightbox = signal<number | null>(null);
   protected readonly desc = this.prefs.viewerSortDesc;
@@ -256,7 +256,7 @@ export class AlbumViewer {
       // a re-index can renumber entries, so the whole album is reloaded rather than patched; catalog changes rename links and lists
       if (e.type === 'albumChanged' && e.album.id === this.id() && e.album.revision !== this.album()?.revision) this.load(this.id());
       if (e.type === 'albumRemoved' && e.albumId === this.id()) this.close();
-      if (e.type === 'catalogChanged') this.load(this.id());
+      if (e.type === 'catalogChanged' || (e.type === 'connection' && e.connected)) this.load(this.id()); // a reconnect may have missed any of the above
     });
   }
 
@@ -386,19 +386,26 @@ export class AlbumViewer {
 
   protected metaOk(e: Entry) { return !((e.flags & ENTRY_META_KNOWN) && !(e.flags & ENTRY_META)); }
 
-  /** One `markPhoto` per name, after the marks before it (`marking`): `patch` sees the marks the previous reply set, so two toggles keep both. True when every name was marked. */
+  /**
+   * One `markPhoto` per name, after the marks before it (`marking`), on the album shown *now*: `patch` sees that album's marks as the previous
+   * reply set them (the shown ones while it is still shown, else the queue's last reply for it, else those shown when the mark was made), so two
+   * toggles keep both and a navigation in between never marks another album's photos. A reply updates the view only while that album is shown.
+   * True when every name was marked.
+   */
   private mark(names: string[], patch: (cur: PhotoMark) => { rating?: number; lists?: number[] }): Promise<boolean> {
-    return this.marking = this.marking.then(async () => {
-      const a = this.album();
-      if (!a || !names.length) return false;
+    const id = this.album()?.id, base = this.marks();
+    if (!id || !names.length) return Promise.resolve(false);
+    const run = this.marking = this.marking.then(async prev => {
+      let marks = this.album()?.id === id ? this.marks() : prev?.id === id ? prev.marks : base, ok = true;
       try {
         for (const n of names) {
-          const marks = await this.gw.markPhoto(a.id, n, patch(this.marks()[n] ?? { rating: 0, lists: [] }));
-          if (this.album()?.id === a.id) this.details.update(d => d && { ...d, marks });
+          marks = await this.gw.markPhoto(id, n, patch(marks[n] ?? { rating: 0, lists: [] }));
+          if (this.album()?.id === id) this.details.update(d => d && { ...d, marks });
         }
-        return true;
-      } catch (e) { this.toasts.error(e, 'Mark failed: '); return false; }
+      } catch (e) { this.toasts.error(e, 'Mark failed: '); ok = false; }
+      return { id, marks, ok };
     });
+    return run.then(r => !!r?.ok);
   }
 
   protected rate(names: string[], rating: number) { void this.mark(names, () => ({ rating })); }

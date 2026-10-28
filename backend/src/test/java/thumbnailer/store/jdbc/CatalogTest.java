@@ -171,6 +171,11 @@ class CatalogTest {
         assertThatThrownBy(() -> studio.apply("FashionEuroGirls", List.of(top, other))).hasMessage("One parent at most");
         assertThatThrownBy(() -> studio.apply("FashionGirls", List.of(eu))).hasMessage("FashionEuroGirls is inside FashionGirls");
         assertThat(catalog.get(top).links()).as("a refused save changes nothing").isEmpty();
+        int sub = studio.apply("FashionEuroSub", List.of(eu));
+        assertThatThrownBy(() -> catalog.merge(List.of(top), sub)).as("merging an ancestor into a descendant would redirect a child link into a cycle")
+                .hasMessage("FashionEuroSub is inside FashionGirls; merge the other way round");
+        assertThatThrownBy(() -> catalog.merge(List.of(top, other), eu)).hasMessage("FashionEuroGirls is inside FashionGirls; merge the other way round");
+        assertThat(catalog.get(eu).links()).as("a refused merge changes nothing").extracting(r -> r.to().id()).containsExactly(top);
 
         studio.apply("Other", List.of(us));
         catalog.merge(List.of(other), eu);

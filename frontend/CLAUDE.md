@@ -53,6 +53,12 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
 - Requests that race are serialized where the payload depends on the previous reply: `CatalogStore.trySaveCard`
   (entity card edits) and `AlbumViewer.mark` (per-photo marks, `lists` replaces the set) queue; `CatalogStore.loadLists`
   shares one request and lets the newest answer win. Follow those patterns rather than sending from a stale signal.
+  Both queues bind their target (entity id / album id) when queued and build the payload from that target's newest
+  state when sent — never from `card()`/`album()` at execution time: Angular may have moved the user on.
+- `CatalogStore.gen` is the catalog generation: any async answer that writes `known`, a page or the card captures it
+  first and drops itself when stale; `reset()` also moves `lib`, which rejects queued saves ("Library changed").
+- Photo list items are matched by `photoKey` (`albumId/name`, `ui/photo-items.ts`), never `===`: a refresh replaces the
+  objects.
 - `layout.ts` is pure and spec-covered: landscape = `aspect >= 1`, a portrait tile has the landscape tile's area,
   `MAX_SCALE` 0.15. Keep it Angular-free.
 - `Icon` uses `bypassSecurityTrustHtml` on its static map only — never pass user input.
@@ -95,8 +101,10 @@ Node.js/npm are global (OS PATH). Run Angular CLI from `frontend/` (`npx ng …`
   `OpsStore.issues`, which the app turns into a `Confirm` without Cancel.
 - Synthetic key events in tests or the browser pane must target an element (`document.body`), not `document`: the key
   handlers call `e.target.closest(...)`.
-- `WsGateway` queues a request made while the socket is down and sends it on the next `onopen` (a restart after optimize
-  or a library switch would otherwise fail every timed refresh with "Not connected"); only a request already sent is
+- `WsGateway` queues a request made while the socket is down (a restart after optimize or a library switch would
+  otherwise fail every timed refresh with "Not connected") and sends it only after the server's `hello`, and only when
+  `hello.library` is the library it saw last (the first one is accepted): otherwise every unsent request is rejected
+  with "Library changed" — a queued integer entity id must never reach another library; only a request already sent is
   rejected with "Connection lost". A "this menu is mine" `computed` must read `ContextMenu.state()` before its own
   non-signal field, or it never re-evaluates.
 

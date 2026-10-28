@@ -2,6 +2,9 @@ package thumbnailer.settings;
 
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import static java.nio.file.StandardOpenOption.CREATE;
+import static java.nio.file.StandardOpenOption.SYNC;
+import static java.nio.file.StandardOpenOption.TRUNCATE_EXISTING;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -39,7 +42,7 @@ public class SettingsStore {
         var key = settings.cryKey();
         if (key != null && key.length() == 8) settings = settings.withKey(key.equals(fingerprint(current)) ? current.cryKey() : null);
         var tmp = file.resolveSibling("settings.json.tmp");
-        json.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), settings.requireDisjointRoots().withKey(null));
+        Files.write(tmp, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(settings.requireDisjointRoots().withKey(null)), CREATE, TRUNCATE_EXISTING, SYNC); // on disk before the rename publishes it
         Files.move(tmp, file, REPLACE_EXISTING, ATOMIC_MOVE);
         return current = settings;
     }

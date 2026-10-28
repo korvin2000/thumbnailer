@@ -33,16 +33,21 @@ export class CatalogStore {
   private listsPending: Promise<Entity[]> | null = null;
   private listsGen = 0;
   private cardGen = 0;
-  /** The open card's saves, one after the other (`trySaveCard`). */
+  /** The catalog generation: bumped by every `onChanged` (own writes included) and `reset`; an answer that writes `known` or the card checks the one it was asked under and is dropped when stale. */
+  private gen = 0;
+  /** The generation of the last `reset` (another library): a queued save from before it is never sent. */
+  private lib = 0;
+  /** The open card's saves, one after the other (`trySaveCard`), and the card the last one returned (the base of the next save of that entity, wherever the user is by then). */
   private saving: Promise<unknown> = Promise.resolve();
+  private lastSaved: EntityCard | null = null;
 
-  /** `Gateway.entities` through a small cache; a failed page is not kept. */
+  /** `Gateway.entities` through a small cache; a failed page is not kept (and only evicts itself, never a newer request for the key). */
   entities(kind: EntityKind, opts: EntityQuery = {}): Promise<EntityList> {
     const key = kind + JSON.stringify(opts);
     let page = this.cache.get(key);
     if (!page) {
-      page = this.gw.entities(kind, opts).then(p => { this.remember(p.items); return p; });
-      page.catch(() => this.cache.delete(key));
+      const gen = this.gen, p = page = this.gw.entities(kind, opts).then(p => { if (gen === this.gen) this.remember(p.items); return p; });
+      page.catch(() => { if (this.cache.get(key) === p) this.cache.delete(key); });
       this.cache.set(key, page);
       if (this.cache.size > CACHE) this.cache.delete(this.cache.keys().next().value!);
     }
@@ -73,22 +78,24 @@ export class CatalogStore {
   /** A known entity by id (from any page or card loaded so far); undefined until one named it. */
   entityOf(id: number): Entity | undefined { return this.known().get(id); }
 
-  /** Fetches the entities `known` lacks (one card each, once), for chips that only hold an id; `refresh` refetches the known ones too (a catalog change may have renamed or deleted them). Resolves with the ids the server has no entity for. */
+  /** Fetches the entities `known` lacks (one card each, once), for chips that only hold an id; `refresh` refetches the known ones too (a catalog change may have renamed or deleted them). Resolves with the ids the server has no entity for (dropped from `known` too); answers from before a catalog change are dropped and nothing is reported. */
   async ensureKnown(ids: number[], refresh = false): Promise<number[]> {
-    const gone: number[] = [];
+    const gone: number[] = [], gen = this.gen;
     await Promise.all(ids.filter((id, i) => ids.indexOf(id) === i && (refresh || !this.known().has(id)) && !this.pending.has(id)).map(async id => {
       this.pending.add(id);
-      try { this.remember([(await this.gw.entity(id)).entity]); }
+      try { const e = (await this.gw.entity(id)).entity; if (gen === this.gen) this.remember([e]); }
       catch (e) { if (GONE.test(e instanceof Error ? e.message : '')) gone.push(id); }
       finally { this.pending.delete(id); }
     }));
+    if (gen !== this.gen) return [];
+    if (gone.some(id => this.known().has(id))) this.known.update(m => { const n = new Map(m); for (const id of gone) n.delete(id); return n; });
     return gone;
   }
 
-  /** Another library: its entity ids mean nothing here, so everything keyed by id goes (pages, names, lists, the open card). */
+  /** Another library: its entity ids mean nothing here, so everything keyed by id goes (pages, names, lists, the open card, the queued saves). */
   reset() {
-    this.cache.clear(); this.known.set(new Map()); this.lists.set([]); this.listsPending = null; this.listsGen++;
-    this.closeCard(); this.version.update(v => v + 1);
+    this.cache.clear(); this.known.set(new Map()); this.lists.set([]); this.listsPending = null; this.listsGen++; this.lastSaved = null;
+    this.closeCard(); this.lib = ++this.gen; this.version.update(v => v + 1);
   }
 
   /** The owner named by a `"<name>" is <owner>; merge instead?` refusal, or null for any other error. */
@@ -100,16 +107,21 @@ export class CatalogStore {
   // ---- mutations (null / false = failed, the toast already said why); save/delete/merge/confirm invalidate at once, not only on the `catalogChanged` that follows ----
 
   /** Like `save`, but the failure is the caller's (no toast): the card turns a name collision into a merge offer. */
-  trySave(e: EntitySave) { return this.gw.saveEntity(e).then(c => { this.onChanged([c.entity.kind]); return this.show(c); }); }
+  trySave(e: EntitySave) { const gen = this.gen; return this.gw.saveEntity(e).then(c => this.wrote(c, gen, [c.entity.kind])); }
   save(e: EntitySave) { return this.run(this.trySave(e), 'Save failed: '); }
   /**
-   * `trySave` of the open card with `patch` on top, queued behind the card's earlier saves and built from the card as it is when sent (the
-   * earlier reply has updated it by then), so a second edit never resends values the first one changed. A null patch saves nothing (null).
+   * `trySave` of the open card with `patch` on top, queued behind the earlier saves and bound to the entity open *now*: when its turn comes it
+   * is built from that entity's newest card (the open one if it still is that entity, else the one the previous save returned, else fetched),
+   * so a second edit never resends values the first one changed and a navigation in between never lands it on another card. A null patch
+   * saves nothing (null); a library switch in between rejects it ("Library changed").
    */
   trySaveCard(patch: (c: EntityCard) => Partial<EntitySave> | null): Promise<EntityCard | null> {
-    const p = this.saving.then(() => {
-      const c = this.card(), x = c && patch(c);
-      return c && x ? this.trySave({ id: c.entity.id, kind: c.entity.kind, name: c.entity.name, rating: c.entity.rating, profile: c.entity.profile ?? null, ...x }) : null;
+    const id = this.cardId(), lib = this.lib;
+    const p = this.saving.then(async () => {
+      if (id === null) return null;
+      if (lib !== this.lib) throw new Error('Library changed');
+      const open = this.card(), c = open?.entity.id === id ? open : this.lastSaved?.entity.id === id ? this.lastSaved : await this.gw.entity(id), x = patch(c);
+      return x ? this.lastSaved = await this.trySave({ id, kind: c.entity.kind, name: c.entity.name, rating: c.entity.rating, profile: c.entity.profile ?? null, ...x }) : null;
     });
     this.saving = p.catch(() => {});
     return p;
@@ -124,9 +136,9 @@ export class CatalogStore {
     return this.trySave({ id: c.entity.id, kind, name: c.entity.name, rating: c.entity.rating, profile: c.entity.profile ?? null, links: parentId === null ? links : [...links, { to: parentId }] });
   }
   delete(ids: number[]) { return this.run(this.gw.deleteEntities(ids).then(() => { if (ids.includes(this.cardId()!)) this.closeCard(); this.onChanged(ENTITY_KINDS); return true; }), 'Delete failed: '); }
-  merge(from: number[], into: number) { return this.run(this.gw.mergeEntities(from, into).then(c => { if (from.includes(this.cardId()!)) this.cardId.set(into); this.onChanged([c.entity.kind]); return this.show(c); }), 'Merge failed: '); }
+  merge(from: number[], into: number) { const gen = this.gen; return this.run(this.gw.mergeEntities(from, into).then(c => { if (from.includes(this.cardId()!)) this.cardId.set(into); return this.wrote(c, gen, [c.entity.kind]); }), 'Merge failed: '); }
   confirm(ids: number[]) { return this.run(this.gw.confirmEntities(ids).then(() => { this.onChanged(ENTITY_KINDS); return true; }), 'Confirm failed: '); }
-  tryCreditAs(modelId: number, studioId: number, alias: string, roles?: string) { return this.gw.creditAs(modelId, studioId, alias, roles).then(c => { this.onChanged(['MODEL']); return this.show(c); }); }
+  tryCreditAs(modelId: number, studioId: number, alias: string, roles?: string) { const gen = this.gen; return this.gw.creditAs(modelId, studioId, alias, roles).then(c => this.wrote(c, gen, ['MODEL'])); }
   creditAs(modelId: number, studioId: number, alias: string, roles?: string) { return this.run(this.tryCreditAs(modelId, studioId, alias, roles), 'Credit failed: '); }
   /** Linking changes the entity's stored counts (a list's photos too), which no `catalogChanged` announces for an existing entity: its kind's pages are dropped here. */
   link(target: AlbumTarget, entityId: number) { return this.run(this.gw.link(target, entityId).then(n => this.linked(entityId, n)), 'Assign failed: '); }
@@ -136,13 +148,16 @@ export class CatalogStore {
 
   /** Routed from `AlbumStore.onEvent` (and called by the mutations above): drops cached pages and reloads what is shown. */
   onChanged(kinds: EntityKind[]) {
-    this.cache.clear();
+    this.cache.clear(); this.gen++;
     this.version.update(v => v + 1);
     if (kinds.includes('LIST') && this.listsPending) { this.listsPending = null; void this.loadLists(); }
     if (this.cardId() !== null) void this.reloadCard();
   }
 
   private linked(entityId: number, n: number) { const k = this.entityOf(entityId)?.kind; this.onChanged(k ? [k] : ENTITY_KINDS); return n; }
+
+  /** An own write's reply: the catalog changed either way; the returned card is shown only when nothing moved while it was in flight (a reset, or another write whose `onChanged` reloads the card anyway). */
+  private wrote(c: EntityCard, gen: number, kinds: EntityKind[]) { const fresh = gen === this.gen; this.onChanged(kinds); return fresh ? this.show(c) : c; }
 
   private async reloadCard() {
     const id = this.cardId(), gen = ++this.cardGen;

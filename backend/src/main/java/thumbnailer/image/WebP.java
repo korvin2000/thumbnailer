@@ -19,11 +19,14 @@ final class WebP {
         return NativeWebP.getFeatures(data, data.length, f) == 0 ? f : null;
     }
 
-    /** Still images only: an animation throws, and its first frame comes through ImageIO. */
+    /**
+     * Still images only: an animation throws, and its first frame comes through ImageIO. Decodes at full size, so the
+     * header's size beyond {@link Limits#MAX_PIXELS} fails (IllegalArgumentException) before any pixel is allocated.
+     */
     static Pixels decode(byte[] data) throws IOException {
         var f = features(data);
         if (f == null || f.hasAnimation) throw new IOException("Not a still WebP");
-        var px = new int[f.width * f.height];
+        var px = new int[Limits.pixels("WebP", f.width, f.height)];
         if (!NativeWebP.decodeInto(data, px, f.width * 4)) throw new IOException("WebP decode failed");
         var p = new Pixels(px, f.width, f.height);
         return f.hasAlpha ? p.onWhite() : p;

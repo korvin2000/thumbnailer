@@ -72,6 +72,48 @@ class PackersTest {
     }
 
     @Test
+    void storedImagesBeyondTheMemoryLimitSpillOnceBesideTheTarget_theSameZip() throws IOException {
+        var big = new byte[50_000];
+        new SplittableRandom(5).nextBytes(big);
+        var seen = new ArrayList<List<String>>(); // the spills beside the target as each source ends
+        Function<byte[], InputStream> source = b -> new ByteArrayInputStream(b) {
+            @Override
+            public synchronized int read(byte[] to, int off, int len) {
+                int n = super.read(to, off, len);
+                if (n < 0) try (var all = Files.list(dir)) {
+                    seen.add(all.map(f -> f.getFileName().toString()).filter(f -> f.endsWith(".spill")).toList());
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                return n;
+            }
+        };
+        var zips = new ArrayList<byte[]>();
+        for (int inMemory : new int[] {1024, ZipPacker.IN_MEMORY}) {
+            var target = dir.resolve(inMemory + ".zip.part");
+            seen.clear();
+            try (var z = new ZipPacker(target, inMemory)) {
+                assertThat(z.put("big.jpg", 1_700_000_000_000L, big.length, source.apply(big))).isEqualTo(Hashes.of(new ByteArrayInputStream(big)));
+                z.put("unlisted.jpg", 1_700_000_000_000L, -1, source.apply(big)); // no size up front: bounded all the same
+                z.put("small.jpg", 1_700_000_000_000L, 100, source.apply(java.util.Arrays.copyOf(big, 100)));
+            }
+            assertThat(seen).as("spills by entry").extracting(List::size).containsExactlyElementsOf(inMemory == 1024 ? List.of(1, 1, 0) : List.of(0, 0, 0));
+            assertThat(seen.stream().flatMap(List::stream)).allMatch(f -> f.startsWith(target.getFileName() + "."));
+            try (var all = Files.list(dir)) {
+                assertThat(all.map(f -> f.getFileName().toString())).as("spills deleted").noneMatch(f -> f.endsWith(".spill"));
+            }
+            try (var z = new ZipFile(target.toFile())) {
+                for (var n : List.of("big.jpg", "unlisted.jpg")) {
+                    assertThat(z.getEntry(n).getMethod()).as(n).isEqualTo(ZipEntry.STORED);
+                    assertThat(z.getInputStream(z.getEntry(n)).readAllBytes()).as(n).isEqualTo(big);
+                }
+            }
+            zips.add(Files.readAllBytes(target));
+        }
+        assertThat(zips.get(0)).as("spilled and in-memory entries write the same zip").isEqualTo(zips.get(1));
+    }
+
+    @Test
     void folderToSevenZipToFolder_copyMethodNotSolid() throws IOException {
         var src = dir.resolve("Shoot");
         var files = album(src);

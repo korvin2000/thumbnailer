@@ -195,7 +195,7 @@ class Steps {
 
     private String copy(Manifest m, byte[] key, Disks.Hold turn) throws IOException {
         try {
-            m = journal.save(write(m.withStamp(applies(DISPOSING, m) ? stamp(m) : null), key));
+            m = journal.save(write(m.withStamps(applies(DISPOSING, m) ? stamps(m) : null), key));
             verify(m);
         } catch (IOException | RuntimeException e) {
             if (e instanceof FileAlreadyExistsException x && path(m.tmp()).toString().equals(x.getFile()))
@@ -290,13 +290,13 @@ class Steps {
             throw new IOException("The result does not read back as written: " + m.tmp());
     }
 
-    /** The source's files as the item disposes them: a PACK only its own files, else the whole tree or file. */
-    private long stamp(Manifest m) throws IOException { return Trees.stamp(path(m.src()), m.kind() == PACK ? m.names().keySet() : null); }
+    /** The stamps of the source's files as the item disposes them: a PACK only its own files, else the whole tree or file. */
+    private Map<String, Long> stamps(Manifest m) throws IOException { return Trees.stamps(path(m.src()), m.kind() == PACK ? m.names().keySet() : null); }
 
-    /** Whether the source no longer reads as when its copy began: a file added, gone, resized or touched (or unreadable). */
+    /** Whether the source no longer reads as when its copy began: a file added, gone, resized or touched (or unreadable, or no record). */
     private boolean changed(Manifest m) {
         try {
-            return m.stamp() != null && stamp(m) != m.stamp();
+            return m.stamps() == null || !stamps(m).equals(m.stamps());
         } catch (IOException | RuntimeException e) {
             return true;
         }
@@ -312,18 +312,52 @@ class Steps {
         journal.remove(m.op(), m.item());
     }
 
+    /**
+     * Deletes the source's files that still read as stamped when its copy began (one gone was deleted before a crash), then
+     * its emptied folders; a PACK only its own files, the folder only when empty. Anything else is never deleted: while
+     * every original is still there the result goes instead ({@code changed during the operation}); once some are gone the
+     * source, the verified result and the line stay until what changed is moved out of the source.
+     */
     private void dispose(Manifest m) throws IOException {
         var src = path(m.src());
-        if (m.kind() != PACK) {
+        if (m.tmp() == null) { // a delete: no result to keep
             Trees.delete(src);
             return;
         }
-        for (var name : m.names().keySet()) Trees.delete(src.resolve(name)); // a directory album: its own files only
+        Map<String, Long> was = m.stamps() == null ? Map.of() : m.stamps(), now = stamps(m);
+        if (!was.entrySet().containsAll(now.entrySet())) {
+            if (m.stamps() != null && now.entrySet().containsAll(was.entrySet())) { // only additions: nothing deleted yet
+                rollback(m);
+                throw new IOException("changed during the operation");
+            }
+            throw stays(m, now.keySet().stream().filter(n -> !now.get(n).equals(was.get(n))).limit(10).toList());
+        }
+        for (var n : now.keySet()) {
+            var f = src.resolve(n);
+            Trees.retry(() -> { // stamped again right before the delete, retries included: a file rewritten meanwhile stays
+                var stamp = Trees.stamps(src, List.of(n)).get(n);
+                if (stamp != null && !stamp.equals(was.get(n))) throw stays(m, List.of(n));
+                Files.deleteIfExists(f);
+            });
+        }
+        if (m.kind() != PACK) {
+            Trees.prune(src); // a file appearing meanwhile keeps its folder, and the line stays
+            return;
+        }
+        if (!Files.isDirectory(src, NOFOLLOW_LINKS)) return; // gone, or something else under its name: never ours to delete
         try {
             Trees.retry(() -> Files.deleteIfExists(src));
         } catch (DirectoryNotEmptyException e) {
             log.info("{} keeps its sub-folders beside the archive", m.src());
         }
+    }
+
+    /** The refusal that keeps source, verified result and line for a person: recovery repeats it until what changed is moved out. */
+    private IOException stays(Manifest m, List<String> names) {
+        var why = "changed after its disposal began (" + String.join(", ", names) + "): it stays, with the verified result " + m.tmp()
+                + ", until what changed is moved out of it";
+        log.error("{} {}", m.src(), why);
+        return new IOException(why);
     }
 
     /** Brings the result from {@code tmp} (or the case-only rename's halfway name) to {@code dst}; done if it is there. */
@@ -334,7 +368,7 @@ class Steps {
             if (Trees.present(path(m.dst()))) return m;
             throw new IOException("The result of " + m.src() + " is missing");
         }
-        if (Trees.present(path(m.dst()))) { // taken since the item started: the result never waits for a decision
+        if (Trees.taken(from, path(m.dst()))) { // taken since the item started (in any case): the result never waits for a decision
             boolean file = Files.isRegularFile(from, NOFOLLOW_LINKS);
             var dir = m.dst().substring(0, m.dst().lastIndexOf('/') + 1);
             var name = m.dst().substring(dir.length());
@@ -394,12 +428,14 @@ class Steps {
     /** In-place encryption or decryption of a directory album, file by file, each journaled; then one re-index. */
     private String perFile(Manifest m, byte[] key, Disks.Hold turn) throws IOException {
         var dir = path(m.src());
+        m = journal.save(m.withStamps(Trees.stamps(dir, m.names().keySet()))); // before any file is read
+        var stamped = m;
         String first = null;
         int left = 0;
         for (var e : m.names().entrySet()) {
             Path from = dir.resolve(e.getKey()), to = dir.resolve(e.getValue()), tmp = Trees.part(to);
             long hash, plain;
-            boolean created = false;
+            boolean created = false; // the .part this attempt made: deleted on a failure, unless kept beside a changed original
             line(m, COPYING, e.getKey(), null);
             try {
                 try (var out = Files.newOutputStream(tmp, CREATE_NEW)) { // streamed, never the whole file in memory
@@ -409,8 +445,16 @@ class Steps {
                 Files.setLastModifiedTime(tmp, Files.getLastModifiedTime(from));
                 Trees.sync(tmp);
                 hash = Crypt.readBack(tmp, plain, key, m.encrypt()); // an encryption must decrypt back to what was read
-                line(m, DISPOSING, e.getKey(), hash); // verified: recovery checks the hash again before the source goes
-                Trees.retry(() -> Files.delete(from));
+                line(m, DISPOSING, e.getKey(), hash); // verified: recovery checks the hash and the stamp again before the source goes
+                boolean[] kept = {false};
+                Trees.retry(() -> { // stamped again right before the delete, retries included: a result proves only what was read
+                    if (kept[0] = !unchanged(stamped, dir, e.getKey())) return;
+                    Files.delete(from);
+                });
+                if (kept[0]) { // another program wrote to it since: both stay
+                    created = false;
+                    throw new IOException("changed during the operation; the result stays as " + tmp.getFileName());
+                }
             } catch (IOException | RuntimeException x) { // nothing deleted: this file stays as it was
                 if (created) Files.deleteIfExists(tmp); // never a file this attempt did not create
                 if (left++ == 0) first = e.getKey() + ": " + Trees.reason(x);
@@ -436,7 +480,15 @@ class Steps {
                     Files.delete(tmp);
                     return;
                 }
-                Trees.retry(() -> Files.deleteIfExists(from));
+                boolean[] kept = {false};
+                Trees.retry(() -> {
+                    if (kept[0] = Files.exists(from, NOFOLLOW_LINKS) && !unchanged(m, dir, l.file())) return;
+                    Files.deleteIfExists(from);
+                });
+                if (kept[0]) { // both stay; the line goes with the re-index
+                    log.error("{} changed during the operation: it stays, and so does its result {}", from, tmp);
+                    return;
+                }
                 Trees.move(tmp, to);
             }
             case INSTALLING -> {
@@ -444,6 +496,12 @@ class Steps {
             }
             default -> {}
         }
+    }
+
+    /** Whether file {@code name} of a per-file item still reads as stamped before the item began (no stamp: never). */
+    private static boolean unchanged(Manifest m, Path dir, String name) throws IOException {
+        var was = m.stamps() == null ? null : m.stamps().get(name);
+        return was != null && was.equals(Trees.stamps(dir, List.of(name)).get(name));
     }
 
     /** Renamed files only (a per-file item: those done), for the re-index: pins and photo marks follow them. */

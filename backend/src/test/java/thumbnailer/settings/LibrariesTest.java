@@ -69,6 +69,7 @@ class LibrariesTest {
 
         Files.writeString(home.resolve(Libraries.FILE), "{ not json");
         assertThat(locate(Map.of("thumbnailer.data-dir", home.toString()))).as("unreadable: ignored").containsExactly(null, "false");
+        assertThat(home.resolve(Libraries.FILE + ".unreadable")).as("the unreadable file is kept aside before a save can replace it").hasContent("{ not json");
     }
 
     /** {@code library-dir}, {@code library-pinned} after the locator ran. */

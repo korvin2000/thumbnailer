@@ -22,7 +22,7 @@ the load names; every manifest line was checked against those hashes when they w
 
 `LibraryLoader.path(name)` returns `<cache>/<os>-<arch>/<bundle>/<file>`, where `bundle` = the first 12 hex digits of
 SHA-256 over the manifest text. A missing file is copied from the jar to a temp file, verified against the manifest
-and moved into place atomically; a present one is trusted (one `stat` per start). Bundles never change, so versions
+and moved into place atomically; a present one is hashed against the manifest on its first use per process (a damaged file is copied again, an unlisted one refused). Bundles never change, so versions
 coexist and parallel processes never race. `load(name)` adds `System.load` (JNI); a file that fails to load and does
 not match its hash is copied once more. Cache root: `-Dthumbnailer.natives=<dir>`, default `~/.thumbnailer/natives`;
 the backend tests use `backend/build/natives`. [.gitattributes](../.gitattributes) keeps the manifests LF on every

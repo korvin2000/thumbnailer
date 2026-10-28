@@ -177,6 +177,10 @@ public class Catalog {
             merged.stream().filter(a -> a.kind() != b.kind()).findFirst().ifPresent(a -> {
                 throw new IllegalArgumentException("Only entities of one kind merge: " + a.name() + " is no " + b.kind().name().toLowerCase(Locale.ROOT));
             });
+            var ids = Set.copyOf(merged.stream().map(Entity::id).toList());
+            var seen = new HashSet<Integer>(); // into below a merged one: the child link redirected to it would close a cycle
+            for (int p = parent(b); p != 0 && seen.add(p); p = parent(find(p)))
+                if (ids.contains(p)) throw new IllegalArgumentException(b.name() + " is inside " + find(p).name() + "; merge the other way round");
             var profile = b.profile();
             for (var a : merged) profile = fill(profile, a.profile());
             repo.merge(merged.stream().map(Entity::id).toList(), new Entity(b.id(), b.kind(), b.name(),

@@ -15,7 +15,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Nullness by convention (null = not set / no filter / unchanged); `Optional` for lookups. No custom exceptions:
   `IllegalArgumentException` / `NoSuchElementException` / `IllegalStateException`; WS turns any exception into
   `Event.Error`. Per-item I/O failures: `catch (IOException | RuntimeException e)` → `log.warn` → skip.
-- Threads: platform daemon threads `scan`, `ws-broadcast`, `ws-idle`, `covers-compact`, `resampler-warmup` (once at start), `catalog-backfill` (once at start, only while the gate is busy then), `ops` (one per operation), `pack-read` (the pass feeding a 7z pack); the non-daemon `restart` thread; virtual `walk-N` (one walker per disk in a scan) and `gallery` (one pass per viewed sequential archive); indexing runs one virtual thread per
+- Threads: platform daemon threads `scan`, `ws-broadcast` (drains the coalesced outbox, one task at a time), `ws-idle`, `covers-compact`, `resampler-warmup` (once at start), `catalog-backfill` (once at start, only while the gate is busy then), `ops` (one per operation), `pack-read` (the pass feeding a 7z pack); the non-daemon `restart` thread; virtual `walk-N` (one walker per disk in a scan) and `gallery` (one pass per viewed sequential archive); indexing runs one virtual thread per
   album (`index-N`), bounded by a semaphore (`index-threads` albums per disk walker); renders are a pipeline in `AlbumService`
   (covers: indexing + cover misses; entry thumbnails): read in a disk turn (`source/Disks` lane: FIFO, `hdd-readers`
   at once on an HDD/network/unknown disk, ungated on an SSD; separate `SCAN` and `VIEW` lanes), a place in the queue
@@ -42,6 +42,9 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Image pipeline: one `Pixels` layout (packed `0x??RRGGBB`) from decode to encode; read an entry once (`AlbumContainer.read`
   into a confined arena, `head` for header parsers). 7-Zip calls its output streams from its own threads: callbacks
   touch no thread-confined state (arenas, `Thread.currentThread()`), and a `heads` sink must not read the container.
+  Per-item caps (`image/Limits`): a file read whole for a render or probe ≤ `MAX_BYTES` (512 MiB), one decode ≤ `MAX_PIXELS`
+  (200 M), a member an operation's `extract` buffers ≤ `MAX_MEMBER` (the array maximum); beyond, that item fails with an
+  error naming it before any allocation (bytes: `IOException`, pixels: `IllegalArgumentException`). Not a global budget.
   The Vector API is SIMD only in C2 code: `Resampler.SIMD` is false without C2 and `bootRun` sets `optimizedLaunch = false`
   (Boot's default `-XX:TieredStopAtLevel=1` boxed every vector: 4 thumbnails/s instead of 200, the PC lagging).
 - Paths: always `Containers.normalize()` (absolute, `/`), compare with `Containers.prefix()` / `within()`. Stored
@@ -54,14 +57,14 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - `AlbumService` is the only writer (`commit`, `patch`, `remove`, `retainRoots`). Writes happen under
   `synchronized (lock(id))`; events are published **after** the lock; both `commit`s re-read the stored album under
   the lock so a scan or an operation never overwrites a concurrent edit; a failed WS request logs its `type`, never
-  the payload (passwords).
+  the payload (passwords). `commit` decides and saves an identity under the stripe of the final id (re-deciding under it, never two stripes nested); only `retainRoots`' bulk `reroot` holds every stripe (`exclusive`, ascending order), so no other code may hold two stripes.
 - Every save bumps `revision`. Only covers are stored: key = album id, value = 8-byte tag (wyhash seeded by the
   render epoch, of cover name + signature) + `[len 4][bytes]`; for `Render.LEGACY_EPOCH` (WebP/75/512) the older
   `[tag 8][webp]` with the RIFF size as length, so old stores stay valid. The epoch travels with the bytes (`Thumb`):
   a value is tagged with the epoch it was rendered with, never the spec current at commit. `storedCover` serves a value
   only if its tag matches the album under the current covers spec and its length is whole; anything else is a miss and
   re-renders. So writes need no ordering with the SQL save, and a change to what a cover depicts or how it is rendered
-  must feed the tag (`Render.epoch()`: format, size, quality). Entry thumbnails are never stored.
+  must feed the tag (`Render.epoch()`: format, size, quality). Entry thumbnails are never stored. A stored cover's tag comes from what its bytes were rendered from (the indexed cover + signature, or the snapshot a miss rendered), never from a row read back after the save.
 - Metadata merges differ on purpose: `AlbumMeta.over` (edits over extracted, null falls through) vs `orElse`
   (extractor chain, blank falls through, tags union). In the edited layer `""`/`[]` mean "explicitly empty".
 - Identity: `signature` (all files incl. sidecars, with mtime) decides re-index; `contentId` (images, name + bytes)
@@ -74,7 +77,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   delete. Unreachable roots are skipped. `AlbumRepository.delete` always leaves a tombstone (`removed`, by content id)
   that `AlbumService.commit` recalls (a read-only peek) for the next new album with that content (id, revision + 1,
   rating, edits, pin); `save` deletes the tombstones of the saved id in its own transaction, so adoption is atomic
-  with the save, and `commit` ignores a tombstone whose id is live again.
+  with the save, and `commit` ignores a tombstone whose id is live again. A folder the walk may not list (AccessDenied below the scope, not a system folder) leaves the walk complete, but `prune` spares every album at or below it.
 - Catalog ([catalog_plan.md](../catalog_plan.md) §2): the album's text fields are the truth, `album_link` rows are
   derived from them by `Catalog.resolving` inside every save, which runs `repo.save(album, entries, resolution, Save)`
   under the catalog read lock (album, links, count deltas, renamed photo marks and the alias-extended `search` in one
@@ -102,10 +105,15 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
 - Archive members (`extract`, the read that operations verify and then delete by): a container lists every occurrence
   of a name and fails closed on a name listed twice or a link entry, never picking one silently; an entry's byte count
   must equal its listing. `ops/pack` writers create their target new (`CREATE_NEW`, `createFile`, `createDirectory`):
-  a file, directory or link already at a `.part` path is never written through, truncated or adopted.
+  a file, directory or link already at a `.part` path is never written through, truncated or adopted. `.spill` files come from
+  `SevenZipPacker` and from `ZipPacker` (STORED images > 64 MiB).
   `/img` request (its album and entry lookup included) runs inside an `AlbumService.read` (counted; refused once busy) and `quiesce` waits ≤ 5 s for those
-  in flight, gallery passes included. An operation deletes a source only after its verified result exists and only
-  while the source's `Trees.stamp` (names, sizes, mtimes, in the manifest) is unchanged; it never writes over or
+  in flight, gallery passes included. An operation deletes a source only after its verified result exists, and deletes only source files whose
+  `Trees.stamps` (per file: size and mtime, saved in the manifest before the copy, or before a per-file item's first read)
+  are unchanged, each stamped again right before its delete; once disposal began, a changed or unrecorded file is never deleted and the verified result is never
+  rolled back (source, result and line stay for a person); a manifest without per-file stamps authorizes no deletion; a
+  rename never replaces (`Trees.move` fails on an existing target in any case; `Trees.present` only recognizes an item's
+  own names, `Trees.taken` decides whether a target is free); it never writes over or
   deletes a staging file (`.part`, `.spill`) it did not create (the `Planner` refuses items where one exists); a
   journal it cannot read is never rewritten (`Journal` refuses every write until a read succeeds); containment is
   checked on real paths too (links resolved); `Reindexer.reindex` is idempotent (a replay maps no names twice) and
@@ -113,7 +121,7 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   key, a recovery's with the session's).
 - The `root` column is informational: scans, pruning, folders and the root filter select by path prefix
   (`path = dir OR path LIKE 'dir/%' ESCAPE '!'`, index `album_path`); `retainRoots` (on `setSettings` and at every scan
-  start) re-roots the albums of a removed root that lie under a configured one and removes the rest.
+  start) re-roots the albums of a removed root that lie under a configured one and removes the rest. `retainRoots` re-roots under every stripe, so a concurrent whole-row patch cannot restore the old root.
 - `ScanService.close()` (on `ContextClosedEvent`) must stop scans before the stores close; the H2 URL keeps
   `DB_CLOSE_ON_EXIT=FALSE;DB_CLOSE_DELAY=-1` for that reason and `JdbcAlbumRepository.close()` runs `SHUTDOWN`. Indexers honour thread interruption.
 - Libraries and restart: every store finds its files under `${thumbnailer.library-dir:${thumbnailer.data-dir}}` (only
@@ -130,7 +138,16 @@ Map: [docs/map/backend.md](../docs/map/backend.md). Design: [ARCHITECTURE §1–
   directions, `NULLS LAST`), or that sort falls back to sorting every row (seconds at 100 k albums); tags are
   stored as `" a b "` for `album()` and the search text only; tag filters and facets go through `album_link` (alias-resolved).
   `schema.sql` must stay idempotent (`IF NOT EXISTS`); there is no migration tool.
+- The `entries` table is written only through `JdbcAlbumRepository.saveEntries`/`save`/`delete`: they call `changed`, which
+  keeps the decoded-entries cache coherent (now and after commit); writing the table any other way serves stale entries.
+  `entries()` returns a shared, unmodifiable list: never mutate it. A corrupt packed value is an `IllegalStateException`
+  from `entries()`/`entry()`, never an empty list.
 - Entry `index` = position among readable images (name-sorted); it is the id used by `/img/{id}/{index}` and the UI.
+- The first message `AlbumSocket` sends a session is its `hello`; broadcasts go only through the coalescing outbox on
+  `ws-broadcast` (never `sendMessage` from a listener): the newest per key wins, in arrival order of its last update; at
+  `MAX_PENDING` every session is closed so clients reload.
+- An image URL's `v` is enforced: another revision → 409 `no-store`, never bytes; a foreign `r` → `no-store`. The `r` value
+  comes only from `ImageController.renderEpoch`.
 
 ## Extending (recipes)
 

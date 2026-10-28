@@ -60,7 +60,7 @@ final class TurboJpeg {
      * Decodes at the smallest DCT scale (1/8, 1/4, 1/2, 1) whose longer side still reaches {@code minLonger}, so the
      * resampler only ever shrinks; fast upsampling and IDCT, since the result is shrunk anyway. CMYK/YCCK and 12-bit
      * images throw (ImageIO handles them); corrupt-but-decodable data (a libjpeg warning) is accepted. Lossless JPEGs
-     * ignore scaling, so they decode at full size.
+     * ignore scaling, so they decode at full size. An output beyond {@link Limits#MAX_PIXELS} fails (IllegalArgumentException).
      */
     static Pixels decode(MemorySegment jpeg, int minLonger) throws IOException {
         try (var arena = Arena.ofConfined()) {
@@ -83,7 +83,7 @@ final class TurboJpeg {
                 check(h, (int) SET.invokeExact(h, FAST_UPSAMPLE, 1));
                 check(h, (int) SET.invokeExact(h, FAST_DCT, 1));
                 int sw = Math.ceilDiv(w * m, 8), sh = Math.ceilDiv(ht * m, 8);
-                var px = new int[sw * sh];
+                var px = new int[Limits.pixels("JPEG", sw, sh)]; // checked before either pixel buffer
                 var out = alloc((long) px.length * 4); // uninitialized: an arena would zero megabytes first
                 try {
                     check(h, (int) DECODE.invokeExact(h, jpeg, jpeg.byteSize(), out, sw * 4, PF_BGRX));

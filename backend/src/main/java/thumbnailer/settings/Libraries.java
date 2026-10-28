@@ -2,6 +2,9 @@ package thumbnailer.settings;
 
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import static java.nio.file.StandardOpenOption.CREATE;
+import static java.nio.file.StandardOpenOption.SYNC;
+import static java.nio.file.StandardOpenOption.TRUNCATE_EXISTING;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -107,16 +110,21 @@ public class Libraries {
 
     private void write(State s) throws IOException {
         var tmp = Files.createDirectories(file.getParent()).resolve(FILE + ".tmp");
-        json.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), s);
+        Files.write(tmp, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(s), CREATE, TRUNCATE_EXISTING, SYNC); // on disk before the rename publishes it
         Files.move(tmp, file, REPLACE_EXISTING, ATOMIC_MOVE);
     }
 
-    /** An unreadable file counts as absent: the home library is always usable. */
+    /**
+     * An unreadable file counts as absent: the home library is always usable. The file itself is kept aside as
+     * {@code libraries.json.unreadable} (the next save would replace the only copy of the known libraries).
+     */
     static State read(Path file, JsonMapper json) {
         try {
             return Files.exists(file) ? json.readValue(file.toFile(), State.class) : State.NONE;
         } catch (JacksonException e) {
-            log.warn("Ignoring unreadable {}: {}", file, e.toString());
+            var kept = file.resolveSibling(FILE + ".unreadable");
+            try { Files.copy(file, kept, REPLACE_EXISTING); } catch (IOException io) { kept = null; }
+            log.warn("Ignoring unreadable {} (kept as {}): {}", file, kept, e.toString());
             return State.NONE;
         }
     }

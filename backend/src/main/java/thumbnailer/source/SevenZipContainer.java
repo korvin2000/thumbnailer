@@ -37,6 +37,7 @@ import net.sf.sevenzipjbinding.SevenZip;
 import net.sf.sevenzipjbinding.SevenZipException;
 import net.sf.sevenzipjbinding.impl.RandomAccessFileInStream;
 import org.springframework.stereotype.Component;
+import thumbnailer.image.Limits;
 import thumbnailer.natives.LibraryLoader;
 import thumbnailer.spi.AlbumContainer;
 import thumbnailer.spi.Kind;
@@ -216,7 +217,8 @@ public final class SevenZipContainer implements AlbumContainer {
     /**
      * Random-access archives read head by head, in archive order. Solid and wrapped ones deliver every head from inside
      * one decompression pass, possibly on a 7-Zip thread: such a sink must not read this container (see the
-     * interface); heads up to {@link #KEEP} stay for later {@link #head} calls while the budget lasts.
+     * interface); heads up to {@link #KEEP} stay for later {@link #head} calls while the budget lasts. A head beyond
+     * {@link Limits#MAX_BYTES} is skipped, as unreadable.
      */
     @Override
     public void heads(Collection<String> names, int limit, HeadSink sink) throws IOException {
@@ -231,7 +233,7 @@ public final class SevenZipContainer implements AlbumContainer {
             var r = refs.get(n);
             var k = kept.get(n);
             if (k != null && (k.length >= limit || k.length == r.size)) sink.accept(n, k.length > limit ? Arrays.copyOf(k, limit) : k);
-            else wanted.put(r.index, n);
+            else if (Math.min(limit, r.size) <= Limits.MAX_BYTES) wanted.put(r.index, n);
         }
         if (wanted.isEmpty()) return;
         var pass = new Pass();
@@ -276,8 +278,9 @@ public final class SevenZipContainer implements AlbumContainer {
 
     /**
      * Every named file whole, in packing order, in one native pass (a solid archive or a wrapped tar decompresses
-     * once): each is buffered and handed on as it completes, possibly on a 7-Zip thread. Fail-closed: a missing,
-     * damaged or mis-sized file, a link, a name listed twice or a wrapped tar whose stream is damaged fails the call.
+     * once): each is buffered (growing from 16 MiB: a header may lie) and handed on as it completes, possibly on a 7-Zip thread. Fail-closed:
+     * a missing, damaged or mis-sized file, a link, a name listed twice, a file beyond {@link Limits#MAX_MEMBER} or a
+     * wrapped tar whose stream is damaged fails the call.
      */
     @Override
     public void extract(Collection<String> names, EntrySink sink) throws IOException {
@@ -288,7 +291,7 @@ public final class SevenZipContainer implements AlbumContainer {
             var item = byName.get(n);
             if (item == null) throw new FileNotFoundException(n);
             if (refused.containsKey(n)) throw new IOException(refused.get(n) + " " + n + " in " + file.getFileName());
-            if (item.bytes() > Integer.MAX_VALUE - 8) throw new IOException("Too large to extract at once: " + n);
+            if (item.bytes() > Limits.MAX_MEMBER) throw Limits.tooLarge(n, item.bytes(), Limits.MAX_MEMBER);
             wanted.put(refs.get(n).index, item);
         }
         if (wanted.isEmpty()) return;
@@ -393,7 +396,10 @@ public final class SevenZipContainer implements AlbumContainer {
         }
     }
 
-    /** Streams {@code entry}'s first {@code limit} bytes into the sink {@code open} makes for their count, then stops. */
+    /**
+     * Streams {@code entry}'s first {@code limit} bytes into the sink {@code open} makes for their count, then stops; a
+     * count beyond {@link Limits#MAX_BYTES} fails before {@code open} allocates.
+     */
     private void extract(String entry, int limit, IntFunction<Chunks> open) throws IOException {
         var pass = new Pass();
         var found = new boolean[1];
@@ -419,6 +425,7 @@ public final class SevenZipContainer implements AlbumContainer {
 
                 @Override public boolean entry(String e, long size, long mtime) throws SevenZipException {
                     if (!e.equals(entry) || exclusions.excludes(prefix + e)) return false;
+                    if (Math.min(limit, size) > Limits.MAX_BYTES) pass.fail(Limits.tooLarge(entry, size));
                     out = capped.apply((int) Math.min(size, Integer.MAX_VALUE));
                     if (size == 0) pass.stop();
                     return true;
@@ -432,6 +439,7 @@ public final class SevenZipContainer implements AlbumContainer {
             items();
             var r = refs.get(entry);
             if (r == null) throw new FileNotFoundException(entry);
+            if (Math.min(limit, r.size) > Limits.MAX_BYTES) throw Limits.tooLarge(entry, r.size);
             if (r.size == 0 || limit == 0) {
                 capped.apply(0);
                 return;

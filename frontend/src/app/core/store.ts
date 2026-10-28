@@ -264,6 +264,10 @@ export class AlbumStore {
       }
       case 'connection':
         this.connected.set(e.connected);
+        if (e.connected && e.hello) { // the server's state while this client was away: a scan it no longer reports is over, an operation's result may have been missed
+          if (e.hello.scan) this.scan.set(e.hello.scan); else if (this.scan()?.running) this.scan.update(s => s && { ...s, running: false });
+          this.ops.onHello(e.hello.op, e.hello.opResult);
+        }
         if (e.connected) { this.loadSettings(); this.loadFacets(0); this.refresh(0); this.treeVersion.update(v => v + 1); this.catalog.onChanged(ENTITY_KINDS); }
         break;
       // catalog and operation state live in their own stores; this only routes

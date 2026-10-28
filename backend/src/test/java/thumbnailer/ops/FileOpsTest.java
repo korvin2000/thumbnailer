@@ -434,6 +434,146 @@ class FileOpsTest {
     }
 
     @Test
+    void aFileAddedAfterDisposingWasJournaledIsKeptAndTheCopyGoesWhileEveryOriginalIsThere() throws Exception {
+        var ad = copied("Ad");
+        var id = crash(Phase.DISPOSING, 1, move(ad), () -> Files.write(root.resolve("lib/Ad/new.jpg"), jpeg(5)));
+        assertThat(names("lib/Ad")).containsExactly("a.jpg", "b.jpg", "new.jpg");
+        assertThat(root.resolve("other/Ad.part")).doesNotExist();
+        assertThat(repo.find(ad.id()).orElseThrow().path()).isEqualTo(ad.path());
+        assertThat(journal()).doesNotContain(id);
+    }
+
+    @Test
+    void aFileAddedAfterPartOfTheSourceWentStopsTheDisposalUntilItIsMovedOut() throws Exception {
+        var pa = copied("Pa");
+        var id = crash(Phase.DISPOSING, 1, move(pa), () -> { // a.jpg disposed, then the crash; new.jpg added while down
+            Files.delete(root.resolve("lib/Pa/a.jpg"));
+            Files.write(root.resolve("lib/Pa/new.jpg"), jpeg(5));
+        });
+        assertThat(names("lib/Pa")).containsExactly("b.jpg", "new.jpg");
+        assertThat(names("other/Pa.part")).as("never rolled back").containsExactly("a.jpg", "b.jpg");
+        assertThat(journal()).contains(id);
+        Files.move(root.resolve("lib/Pa/new.jpg"), root.resolve("new.jpg")); // a person moves what changed out of it
+        steps.recover();
+        assertThat(names("other/Pa")).containsExactly("a.jpg", "b.jpg");
+        assertThat(root.resolve("lib/Pa")).doesNotExist();
+        assertThat(repo.find(pa.id()).orElseThrow().path()).isEqualTo(path("other/Pa"));
+        assertThat(journal()).isBlank();
+    }
+
+    @Test
+    void aCrashAfterTheWholeSourceWentInstallsTheResult() throws Exception {
+        var fu = copied("Fu");
+        crash(Phase.DISPOSING, 1, move(fu), () -> Trees.delete(root.resolve("lib/Fu")));
+        assertThat(names("other/Fu")).containsExactly("a.jpg", "b.jpg");
+        assertThat(root.resolve("lib/Fu")).doesNotExist();
+        assertThat(repo.find(fu.id()).orElseThrow().path()).isEqualTo(path("other/Fu"));
+        assertThat(journal()).isBlank();
+    }
+
+    @Test
+    void aPackRecoveryNeverDeletesWhatTookTheSourceFoldersName() throws Exception {
+        var pk = copied("Pk");
+        crash(Phase.DISPOSING, 1, op(Op.Kind.PACK, List.of(pk.id()), null, null, Op.Conflict.SKIP), () -> { // moved aside while down, a file under its name
+            Files.move(root.resolve("lib/Pk"), root.resolve("Pk-aside"));
+            Files.write(root.resolve("lib/Pk"), new byte[] {7});
+        });
+        assertThat(root.resolve("lib/Pk")).as("not ours: the folder's files count as disposed, its name is not deleted").hasBinaryContent(new byte[] {7});
+        assertThat(root.resolve("lib/Pk.zip")).exists();
+        assertThat(repo.find(pk.id()).orElseThrow().kind()).isEqualTo(Kind.ZIP);
+        assertThat(journal()).isBlank();
+    }
+
+    @Test
+    void recoveryRefusesToDisposeAChangedFileAndKeepsTheOnlyCopyOfThoseAlreadyGone() throws Exception {
+        var so = copied("So");
+        var a = Files.readAllBytes(root.resolve("lib/So/a.jpg"));
+        var id = crash(Phase.DISPOSING, 1, move(so), () -> { // a.jpg disposed, then the crash; b.jpg rewritten while down
+            Files.delete(root.resolve("lib/So/a.jpg"));
+            Files.write(root.resolve("lib/So/b.jpg"), jpeg(5));
+        });
+        steps.recover(); // every time
+        assertThat(root.resolve("other/So.part/a.jpg")).as("the only a.jpg left").hasBinaryContent(a);
+        assertThat(root.resolve("lib/So/b.jpg")).hasBinaryContent(jpeg(5));
+        assertThat(journal()).contains(id);
+        Files.move(root.resolve("lib/So/b.jpg"), root.resolve("b.jpg"));
+        steps.recover();
+        assertThat(root.resolve("other/So/a.jpg")).hasBinaryContent(a);
+        assertThat(root.resolve("lib/So")).doesNotExist();
+        assertThat(journal()).isBlank();
+    }
+
+    @Test
+    void aManifestWithoutPerFileStampsAuthorizesNoDeletion() throws Exception {
+        var le = copied("Le");
+        var id = crash(Phase.DISPOSING, 1, move(le), () -> { // as an older version wrote it: one stamp for the whole source
+            try (var all = Files.walk(settings.dataDir().resolve("ops"))) {
+                for (var json : (Iterable<Path>) all.filter(f -> f.toString().endsWith(".json"))::iterator)
+                    Files.writeString(json, Files.readString(json).replaceFirst("\"stamps\":\\{[^}]*}", "\"stamp\":42"));
+            }
+        });
+        assertThat(names("lib/Le")).containsExactly("a.jpg", "b.jpg");
+        assertThat(names("other/Le.part")).containsExactly("a.jpg", "b.jpg");
+        assertThat(journal()).contains(id);
+        Files.move(root.resolve("lib/Le"), root.resolve("aside")); // nothing left to delete: the result goes in place
+        steps.recover();
+        assertThat(names("other/Le")).containsExactly("a.jpg", "b.jpg");
+        assertThat(journal()).isBlank();
+    }
+
+    @Test
+    void anEncryptionKeepsAnOriginalChangedAfterItWasReadBesideItsResult() throws Exception {
+        dir("lib/Ec", "a.jpg", "b.jpg");
+        scan("pw");
+        var ec = at("lib/Ec");
+        var seen = new AtomicInteger();
+        steps.crash = p -> { // another program rewrites a.jpg after its encryption was verified, before the original goes
+            if (p == Phase.DISPOSING && seen.incrementAndGet() == 1) try {
+                Files.write(root.resolve("lib/Ec/a.jpg"), jpeg(5));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        };
+        var result = run(crypt(List.of(ec.id()), null));
+        assertThat(result.failed()).containsExactly(new OpResult.Issue(ec.path(),
+                "1 of 2 files left as they were (a.jpg: changed during the operation; the result stays as a.jpg.cry.part)"));
+        assertThat(names("lib/Ec")).containsExactly("a.jpg", "a.jpg.cry.part", "b.jpg.cry");
+        assertThat(root.resolve("lib/Ec/a.jpg")).hasBinaryContent(jpeg(5));
+        assertThat(journal()).isBlank();
+    }
+
+    @Test
+    void recoveryOfAnEncryptionKeepsAnOriginalChangedWhileItWasDown() throws Exception {
+        dir("lib/Er", "a.jpg", "b.jpg");
+        scan("pw");
+        var er = at("lib/Er");
+        var id = crash(Phase.DISPOSING, 1, crypt(List.of(er.id()), null), () -> Files.write(root.resolve("lib/Er/a.jpg"), jpeg(5)));
+        assertThat(names("lib/Er")).containsExactly("a.jpg", "a.jpg.cry.part", "b.jpg");
+        assertThat(root.resolve("lib/Er/a.jpg")).hasBinaryContent(jpeg(5));
+        assertThat(journal()).doesNotContain(id);
+    }
+
+    @Test
+    void anInstallNeverReplacesATargetThatAppearsSpelledInAnotherCase() throws Exception {
+        zip("lib/Zc.zip", "a.jpg", "b.jpg");
+        scan(null);
+        assumeTrue(Files.exists(root.resolve("LIB/ZC.ZIP")), "needs a case-insensitive volume");
+        var zc = at("lib/Zc.zip");
+        var other = root.resolve("other/zc.ZIP");
+        steps.crash = p -> { // an atomic move: another program takes the name between the planner's look and the rename
+            if (p == Phase.INSTALLING) try {
+                Files.write(other, new byte[] {6});
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        };
+        assertThat(run(move(zc)).done()).isEqualTo(1);
+        assertThat(other).hasBinaryContent(new byte[] {6});
+        assertThat(entries(root.resolve("other/Zc (2).zip"))).containsExactly("a.jpg", "b.jpg");
+        assertThat(repo.find(zc.id()).orElseThrow().path()).isEqualTo(path("other/Zc (2).zip"));
+    }
+
+    @Test
     void stagingFilesThatExistAreNeitherWrittenOverNorDeleted() throws Exception {
         dir("lib/Y", "a.jpg", "b.jpg");
         Files.write(root.resolve("lib/Y/a.jpg.cry.part"), new byte[] {9, 9});
@@ -611,6 +751,22 @@ class FileOpsTest {
     }
 
     private String journal() throws IOException { return Files.readString(settings.dataDir().resolve("ops.journal")); }
+
+    private List<String> names(String relative) throws IOException {
+        try (var files = Files.list(root.resolve(relative))) {
+            return files.map(f -> f.getFileName().toString()).sorted().toList();
+        }
+    }
+
+    private Op move(Album a) { return op(Op.Kind.MOVE, List.of(a.id()), null, "other", Op.Conflict.SKIP); }
+
+    /** Album {@code lib/<name>} (a.jpg, b.jpg), moved to {@code other} by verified copy: other/name.part, the source deleted, renamed. */
+    private Album copied(String name) throws IOException {
+        dir("lib/" + name, "a.jpg", "b.jpg");
+        scan(null);
+        planner.sameVolume = (x, y) -> false;
+        return at("lib/" + name);
+    }
 
     /** A directory link: an NTFS junction on Windows (no privilege needed), else a symbolic link. */
     private static void link(Path link, Path target) throws Exception {

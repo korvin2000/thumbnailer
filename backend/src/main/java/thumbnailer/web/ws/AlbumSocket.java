@@ -1,10 +1,11 @@
 package thumbnailer.web.ws;
 
-import com.dynatrace.hash4j.hashing.Hashing;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -45,6 +46,7 @@ import thumbnailer.settings.SettingsStore;
 import thumbnailer.source.Containers;
 import thumbnailer.source.Disks;
 import thumbnailer.spi.Entry;
+import thumbnailer.web.ImageController;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -52,7 +54,7 @@ import tools.jackson.databind.node.ObjectNode;
 
 /**
  * The {@code /ws} endpoint: answers requests (echoing their {@code id}; catalog, operation and photo messages through
- * their facades) and broadcasts album, scan, catalog and operation events.
+ * their facades) and broadcasts album, scan, catalog and operation events, each session's {@code hello} first.
  */
 @Component
 class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, AutoCloseable {
@@ -60,11 +62,22 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     private static final Logger log = LoggerFactory.getLogger(AlbumSocket.class);
     private static final int MAX_ENTRIES = 5000;
     private static final Event OK = new Event.Ok(null);
+    static final int MAX_PENDING = 10_000; // broadcasts waiting: past it every client is sent away to reconnect and reload
+    private static final Object RESET = new Object();
 
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private volatile boolean closing; // the context is closing: sessions that arrive now are sent away at once
     private final ExecutorService outbox =
             Executors.newSingleThreadExecutor(Thread.ofPlatform().name("ws-broadcast").daemon(true).factory());
+    // what ws-broadcast has yet to send, by key (an album, an operation's progress, the scan's progress, a session's
+    // hello, else unique), in arrival order of each key's last update: a newer message replaces the one waiting
+    private final Map<Object, Object> pending = new LinkedHashMap<>(); // guarded by itself, as are the two below
+    private boolean draining;
+    private long coalesced;
+    private final Set<WebSocketSession> greeted = new HashSet<>(); // ws-broadcast only: sessions sent their hello
+    private volatile ScanProgress scan; // the last ones broadcast, for the hello
+    private volatile OpProgress op; // null once its result came
+    private volatile OpResult opResult;
     // the .cry key is session-only: forgotten 10 s after the last client left (a reload reconnects well within that)
     private final ScheduledExecutorService idle =
             Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("ws-idle").daemon(true).factory());
@@ -120,9 +133,11 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         // Buffers sends so that a slow client never blocks a scan; overflowing the buffer closes that session.
-        sessions.put(session.getId(), new ConcurrentWebSocketSessionDecorator(session, 10_000, 32 << 20));
+        var decorated = new ConcurrentWebSocketSessionDecorator(session, 10_000, 32 << 20);
+        sessions.put(session.getId(), decorated);
         if (forget != null) forget.cancel(false);
         if (closing) goingAway(); // put, then read; goingAway sets, then sweeps: one of them sees the other
+        else offer(decorated, decorated); // its hello, before every broadcast offered after it
     }
 
     @Override
@@ -171,24 +186,82 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
     }
 
     @EventListener
-    void on(ScanProgress progress) { broadcast(new Event.Progress(progress)); }
+    void on(ScanProgress progress) { broadcast(new Event.Progress(scan = progress)); }
 
     @EventListener
     void on(CatalogEvent event) { broadcast(new Event.CatalogChanged(event.kinds())); }
 
     @EventListener
-    void on(OpProgress progress) { broadcast(new Event.OpProgressEvent(progress)); }
+    void on(OpProgress progress) { broadcast(new Event.OpProgressEvent(op = progress)); }
 
     @EventListener
-    void on(OpResult result) { broadcast(new Event.OpResultEvent(result)); }
+    void on(OpResult result) {
+        opResult = result; // before op: a hello reads op first
+        op = null;
+        broadcast(new Event.OpResultEvent(result));
+    }
 
-    /** Off the publishing thread, in publication order: the scan and mutations never wait for clients. */
+    /** Off the publishing thread, coalesced by {@link #offer}: the scan and mutations never wait for clients. */
     private void broadcast(Event event) {
-        outbox.execute(() -> {
-            if (sessions.isEmpty()) return;
-            var text = text(event, null);
-            sessions.values().forEach(session -> send(session, text));
-        });
+        offer(switch (event) {
+            case Event.AlbumChanged(var album) -> "album:" + album.id(); // a removal and a change of one id: the newer
+            case Event.AlbumRemoved(var albumId) -> "album:" + albumId;
+            case Event.Progress _ -> "scan";
+            case Event.OpProgressEvent(var p) -> "op:" + p.id();
+            default -> new Object(); // results, catalog changes: every one
+        }, event);
+    }
+
+    /** Queues for ws-broadcast under {@code key}; a full outbox is dropped for a {@link #RESET} (clients reconnect and reload). */
+    private void offer(Object key, Object item) {
+        synchronized (pending) {
+            if (pending.remove(key) != null) coalesced++;
+            else if (pending.size() >= MAX_PENDING) {
+                pending.clear();
+                pending.put(RESET, RESET);
+            }
+            pending.put(key, item);
+            if (draining) return;
+            draining = true;
+        }
+        outbox.execute(this::drain);
+    }
+
+    /** ws-broadcast: sends what waits, batch by batch, each event serialized once for every greeted session. */
+    private void drain() {
+        for (List<Object> batch; (batch = take()) != null; ) {
+            greeted.removeIf(s -> sessions.get(s.getId()) != s); // closed meanwhile
+            for (var item : batch) {
+                try {
+                    if (item == RESET) {
+                        sessions.values().forEach(this::reject);
+                        greeted.clear();
+                    } else if (item instanceof WebSocketSession session) {
+                        send(session, text(new Event.Hello(Containers.normalize(settings.dataDir()), scan, op, opResult), null));
+                        greeted.add(session);
+                    } else if (!greeted.isEmpty()) {
+                        var text = text((Event) item, null);
+                        greeted.forEach(s -> send(s, text));
+                    }
+                } catch (RuntimeException e) {
+                    log.warn("Cannot broadcast {}: {}", item.getClass().getSimpleName(), e.toString());
+                }
+            }
+        }
+    }
+
+    private List<Object> take() {
+        synchronized (pending) {
+            if (pending.isEmpty()) {
+                draining = false;
+                return null;
+            }
+            if (coalesced > 0) log.debug("Coalesced {} broadcasts", coalesced);
+            coalesced = 0;
+            var batch = List.copyOf(pending.values());
+            pending.clear();
+            return batch;
+        }
     }
 
     private Event handle(Request request) throws IOException {
@@ -272,7 +345,7 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
             return new Event.RootStatus(r.path(), Containers.normalize(location), Files.isDirectory(location),
                     stat == null ? 0 : stat.albums(), scans.lastScan(r.path()).orElse(stat == null ? null : stat.lastIndexed()),
                     disks.disk(location, r.storage()).ssd() ? Disks.Storage.SSD : Disks.Storage.HDD);
-        }).toList(), Long.toHexString(Hashing.wyhashFinal4().hashLongLongToLong(current.covers().epoch(), current.thumbs().epoch())));
+        }).toList(), ImageController.renderEpoch(current));
     }
 
     /** Opens a folder in the OS file manager: {@code path} itself, or ({@code select}) the one holding it, which Explorer selects. */
@@ -302,12 +375,16 @@ class AlbumSocket extends TextWebSocketHandler implements WebSocketConfigurer, A
             session.sendMessage(new TextMessage(text));
         } catch (IOException | RuntimeException e) {
             log.debug("Closing session {} after a failed send: {}", session.getId(), e.toString());
-            drop(session);
-            try {
-                session.close(CloseStatus.SESSION_NOT_RELIABLE);
-            } catch (IOException | RuntimeException ignored) {
-                // already broken
-            }
+            reject(session);
+        }
+    }
+
+    private void reject(WebSocketSession session) {
+        drop(session);
+        try {
+            session.close(CloseStatus.SESSION_NOT_RELIABLE);
+        } catch (IOException | RuntimeException ignored) {
+            // already broken
         }
     }
 }

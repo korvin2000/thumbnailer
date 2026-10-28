@@ -98,6 +98,72 @@ describe('CatalogStore', () => {
     expect(store.card()?.entity).toMatchObject({ rating: 5, profile: '{"was":5}' });
   });
 
+  it('a queued save follows the entity it was made on, built from that entity\'s last saved card, not from the card opened since', async () => {
+    const d = deferred<EntityCard>(), sent: EntitySave[] = [];
+    let first = true;
+    const { store } = setup({ saveEntity: (e: EntitySave) => { sent.push(e); if (first) { first = false; return d.promise; } return Promise.resolve({ ...card(e.id!, e.name), entity: { ...entity(e.id!, e.name), rating: e.rating } }); } });
+    store.openCard(1); await settle();
+    const a = store.trySaveCard(() => ({ rating: 5 })); await settle(); // sent, pending
+    const b = store.trySaveCard(c => ({ name: c.entity.name + '!' })); // queued
+    store.openCard(2); await settle();
+    d.resolve({ ...card(1, 'E1'), entity: { ...entity(1, 'E1'), rating: 5 } });
+    await Promise.all([a, b]);
+    expect(sent.map(e => [e.id, e.rating, e.name])).toEqual([[1, 5, 'E1'], [1, 5, 'E1!']]);
+    expect(store.card()?.entity.id).toBe(2);
+  });
+
+  it('a save queued before its entity was deleted goes out and fails on the server\'s answer; the card stays closed', async () => {
+    const d = deferred<EntityCard>(), sent: EntitySave[] = [];
+    const { store } = setup({ saveEntity: (e: EntitySave) => { sent.push(e); return sent.length === 1 ? d.promise : Promise.reject(new Error('No entity 1')); } });
+    store.openCard(1); await settle();
+    const a = store.trySaveCard(() => ({ rating: 5 })); await settle();
+    const b = store.trySaveCard(() => ({ rating: 6 }));
+    await store.delete([1]);
+    d.resolve(card(1));
+    await a;
+    await expect(b).rejects.toThrow('No entity 1');
+    expect(sent.map(e => e.rating)).toEqual([5, 6]);
+    expect(store.cardId()).toBeNull();
+  });
+
+  it('a library switch while saves are queued sends none of them (Library changed), and the reply of the one in flight does not repopulate known', async () => {
+    const d = deferred<EntityCard>(), sent: EntitySave[] = [];
+    const { store } = setup({ saveEntity: (e: EntitySave) => { sent.push(e); return d.promise; } });
+    store.openCard(1); await settle();
+    const a = store.trySaveCard(() => ({ rating: 5 })); await settle();
+    const b = store.trySaveCard(() => ({ rating: 6 }));
+    store.reset();
+    d.resolve(card(1));
+    await a;
+    await expect(b).rejects.toThrow('Library changed');
+    expect(sent).toHaveLength(1);
+    expect(store.known().size).toBe(0);
+  });
+
+  it('a page asked before a reset or a change never repopulates known; a failed page evicts itself, not the newer request for its key', async () => {
+    const pending: { resolve: (v: { items: Entity[]; total: number }) => void; reject: (e: Error) => void }[] = [];
+    const { store, calls } = setup({ entities: () => { calls.entities++; return new Promise<{ items: Entity[]; total: number }>((resolve, reject) => pending.push({ resolve, reject })); } });
+    const p1 = store.entities('MODEL'); store.reset(); const p2 = store.entities('MODEL');
+    expect(calls.entities).toBe(2);
+    pending[0].reject(new Error('x')); await p1.catch(() => {});
+    expect(store.entities('MODEL')).toBe(p2);
+    pending[1].resolve({ items: [entity(1, 'new')], total: 1 }); await p2;
+    expect(store.entityOf(1)?.name).toBe('new');
+    const p3 = store.entities('STUDIO'); store.onChanged(['MODEL']);
+    pending[2].resolve({ items: [entity(5, 'late')], total: 1 }); await p3;
+    expect(store.entityOf(5)).toBeUndefined();
+  });
+
+  it('an id the server no longer has leaves known', async () => {
+    let gone = false;
+    const { store } = setup({ entity: async (id: number) => { if (gone) throw new Error('No entity ' + id); return card(id, 'E' + id); } });
+    await store.ensureKnown([7]);
+    expect(store.entityOf(7)?.name).toBe('E7');
+    gone = true;
+    expect(await store.ensureKnown([7], true)).toEqual([7]);
+    expect(store.entityOf(7)).toBeUndefined();
+  });
+
   it('shares one lists request between callers; a LIST change in flight starts another whose answer wins, whichever lands last', async () => {
     const pending: { resolve: (v: { items: Entity[]; total: number }) => void }[] = [];
     const { store, calls } = setup({ entities: () => { calls.entities++; const d = deferred<{ items: Entity[]; total: number }>(); pending.push(d); return d.promise; } });

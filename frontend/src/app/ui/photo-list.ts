@@ -8,12 +8,12 @@ import { PhotoListItem } from '../core/model';
 import { Prefs } from '../core/prefs';
 import { AlbumStore } from '../core/store';
 import { Toasts } from '../core/toasts';
+import { pagesFor, photoKey as key, rated, without } from './photo-items';
 import { ContextMenu, MenuEntry } from './shared/context-menu';
 import { Icon } from './shared/icon';
 import { TileGrid, TileMenuEvent } from './tile-grid';
 
 const PAGE = 200;
-const key = (p: PhotoListItem) => `${p.albumId}/${p.name}`;
 
 /** Route `/list/:id`: the photos of a favorites list across albums (`photos {listId, offset, limit}`), paged; a photo opens the viewer on it. */
 @Component({
@@ -90,21 +90,21 @@ export class PhotoListView {
   constructor() {
     effect(() => { const id = this.listId(); untracked(() => { void this.catalog.ensureKnown([id]); void this.load(0); }); });
     this.gw.events.pipe(takeUntilDestroyed()).subscribe(e => {
-      if (e.type === 'catalogChanged' && e.kinds.includes('LIST')) void this.load(this.items().length); // renamed, merged, deleted, or marks changed elsewhere
+      if ((e.type === 'catalogChanged' && e.kinds.includes('LIST')) || (e.type === 'connection' && e.connected)) void this.load(this.items().length); // renamed, merged, deleted, or marks changed elsewhere (or while disconnected)
       // a changed album may have been re-indexed (indices renumbered) or hidden (out of the list): the server recomputes both, so its photos are reloaded, not patched
       if (e.type === 'albumChanged' && this.items().some(p => p.albumId === e.album.id)) { clearTimeout(this.reloadTimer); this.reloadTimer = setTimeout(() => void this.load(this.items().length), 600); }
       if (e.type === 'albumRemoved') { const gone = this.items().filter(p => p.albumId === e.albumId).length; if (gone) { this.items.update(l => l.filter(p => p.albumId !== e.albumId)); this.total.update(t => Math.max(0, t - gone)); } }
     });
   }
 
-  /** Reloads from the start up to `keep` items (a refresh), or the first page. */
+  /** Reloads from the start up to `keep` items (a refresh: every page the user scrolled to, again), or the first page. */
   private async load(keep: number) {
     const gen = ++this.gen, id = this.listId();
     this.loading.set(true);
     try {
-      const r = await this.gw.photos(id, 0, Math.max(PAGE, Math.min(500, keep)));
+      const pages = await Promise.all(pagesFor(keep, PAGE).map(offset => this.gw.photos(id, offset, PAGE)));
       if (gen !== this.gen) return;
-      this.items.set(r.items); this.total.set(r.total); this.error.set(null);
+      this.items.set(pages.flatMap(r => r.items)); this.total.set(pages[pages.length - 1].total); this.error.set(null);
     } catch (e) { if (gen === this.gen) this.error.set(e instanceof Error ? e.message : String(e)); }
     finally { if (gen === this.gen) this.loading.set(false); }
   }
@@ -141,18 +141,20 @@ export class PhotoListView {
     this.menu.open(e.x, e.y, items);
   }
 
-  /** True when the mark was saved (a failure is a toast, and the item stays as it was). */
+  /** True when the mark was saved (a failure is a toast, and the item stays as it was); the reply finds its item by key, a refresh in between having replaced the objects. */
   private async mark(p: PhotoListItem, m: { rating?: number; lists?: number[] }): Promise<boolean> {
-    try { await this.gw.markPhoto(p.albumId, p.name, m); if (m.rating !== undefined) this.items.update(l => l.map(x => x === p ? { ...x, rating: m.rating! } : x)); return true; }
+    try { await this.gw.markPhoto(p.albumId, p.name, m); if (m.rating !== undefined) this.items.update(l => rated(l, key(p), m.rating!)); return true; }
     catch (e) { this.toasts.error(e, 'Mark failed: '); return false; }
   }
 
-  /** Drops this list from the photo's marks (the other lists and the rating stay); the item leaves only once the server agreed. */
+  /** Drops the list shown *now* from the photo's marks (the other lists and the rating stay); the item leaves only once the server agreed, and only from that list's view. */
   private async remove(p: PhotoListItem) {
+    const list = this.listId();
     let lists: number[];
     try { lists = (await this.gw.album(p.albumId)).marks[p.name]?.lists ?? []; } catch (e) { return this.toasts.error(e, 'Remove failed: '); }
-    if (!await this.mark(p, { lists: lists.filter(x => x !== this.listId()) })) return;
-    this.items.update(l => l.filter(x => x !== p)); this.total.update(t => Math.max(0, t - 1));
+    if (!await this.mark(p, { lists: lists.filter(x => x !== list) })) return;
+    const rest = without(this.items(), key(p));
+    if (this.listId() === list && rest !== this.items()) { this.items.set(rest); this.total.update(t => Math.max(0, t - 1)); }
     this.catalog.onChanged(['LIST']);
   }
 

@@ -10,6 +10,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
@@ -94,6 +96,35 @@ class ThumbnailerTest {
             @Override public InputStream open(String name) { return new ByteArrayInputStream(image); }
             @Override public void close() {}
         }, "image.jpg", spec);
+    }
+
+    @Test
+    void aJpegHeaderBeyondThePixelLimitFailsBeforeAnyPixelIsAllocated() throws IOException {
+        var jpeg = jpeg(16, 16);
+        int sof = 2;
+        while ((jpeg[sof + 1] & 0xFF) != 0xC0) sof += 2 + ((jpeg[sof + 2] & 0xFF) << 8 | jpeg[sof + 3] & 0xFF);
+        for (int side : new int[] {16_000, 65_500}) { // 256 M pixels; 4.3 G, which wraps an int
+            var b = jpeg.clone();
+            for (int at : new int[] {sof + 5, sof + 7}) { // height, width
+                b[at] = (byte) (side >> 8);
+                b[at + 1] = (byte) side;
+            }
+            assertThatThrownBy(() -> TurboJpeg.decode(MemorySegment.ofArray(b), Integer.MAX_VALUE)) // full size, as a lossless one
+                    .isInstanceOf(IllegalArgumentException.class).hasMessage("JPEG: " + side + "x" + side + " exceeds 200000000 pixels");
+        }
+    }
+
+    @Test
+    void aWebPHeaderBeyondThePixelLimitFailsBeforeAnyPixelIsAllocated() {
+        var out = new ByteArrayOutputStream(); // a lossless still at the format's largest, 16384 x 16384, without image data
+        out.writeBytes("RIFF".getBytes(StandardCharsets.US_ASCII));
+        out.writeBytes(new byte[] {26, 0, 0, 0});
+        out.writeBytes("WEBPVP8L".getBytes(StandardCharsets.US_ASCII));
+        out.writeBytes(new byte[] {14, 0, 0, 0, 0x2F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        var webp = out.toByteArray();
+        assertThat(size(webp)).isEqualTo("16384x16384");
+        assertThatThrownBy(() -> WebP.decode(webp)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("WebP: 16384x16384 exceeds 200000000 pixels");
     }
 
     private static String size(byte[] webp) {
